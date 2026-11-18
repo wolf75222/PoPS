@@ -39,6 +39,10 @@ def _reject(
     )
 
 
+def field_provider_target(name: str, slot: str) -> str:
+    return "field-install:%s:provider:%s" % (name, slot)
+
+
 def resolve_field_install_plan(
     name: str,
     registration: Any,
@@ -113,7 +117,7 @@ def resolve_field_install_plan(
     rows.append(LoweringCoverageRow(
         "field:%s:provider" % name,
         "lowered",
-        ("field-install:%s:provider:%s" % (name, provider_slot),),
+        (field_provider_target(name, provider_slot),),
     ))
     for reference in operator.declaration_references():
         rows.append(LoweringCoverageRow(

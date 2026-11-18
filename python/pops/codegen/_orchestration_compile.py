@@ -444,10 +444,12 @@ def _field_rhs_providers(
     return tuple(authenticated), tuple(routes)
 
 
-def prepare_problem_snapshot(problem: Any, time: Any, *, layout: Any, libraries: Any) -> Any:
+def prepare_problem_snapshot(
+    problem: Any, time: Any, *, layout: Any, libraries: Any, numerics: Any = None,
+) -> Any:
     from pops.problem._snapshot import prepare_compile_snapshot
 
-    return prepare_compile_snapshot(problem, time, layout=layout, libraries=libraries)
+    return prepare_compile_snapshot(problem, time, layout=layout, libraries=libraries, numerics=numerics)
 
 
 __all__ = [

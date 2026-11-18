@@ -18,7 +18,6 @@ from pops.layouts import Uniform
 from pops.mesh import LayoutPlanBuilder
 from pops.mesh import CartesianGrid
 from pops.mesh._amr import (
-    Above,
     AMRTransfer,
     CanonicalOptions,
     ClusteringPolicy,
@@ -34,8 +33,9 @@ from pops.mesh._amr import (
     LoadBalancePolicy,
     NestingRequirementSource,
     PatchGenerationPolicy,
-    TaggingGraph,
+    RefinementRegion,
     resolve_hierarchy,
+    resolve_refinement_criterion,
 )
 from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 from pops.model import Handle
@@ -69,6 +69,21 @@ def _source(owner, role, buffer=(1, 1), lookahead=0):
         Handle(role, kind="amr_%s_requirement" % role, owner=owner),
         buffer,
         lookahead,
+    )
+
+
+def _criterion(state, threshold):
+    """A resolved region ``value > threshold`` on the first component of ``state``."""
+    from pops.math import ValueExpr
+
+    component = ValueExpr(state)[state.space.components[0]]
+    region = RefinementRegion.trace(lambda cell: cell.value(component) > ValueExpr(threshold))
+    return resolve_refinement_criterion(
+        (("refine", region),),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=lambda handle: None,
     )
 
 
@@ -124,12 +139,7 @@ def _resolved_amr_authorities(case, state, threshold, *, frame=None):
         ),
         HierarchyResolutionContext(Clock("macro", owner=owner)),
     )
-    tagging = TaggingGraph(
-        refine=Above(state, threshold),
-        coarsen=None,
-        hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
-        conflict_policy=ConflictPolicy.ERROR,
-    ).resolve()
+    tagging = _criterion(state, threshold)
     return layout_plan, transfers, hierarchy, tagging
 
 

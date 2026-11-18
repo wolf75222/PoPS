@@ -8,6 +8,7 @@ from pops.codegen.program_emit_kernels import (
     program_provider_consumer_qid,
 )
 from pops.codegen.program_emit_model_kernels import _provider_binding, _emit_source_kernel
+from pops.codegen.program_solver_region import emit_axpy, in_solver_region
 
 
 def _resolved_diffusive_operation(v):
@@ -356,7 +357,8 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
             bidx,state_var,temporary,v.id,prepared_var,suffix,frequency_output))
         # This combines spatial rates. Its unit coefficient has dt power zero; the
         # authored time update supplies the sole dt factor, including in AMR subcycles.
-        lines.append("ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
+        lines.append(emit_axpy(var, out, "1", temporary) if in_solver_region(var)
+                     else "ctx.axpy(%s,1,%s,dt,{{0, 1, 1}});" % (out,temporary))
         frequency += " + " + transport_frequency
     if explicit and not selected.get("coupled"):
         lines.append("const pops::Real diffusion_frequency_%d=%s;" % (v.id,frequency))
@@ -372,7 +374,9 @@ def _emit_diffusive_rhs(v, var, lines, node_model, provider_plans, bidx, target,
         lines.append("auto& %s=ctx.rhs_scratch(%d,%d,%s);" % (temporary,v.id,ordinal,state_var))
         lines.extend(_emit_source_kernel(node_model,row.payload.reg_name,state_var,temporary,bidx,
             provider_plans=provider_plans,consumer_qid=qid,plan_exprs=roots))
-        lines.append("ctx.axpy(%s,%s,%s);" % (out,scalar_cpp(row.coefficient),temporary))
+        lines.append(emit_axpy(var, out, scalar_cpp(row.coefficient), temporary)
+                     if in_solver_region(var)
+                     else "ctx.axpy(%s,%s,%s);" % (out,scalar_cpp(row.coefficient),temporary))
     if output_publication is not None:
         from .program_value_authority import DelegatedOutputPublication
         output_publication(DelegatedOutputPublication(

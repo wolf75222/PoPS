@@ -12,9 +12,8 @@ order), and :meth:`PresentationMap.project` rewrites an already canonical JSON p
   same model definition;
 - a handle record (``qualified_id``, ``kind``, ``local_id``) of kind ``block`` or ``layout`` has its
   ``local_id`` renamed;
-- a qualified id (``pops.handle.v<k>::<owner>::<kind>::<local>[::...]``) or an owner string
-  (``kind:name/...``) is parsed and rebuilt from its renamed parts: a name is never replaced
-  inside a longer string;
+- a qualified id, owner path, or reference in a serialized schema is rebuilt from its renamed
+  parts. Ordinary strings, including labels that resemble references, keep their bytes;
 - a bare name is renamed only at a path the caller declares (``keys`` for a mapping keyed by block
   names, ``values`` for one exact field).
 
@@ -28,7 +27,9 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -38,6 +39,13 @@ PRESENTATION_SCHEMA_VERSION = 1
 _OWNER_KINDS = frozenset(
     ("case", "model_definition", "block", "layout", "descriptor", "consumer", "shared"))
 _OWNER_RECORD_KEYS = frozenset(("schema_version", "nodes", "definition_fingerprint"))
+_COMPONENT_KEY_FIELDS = frozenset(("owner_qid", "space_kind", "space_name", "component"))
+_BOUNDARY_PROVIDER_FIELDS = frozenset(("schema_version", "plan_type", "topology", "needs", "bindings"))
+_GHOST_PLAN_SETS = ("regions", "productions", "corner_policies", "interfaces",
+                    "residual_contributions", "linearization_contributions", "component_bindings")
+_GHOST_PLAN_FIELDS = frozenset((
+    "schema_version", "plan_type", "topology", "coverage", "execution_authority", *_GHOST_PLAN_SETS,
+))
 _HANDLE_PREFIX = "pops.handle.v"
 _AUTHORING = "#authoring="
 # pops.model.registry._operator_registry_fingerprint: the content of a standalone registry, no name.
@@ -46,6 +54,7 @@ _REGISTRY_FINGERPRINT = "pops.operator-registry:sha256:"
 _PROJECTED_FINGERPRINT = "pops.module.projected:sha256:%s"
 _DIGEST = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 _LABEL_SEGMENT = re.compile(r"^[a-z_]+:[^:/]+$")
+_LIST_ITEM = object()
 
 
 # A label is ``$`` and its kind; an owner name cannot start with ``$`` (``ReservedOwnerNameError``),
@@ -88,8 +97,14 @@ class PresentationMap:
     layouts: tuple[str, ...] = ()
     digests: tuple[tuple[str, str], ...] = ()
     layouts_open: bool = False
+    derived_handle_locals: tuple[tuple[str, str], ...] = ()
+    _derived_handle_index: Mapping[str, str] = field(init=False, repr=False, compare=False)
+    field_slots: tuple[tuple[str, str], ...] = ()
+    field_coverage: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "_derived_handle_index",
+                           MappingProxyType(dict(self.derived_handle_locals)))
         for kind, names in (("block", self.blocks), ("layout", self.layouts)):
             if len(set(names)) != len(names):
                 raise ValueError("PresentationMap %s names must be distinct" % kind)
@@ -156,6 +171,15 @@ class PresentationMap:
 
     def block_model_label(self, block: str) -> str:
         return "$model%d" % self.block_models[self.blocks.index(block)]
+
+    def with_derived_handles(self, rows: Any) -> PresentationMap:
+        """Extend the projection with producer-verified handle/local-id pairs."""
+        handles = dict(self.derived_handle_locals)
+        for qualified_id, local_id in rows:
+            if handles.setdefault(qualified_id, local_id) != local_id:
+                raise PresentationProjectionError(
+                    "conflicting derived identities for handle %r" % qualified_id)
+        return replace(self, derived_handle_locals=tuple(handles.items()))
 
     def projected_fingerprint(self, fingerprint: str | None) -> str | None:
         if fingerprint is None:
@@ -247,12 +271,18 @@ class PresentationMap:
         kind = unquote(parts[2])
         owner = self.project_owner_string(parts[1])
         local = parts[3]
-        if kind in ("block", "layout"):
+        derived = self.derived_local_id(text)
+        if derived is not None:
+            local = quote(derived, safe="")
+        elif kind in ("block", "layout"):
             # The local id is quoted: a raw ``:`` starts a suffix of the label that holds the
             # qualified id (``<layout>:amr-bootstrap:<digest>`` in an AMR lowering coverage row).
             local, separator, suffix = local.partition(":")
             local = quote(self._node_name(kind, unquote(local), None), safe="") + separator + suffix
         return "::".join((parts[0], owner, parts[2], local, *parts[4:]))
+
+    def derived_local_id(self, qualified_id: str) -> str | None:
+        return self._derived_handle_index.get(qualified_id)
 
     def project_string(self, text: str, digests: Any = None) -> str:
         """Project a qualified id, an owner string or a label holding them; else keep ``text``.
@@ -261,6 +291,12 @@ class PresentationMap:
         id after a ``word:`` prefix (``block:<name>/resolved:operation:pops.handle.v1::...``): its
         ``block`` and ``case`` segments are owner names.
         """
+        head, separator, rest = text.partition("/")
+        if separator and head.startswith("block:") and rest.startswith(("operator:", "resolved:")):
+            block = self.block_label(unquote(head.removeprefix("block:")))
+            if rest.startswith("resolved:"):
+                rest = self.project_string(rest, digests)
+            return "block:%s/%s" % (block, rest)
         if _HANDLE_PREFIX in text:
             text = self._project_handles(text)
         elif _parse_owner_string(_split_authoring(text)[0]) is not None:
@@ -291,7 +327,7 @@ class PresentationMap:
             position = end
 
     def _project_label(self, text: str) -> str:
-        if ":" not in text or " " in text:
+        if ":" not in text:
             return text
         segments = text.split("/")
         if any(not _LABEL_SEGMENT.match(segment) for segment in segments[:-1]):
@@ -307,15 +343,20 @@ class PresentationMap:
 
     # -- whole preimage ---------------------------------------------------------------------
     def project(self, data: Any, *, keys: Any = (), values: Any = None, sets: Any = (),
-                derived: Any = ()) -> Any:
+                derived: Any = (), references: Any = (), reference_keys: Any = ()) -> Any:
         """Return ``data`` with every owner name replaced by its position.
 
         Paths are tuples of keys, with ``"*"`` for any key, ``"[]"`` for any list item and a
         leading ``"..."`` for any prefix.
         ``keys`` lists the mappings keyed by block names. ``values`` maps a path to the kind of the
         bare name held there: ``"case"``, ``"block"`` or ``"model_of_block"`` (the model of the
-        block named by the path's block key). ``sets`` lists the lists whose order is a sort by
-        name (a set): they are sorted again by the canonical JSON of their projected items.
+        block named by the path's block key), ``continuation_name`` (a block name in a
+        block-owned row), ``continuation_identity`` (a qualified handle in a state row), or
+        ``qualified`` (a complete qualified handle id).
+        ``references`` and ``reference_keys`` identify fields
+        and mapping keys that carry serialized references. ``sets`` lists the lists whose order
+        is a sort by name (a set): they are sorted again by the canonical JSON of their projected
+        items.
         ``derived`` lists the digests of named data that the preimage already holds in full: they
         are dropped (``None``), since a digest cannot be projected. The data must be canonical
         identity data: dicts, lists, tuples, sets, strings, bytes, numbers, booleans, None.
@@ -323,77 +364,136 @@ class PresentationMap:
         return _Projection(
             self, tuple(tuple(path) for path in keys), dict(values or {}),
             tuple(tuple(path) for path in sets), tuple(tuple(path) for path in derived),
+            tuple(tuple(path) for path in references), tuple(tuple(path) for path in reference_keys),
         ).walk(data, ())
 
 
 class _Projection:
-    __slots__ = ("map", "keys", "values", "sets", "derived", "digests")
+    __slots__ = ("map", "keys", "values", "sets", "derived", "digests",
+                 "references", "reference_keys", "field_slots", "field_coverage")
 
     def __init__(self, presentation: PresentationMap, keys: Any, values: Any, sets: Any,
-                 derived: Any) -> None:
+                 derived: Any, references: Any, reference_keys: Any) -> None:
         self.map = presentation
         self.digests = presentation._digest_table()
         self.keys = keys
         self.values = {tuple(path): kind for path, kind in values.items()}
         self.sets = sets
         self.derived = derived
+        self.references: dict[str, list[tuple[str, ...]]] = {}
+        for pattern in references:
+            self.references.setdefault(pattern[-1], []).append(pattern)
+        self.reference_keys = reference_keys
+        self.field_slots = dict(presentation.field_slots)
+        self.field_coverage = dict(presentation.field_coverage)
 
-    def walk(self, value: Any, path: tuple[Any, ...]) -> Any:
+    def walk(self, value: Any, path: tuple[Any, ...], block: str | None = None, *,
+             expression: bool = False) -> Any:
         if any(_matches(pattern, path) for pattern in self.derived):
             return None
         if isinstance(value, dict):
-            return self._mapping(value, path)
+            return self._mapping(value, path, block, expression=expression)
         if isinstance(value, (list, tuple)):
-            items = [self.walk(item, path + ("[]",)) for item in value]
+            items = [self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
+                     for item in value]
+            # These two forms encode expression_handle_key and ValueExpr in the Expr DAG.
+            if expression and len(value) == 2 and value[0] in ("qualified", "handle_value") \
+                    and isinstance(value[1], str):
+                items[1] = self.map.project_string(value[1], self.digests)
             if any(_matches(pattern, path) for pattern in self.sets):
                 items.sort(key=_order_key)
             return items if isinstance(value, list) else tuple(items)
         if isinstance(value, (set, frozenset)):
-            return frozenset(self.walk(item, path + ("[]",)) for item in value)
+            return frozenset(self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
+                             for item in value)
         if isinstance(value, str):
-            kind = _lookup(self.values, path)
-            if kind is not None:
-                return self._bare(value, kind, path)
-            return self.map.project_string(value, self.digests)
+            if path and any(_matches(pattern, path)
+                            for pattern in self.references.get(
+                                "[]" if path[-1] is _LIST_ITEM else path[-1], ())):
+                return self._reference(value)
         return value
 
-    def _bare(self, value: str, kind: str, path: tuple[Any, ...]) -> str:
+    def _reference(self, value: str) -> str:
+        target = self.field_coverage.get(value)
+        return self.map.project_string(value, self.digests) if target is None else target
+
+    def _bare(self, value: str, kind: str, block: str | None, record: dict[str, Any]) -> str:
+        if kind == "qualified":
+            return self.map.project_qualified_id(value)
         if kind == "case":
             return self.map.case_label(value)
         if kind == "block":
             return self.map.block_label(value)
-        if kind == "block_if_listed":
-            # A row naming either a block or a PoPS object (``accepted Program exchange mailbox``).
-            return self.map.block_label(value) if value in self.map.blocks else value
+        if kind == "continuation_name":
+            if record["kind"] in ("state", "auxiliary"):
+                return self.map.block_label(value)
+            if record["kind"] in ("field_value", "field_observation", "solver_cache"):
+                return self.field_slots.get(value, value)
+            return value
+        if kind == "continuation_identity":
+            if record["kind"] == "state":
+                return self.map.project_qualified_id(value)
+            if record["kind"] in ("field_value", "field_observation", "solver_cache"):
+                slot = self.field_slots.get(record["name"])
+                if slot is not None:
+                    return record["kind"] + ":" + slot
+            return value
         if kind == "model_of_block":
-            block = next((item for item in path if item in self.map.blocks), None)
             if block is None:
-                raise PresentationProjectionError(
-                    "model name at %r has no block key on its path" % (path,))
+                raise PresentationProjectionError("model name has no enclosing block record")
             return self.map.block_model_label(block)
         raise ValueError("unknown presentation kind %r" % (kind,))
 
-    def _mapping(self, value: dict[str, Any], path: tuple[Any, ...]) -> dict[str, Any]:
+    def _mapping(self, value: dict[str, Any], path: tuple[Any, ...], block: str | None, *,
+                 expression: bool) -> dict[str, Any]:
         if set(value) == _OWNER_RECORD_KEYS and isinstance(value.get("nodes"), list):
             return self.map.project_owner_record(value)
+        if value.keys() == _COMPONENT_KEY_FIELDS:
+            return {**value, "owner_qid": self.map.project_owner_string(value["owner_qid"])}
         keyed = any(_matches(pattern, path) for pattern in self.keys)
+        referenced = not keyed and any(_matches(pattern, path) for pattern in self.reference_keys)
+        handle = {"qualified_id", "local_id", "kind", "owner_path"} <= value.keys()
+        expression = expression or value.get("protocol") == "pops.expr.dag.v1"
         result = {}
         for key, item in value.items():
+            item_path = path + (key,)
             projected_key = (self.map.block_label(key) if keyed
-                             else self.map.project_string(key, self.digests)
-                             if isinstance(key, str) else key)
+                             else self._reference(key)
+                             if referenced and isinstance(key, str) else key)
             if projected_key in result:
                 raise PresentationProjectionError("projection merged two keys at %r" % (path,))
-            # The original key stays on the path, so a rule below a block key finds its block.
-            result[projected_key] = self.walk(item, path + (key,))
-        if "qualified_id" in value and "local_id" in value \
-                and value.get("kind") in ("block", "layout") and isinstance(value["local_id"], str):
-            result["local_id"] = self.map._node_name(value["kind"], value["local_id"], None)
+            kind = _lookup(self.values, item_path) if isinstance(item, str) else None
+            if kind is not None:
+                result[projected_key] = self._bare(item, kind, block, value)
+            elif handle and key == "qualified_id":
+                projected = self.map.project_qualified_id(item)
+                result[projected_key] = (
+                    _replace_digests(projected, self.digests)
+                    if value["kind"] == "initial_condition_provider" else projected)
+            elif handle and key == "local_id" and value["kind"] in ("block", "layout"):
+                result[projected_key] = self.map._node_name(value["kind"], item, None)
+            elif handle and key == "local_id" and value["kind"] == "initial_condition_provider":
+                result[projected_key] = _replace_digests(item, self.digests)
+            elif handle and key == "local_id":
+                derived = self.map.derived_local_id(value["qualified_id"])
+                result[projected_key] = item if derived is None else derived
+            else:
+                result[projected_key] = self.walk(
+                    item, item_path, key if keyed else block, expression=expression)
         if value.get("op") == "state" and isinstance(value.get("block"), dict) \
                 and value.get("name") == value["block"].get("local_id") \
                 and isinstance(value.get("name"), str):
             # The Program names a block state after its block (a derived label, SU8).
             result["name"] = self.map.block_label(value["name"])
+        if value.keys() == _BOUNDARY_PROVIDER_FIELDS and value["plan_type"] == "boundary_providers":
+            result["needs"].sort(key=_order_key)
+            result["bindings"].sort(key=lambda row: _order_key(row["need"]))
+        if value.keys() == _GHOST_PLAN_FIELDS and value["plan_type"] == "ghost_producers":
+            # This plan sorts these collections by generated region/handle identity. The
+            # dependency order itself is carried by each producer's edges.
+            for name in _GHOST_PLAN_SETS:
+                result[name].sort(key=_order_key)
+            result["coverage"]["regions"].sort(key=_order_key)
         if keyed:
             result = dict(sorted(result.items(), key=lambda row: _label_order(row[0])))
         return result
@@ -425,8 +525,11 @@ def _matches(pattern: tuple[Any, ...], path: tuple[Any, ...]) -> bool:
         path = path[len(path) - len(pattern):]
     if len(pattern) != len(path):
         return False
-    return all(expected == "*" and actual != "[]" or expected == actual
-               for expected, actual in zip(pattern, path))
+    return all(
+        (actual is _LIST_ITEM if expected == "[]" else
+         actual is not _LIST_ITEM if expected == "*" else expected == actual)
+        for expected, actual in zip(pattern, path)
+    )
 
 
 def _lookup(table: dict[tuple[Any, ...], str], path: tuple[Any, ...]) -> str | None:

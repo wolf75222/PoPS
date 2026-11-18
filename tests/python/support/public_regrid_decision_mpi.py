@@ -4,7 +4,7 @@ Review 5815613688 of #743 (N12 lot 2, ROM-95), point P3: the generated decision 
 indicators over the patches and the ranks (``all_reduce_max``) and checks that every rank decides
 the same; the native file runs here on every rank of a genuine MPI world, with the same exact
 comparisons as in its Serial run (layout cadence parity, a predicate on the state on both sides of
-a runtime threshold, the checkpoint refusal).
+a runtime threshold, the checkpoint refusal, and the accepted-step count in each run).
 """
 from tests.python.support.mpi_fixture_driver import run_fixture_world
 
@@ -14,6 +14,7 @@ EXPECTED_CASES = {
     "test_every_written_in_the_program_regrids_as_the_layout_cadence": 1,
     "test_a_predicate_on_the_state_regrids_after_the_steps_where_it_holds": 1,
     "test_a_checkpoint_of_a_generated_decision_is_refused": 1,
+    "test_every_counts_the_accepted_steps_of_each_run": 1,
 }
 
 

@@ -259,6 +259,47 @@ class _StateStorageFamily(_PairFamily):
         return super().add(subject, method)
 
 
+class _RepresentationFamily(_PairFamily):
+    """The representation of an evolved state (G03 lot R-b, contract @2 of N16 5.5).
+
+    The lowering serves exactly two definitions: ``cell_average(rank)``, the default that every
+    state has without a row, and ``cell_total(rank)``. A decode outside one constant mode is the
+    Gram path of N16 lot 2; another definition of one constant mode (a sample, an average with a
+    stated rule) would be projected as an average, so it waits for the projection by encode of
+    N16's table (line 4 of plan/routes_transitoires.md). Both are refused by name."""
+
+    def __init__(self) -> None:
+        super().__init__("representations")
+
+    def add(self, subject: Any, method: Any) -> None:
+        from pops.representations.definition import RepresentationDefinition, constant_mode_scale
+        from pops.time._program.traced_method import NotYetElaborated
+
+        subject = getattr(subject, "handle", subject)
+        if not isinstance(subject, Handle) or subject.kind != "state":
+            raise TypeError("representations.add requires an exact state declaration")
+        if type(method) is not RepresentationDefinition:
+            raise TypeError("representations.add takes a RepresentationDefinition of contract @2, "
+                            "such as pops.representations.definition.cell_total(rank)")
+        if method.carrier != "cell" or method.size != 1 or method.dual_of is not None \
+                or constant_mode_scale(method) is None:
+            raise NotYetElaborated(
+                "the representation %s of the state %s: the lowering of G03 lot R-b serves one "
+                "constant mode on a cell, an average (c = 1) or a total (c = 1/cell.measure); "
+                "N16 lot 2 gives the other decodes" % (method.identity[-12:], subject.local_id))
+        from pops.representations.definition import cell_average, cell_total
+        if method.identity not in (cell_average(method.rank).identity,
+                                   cell_total(method.rank).identity):
+            raise NotYetElaborated(
+                "the representation %s (kind %s) of the state %s: its constant mode is an "
+                "average's, but its initial value is not the cell average (a sample, or an "
+                "average under a stated rule), and b6 projects every initial value as an "
+                "average; the N16 lot that retires the transitional table of CellAverage() (the "
+                "projection by encode, line 4 of plan/routes_transitoires.md) gives it"
+                % (method.identity[-12:], method.kind, subject.local_id))
+        return super().add(subject, method)
+
+
 class _ValueFamily:
     """Register-once descriptors such as boundary/interface authorities."""
 
@@ -381,6 +422,7 @@ class ResolvedDiscretizationPlan:
     interfaces: tuple[Any, ...]
     principal_groups: tuple[Any, ...] = ()
     states: tuple[ResolvedNumericalBinding, ...] = ()
+    representations: tuple[ResolvedNumericalBinding, ...] = ()
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -388,12 +430,13 @@ class ResolvedDiscretizationPlan:
             raise TypeError("resolved numerical plan requires a canonical BlockHandle")
         if not self.rates and not self.states:
             raise ValueError("resolved numerical plan has no rate method or explicit state storage")
-        for name in ("rates", "fields", "boundaries", "sources", "interfaces", "states"):
+        for name in ("rates", "fields", "boundaries", "sources", "interfaces", "states",
+                     "representations"):
             if not isinstance(getattr(self, name), tuple):
                 raise TypeError("ResolvedDiscretizationPlan.%s must be a tuple" % name)
         if any(type(row) is not ResolvedRateMethod for row in self.rates):
             raise TypeError("ResolvedDiscretizationPlan.rates must contain ResolvedRateMethod")
-        for family in ("fields", "sources", "states"):
+        for family in ("fields", "sources", "states", "representations"):
             if any(type(row) is not ResolvedNumericalBinding for row in getattr(self, family)):
                 raise TypeError(
                     "ResolvedDiscretizationPlan.%s must contain ResolvedNumericalBinding"
@@ -414,10 +457,28 @@ class ResolvedDiscretizationPlan:
             "interfaces": [_callable_projection(row, "resolved interface") for row in self.interfaces],
             "principal_groups": [group.to_data() for group in self.principal_groups],
             **({"states": [row.to_data() for row in self.states]} if self.states else {}),
+            # A plan without a row keeps its identity of before G03 lot R-b (MG1).
+            **({"representations": [row.to_data() for row in self.representations]}
+               if self.representations else {}),
         }
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
+
+    def representation_of(self, state: Any) -> Any:
+        """The RepresentationDefinition of an evolved state of this block, or None for the
+        average that a state has without a row (G03 lot R-b)."""
+        for row in self.representations:
+            if row.subject == state:
+                return row.method
+        return None
+
+    def cell_total_states(self) -> tuple[Any, ...]:
+        """The states of this block that hold cell totals, c = 1/cell.measure (G03 lot R-b)."""
+        from pops.representations.definition import constant_mode_scale
+
+        return tuple(row.subject for row in self.representations
+                     if constant_mode_scale(row.method) == "unit")
 
     def joint_ghost_depth(self) -> int:
         """Every packed input covers all row stencils, in either coordinate system."""
@@ -526,6 +587,7 @@ class DiscretizationPlan(Descriptor):
     def __init__(self) -> None:
         self.rates = _RateFamily()
         self.states = _StateStorageFamily()
+        self.representations = _RepresentationFamily()
         self.fields = _PairFamily("fields")
         self.boundaries = _ValueFamily("boundaries")
         self.sources = _PairFamily("sources")
@@ -535,6 +597,8 @@ class DiscretizationPlan(Descriptor):
         return {
             "rates": self.rates.items(),
             **({"states": self.states.items()} if self.states.items() else {}),
+            **({"representations": self.representations.items()}
+               if self.representations.items() else {}),
             "fields": self.fields.items(),
             "boundaries": self.boundaries.values(),
             "sources": self.sources.items(),
@@ -544,7 +608,8 @@ class DiscretizationPlan(Descriptor):
     def freeze(self) -> DiscretizationPlan:
         if getattr(self, "_frozen", False):
             return self
-        for family in (self.rates, self.states, self.fields, self.boundaries, self.sources, self.interfaces):
+        for family in (self.rates, self.states, self.representations, self.fields,
+                       self.boundaries, self.sources, self.interfaces):
             family.freeze()
         object.__setattr__(self, "_frozen", True)
         return self
@@ -581,6 +646,15 @@ class DiscretizationPlan(Descriptor):
             raise ValueError("explicit state storage must cover every otherwise unbound block state")
         if not selected and not storage:
             raise ValueError("DiscretizationPlan has no rate binding for Model %r" % model.name)
+        axes = getattr(getattr(model, "frame", None), "axes", None)
+        rank = None if axes is None else len(axes)
+        for subject, method in self.representations.items():
+            if subject not in allowed_states:
+                raise ValueError("a representation row names a state of another Model or block")
+            if rank is not None and method.rank != rank:
+                raise ValueError("the representation of %s has cells of rank %d; the frame of "
+                                 "Model %r has rank %d" % (subject.local_id, method.rank,
+                                                          model.name, rank))
         for rate, method in selected.items():
             contract = model.rate_contract(rate)
             method.validate_rate_contract(contract)
@@ -712,6 +786,7 @@ class DiscretizationPlan(Descriptor):
             resolved_interfaces,
             resolve_principal_groups(case, block),
             states=resolve_pairs(self.states.items(), "states"),
+            representations=resolve_pairs(self.representations.items(), "representations"),
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -724,6 +799,7 @@ class DiscretizationPlan(Descriptor):
             ],
             "fields": len(self.fields.items()),
             "states": len(self.states.items()),
+            "representations": len(self.representations.items()),
             "boundaries": len(self.boundaries.values()),
             "sources": len(self.sources.items()),
             "interfaces": len(self.interfaces.values()),

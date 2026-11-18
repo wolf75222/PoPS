@@ -78,6 +78,11 @@ def _compiled(blocks, artifact_directory, *, ghost_depth=2):
 
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
+    declaration = module.state_handle(state)
+    state_identities = {
+        name: problem.resolve(declaration, block=problem.blocks()[name]).qualified_id
+        for name in blocks
+    }
     layout_plan, layout_coverage = resolved_layout_contract(
         None, target="system", block_names=blocks, owner=problem.owner_path)
     plan = ResolvedSimulationPlan(
@@ -94,7 +99,7 @@ def _compiled(blocks, artifact_directory, *, ghost_depth=2):
             ResolvedBlock(
                 name, {"model": "ghost-depth-model"},
                 None if ghost_depth is None else {"ghost_depth": ghost_depth},
-                "production", ("U",), ("test::%s::state::U" % name,),
+                "production", ("U",), (state_identities[name],),
                 # The case's own block instance owner: a fabricated owner of another case and
                 # model is a name the presentation map does not know (N11 lot 2b, refused).
                 canonical_block_instance_owner(

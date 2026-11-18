@@ -87,6 +87,23 @@ class GeneralAccessOnPatches(RegionRefusal, TypeError):
         super().__init__(message, region=region, blocking=op)
 
 
+class HierarchyInstancesMixed(RegionRefusal):
+    """DM2: a pointwise operation of a regrid child mixes a field over H and a field over H′.
+
+    A regrid child reads its sources over the hierarchy H that the regrid replaces and writes its
+    targets over H′ (N10 lot 3, addendum §5). The two spaces have equal shapes, so the builder
+    accepted the mix, but the lowering pairs the boxes of two different layouts. A source field
+    reaches a target only through ``regrid_read``.
+    """
+
+    rule = "DM2"
+    phase = "tracing"
+
+    def __init__(self, message, *, region, op):
+        self.op = op
+        super().__init__(message, region=region, blocking=op)
+
+
 class CoverageNotExact(ValueError):
     """A term is covered twice or not at all on a success path (D5)."""
 
@@ -174,5 +191,6 @@ class TermNotAdditive(ValueError):
 
 
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
-           "DeliveryNotStructural", "GeneralAccessOnPatches", "PropertyNotDerived",
+           "DeliveryNotStructural", "GeneralAccessOnPatches", "HierarchyInstancesMixed",
+           "PropertyNotDerived",
            "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]

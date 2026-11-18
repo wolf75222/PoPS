@@ -28,7 +28,7 @@
 # [axis_link] (a component name built from a name and an axis, found by the Python lexer);
 # [[not_after]] (a term preceded by one of these words is another word).
 
-version = 2
+version = 3
 
 [[versions]]
 version = 1
@@ -41,6 +41,12 @@ version = 2
 date = "2026-11-11"
 digest = "3acac86f019bd5b86cba66ec33209e0bfbb09b01b3697b2614ad5262842f442a"
 change = "Adds the row of the quadrature rules (gauss-hermite, legendre, lobatto, laguerre, radau; review of 11/11, P3): no site in the core paths or the native tree at this version, so cf2_exceptions.txt is unchanged and no --bootstrap is needed."
+
+[[versions]]
+version = 3
+date = "2026-11-12"
+digest = "5c6100bea9892dda17651500935a699e3addfe7c277ee8202e604d20519ff5db"
+change = "Adds the row of the named bases of representations (lagrange, raviart-thomas, nedelec; N16 design note rev 3, section 8, proposed by N16 lot 1): no site in the core paths or the native tree at this version, so cf2_exceptions.txt is unchanged and no --bootstrap is needed. No GENERIC_SENSES entry for the Lagrange multiplier, which has no site yet."
 
 [[terms]]
 category = "role"
@@ -395,6 +401,16 @@ words = [
     "lobatto",
     "laguerre",
     "radau",
+]
+
+[[terms]]
+category = "representation"
+rule = "D1b, FC2 and CF2 (N16 lot 1): a named basis of a representation in the core, which knows @pops.representation, pops.Coefficients and pops.Dual only"
+finding = "N16 design note rev 3, section 8: the named bases of pops.lib.representations, which the core must not name; the elaborator reads the carrier, the size, the normal forms of decode and encode and the numbers of the rule, never a name. legendre is in the row of the quadrature rules. No site in the core paths or the native tree at version 3. The Lagrange multiplier of a future saddle-point solver is a generic sense of lagrange: the lot that first writes one in the core adds its GENERIC_SENSES entry with that site, since an entry with no site fails CF2."
+words = [
+    "lagrange",
+    "raviart-thomas",
+    "nedelec",
 ]
 
 [[literals]]

@@ -732,9 +732,22 @@ class ResolvedSimulationPlan:
         presentation = self.snapshot.presentation
         if presentation is None:
             return payload
-        from pops.problem._snapshot_presentation import DERIVED, PLAN_VALUES, SETS
+        from pops.problem._snapshot_presentation import (
+            DERIVED, PLAN_VALUES, REFERENCES, REFERENCE_KEYS, SETS, ghost_presentation_map,
+            projected_bind_schema_artifact_hash, project_field_install_references,
+            project_retained_auxiliaries,
+        )
 
-        return presentation.project(payload, values=PLAN_VALUES, sets=SETS, derived=DERIVED)
+        presentation = ghost_presentation_map(presentation, self.blocks, self.layout_plan)
+        presentation = project_field_install_references(presentation, payload, self.field_plans)
+        if self.bind_schema.slots:
+            payload["bind_schema_artifact_hash"] = projected_bind_schema_artifact_hash(
+                self.bind_schema, presentation)
+        project_retained_auxiliaries(payload["continuation_transitions"]["objects"], self.blocks,
+                                     presentation)
+        return presentation.project(
+            payload, values=PLAN_VALUES, sets=SETS, derived=DERIVED,
+            references=REFERENCES, reference_keys=REFERENCE_KEYS)
 
     def _named_payload(self) -> dict[str, Any]:
         return {

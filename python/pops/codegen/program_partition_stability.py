@@ -284,7 +284,7 @@ def partition_stability_groups(value, *, include_transport=False):
     return tuple((state, alpha, tuple(rows)) for state, alpha, rows in groups.values())
 
 
-def emit_transport_frequency(value, var, lines, *, model, block_index, target="system"):
+def emit_transport_frequency(value, var, lines, *, model, block_index, target="system", state=None):
     """Capture the selected envelope while this exact rate's inputs/providers are current."""
     if not has_independent_diffusion_transport(model):
         return
@@ -295,8 +295,10 @@ def emit_transport_frequency(value, var, lines, *, model, block_index, target="s
     frequency = "transport_frequency_%d" % value.id
     trace = ("," + (var.get(("rhs_input_trace", value.id)) or "nullptr")
              if target == "amr_system" else "")
+    if state is None:
+        state = var[value.inputs[0].id]
     lines.append("const pops::Real %s = ctx.evaluated_transport_frequency(%d,%s,%d%s);"
-                 % (frequency, block_index, var[value.inputs[0].id], value.id, trace))
+                 % (frequency, block_index, state, value.id, trace))
     var[("partition_frequency", value.id)] = frequency
 
 

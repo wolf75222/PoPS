@@ -81,28 +81,27 @@ def test_the_registry_holds_every_module_and_every_bridge_of_pops_lib():
 
 def test_no_word_of_n3_is_a_bridge_after_lot_1():
     registry = mg9.read(ROOT)
-    # the entries are cg() of the N15 lot « solves » (#776), arrived, the ghost laws of the
-    # boundary policy of lot B (#774) and cfl_limit() of part D of lot D-E (#788); no word of
-    # pops.lib.numerics.fluxes
-    assert [(entry["word"], entry["module"], "arrives" in entry) for entry in registry["bridge"]] \
-        == [("cg", "pops.lib.solve", False), ("realize", "pops.lib.numerics.ghost_laws", False),
-            ("cfl_limit", "pops.lib.time.limits", False)]
-    assert registry["bridge"][0]["owner"].startswith(
-        "N9, the lot « La référence sous les solves de relation »")
+    # Only the CFL rule from #788 still needs a bridge after N9 and G04-a.
+    assert [(entry["word"], entry["module"], "arrives" in entry) for entry in registry["bridge"]] == [
+        ("cfl_limit", "pops.lib.time.limits", False)
+    ]
+    assert registry["bridge"][0]["owner"].startswith("N8")
     assert {(word, route) for word, module, route in mg9.found_bridges(ROOT)
-            if module == "pops.lib.solve"} == {("cg", "pops.solvers.CG")}
+            if module == "pops.lib.solve"} == set()
     assert {word for word, module, _ in mg9.found_bridges(ROOT)
-            if module.startswith("pops.lib.numerics")} == {"realize"}
+            if module.startswith("pops.lib.numerics")} == set()
     kinds = mg9.classify(ROOT, registry)
-    assert kinds["pops.lib.numerics.ghost_laws"] == "bridge"
+    assert "pops.lib.numerics.ghost_laws" not in kinds
+    assert "pops.lib.numerics.synthetic_laws" not in kinds
     assert kinds["pops.lib.numerics.fluxes"] == "surface"
     assert kinds["pops.lib.numerics"] == "package"
     assert "pops.lib.numerics.schemes" not in kinds
     earlier = {module: entry["owner"] for entry in registry["earlier"]
                for module in entry["modules"]}
     assert earlier["pops.lib.numerics.face_flux"].startswith("N7")
-    assert earlier["pops.lib.numerics.reconstructions"].startswith("N3 (ROM-87), lot 3")
+    assert "pops.lib.numerics.reconstructions" not in earlier
     assert kinds["pops.lib.numerics.limiters"] == "surface"
+    assert kinds["pops.lib.numerics.reconstructions"] == "surface"
 
 
 def test_the_modules_of_the_surface_pass_the_lint():
@@ -339,8 +338,9 @@ def test_a_base_without_the_registry_records_nothing(tmp_path):
 
 
 def test_a_builder_handed_to_a_word_at_import_is_that_word_s_bridge():
-    """N9 lot 4 binds the native CG to the @pops.solver cg at import:
-    ``cg.bind_relation_native(_native_cg, ...)`` makes cg the word of the bridge."""
+    """N9 lot 4 bound the native CG to the @pops.solver cg at import, until the N9 lot « La
+    référence sous les solves de relation »: ``cg.bind_relation_native(_native_cg, ...)`` made cg
+    the word of the bridge, and the gate still reads such a binding."""
     source = textwrap.dedent("""\
         from .krylov import cg
 
@@ -371,17 +371,17 @@ def test_a_module_that_only_a_bridge_holds_is_scanned_and_leaves_with_it(tmp_pat
     entry = HEADER + """\
         [[bridge]]
         word = "realize"
-        module = "pops.lib.numerics.ghost_laws"
+        module = "pops.lib.numerics.synthetic_laws"
         route = "pops.boundary.transport.Inflow, pops.boundary.transport.Outflow"
         owner = "G04"
         """
     modules = {"pops.lib.__init__": PACKAGE, "pops.lib.numerics.__init__": "import pops.surface\n",
-               "pops.lib.numerics.ghost_laws": laws}
+               "pops.lib.numerics.synthetic_laws": laws}
     assert mg9.check(_tree(tmp_path / "listed", entry, modules)) == []
     assert mg9.check(_tree(tmp_path / "unlisted", HEADER + "bridge = []\n", modules)) == [
-        "pops.lib.numerics.ghost_laws is neither a module of the surface, nor [[earlier]], nor a "
+        "pops.lib.numerics.synthetic_laws is neither a module of the surface, nor [[earlier]], nor a "
         "package that re-exports its submodules"]
-    modules["pops.lib.numerics.ghost_laws"] = "from pops.boundary import transport\n"
+    modules["pops.lib.numerics.synthetic_laws"] = "from pops.boundary import transport\n"
     assert mg9.check(_tree(tmp_path / "stale", entry, modules)) == [
-        "[[bridge]] lists realize of pops.lib.numerics.ghost_laws, which no longer returns a "
+        "[[bridge]] lists realize of pops.lib.numerics.synthetic_laws, which no longer returns a "
         "native route: remove it"]

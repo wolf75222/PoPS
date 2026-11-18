@@ -1,8 +1,8 @@
 """A two-component State and an independently shaped, consumed scalar history.
 
 State storage has two ghost cells; the retained one-component Field has one.
-Its new target allocation is explicit, and every value is transferred by the
-same Python index algebra used in the State-history reception.
+Both are read onto the new level along Parent(r) (``regrid_read``); the runtime
+allocates each target with the source Field's components and ghosts.
 """
 from __future__ import annotations
 
@@ -21,11 +21,10 @@ from pops.model import PhysicalDimension, PhysicalSupport
 from pops.numerics import DiscretizationPlan, StateStorage
 from pops.params import RuntimeParam
 from pops.time import FixedDt, every
-from pops.time._program.distributed_arrays import Distributed
 from pops.time.expressions import ProgramScalar
 
 from .common import CaseSpec, non_owner_metrics
-from .continuation_regrid_amr import _approve, _bundle_mass, _injection, ab2_factors
+from .continuation_regrid_amr import _approve, ab2_factors
 from .models_M01_M14 import _domain, _initial
 
 
@@ -134,33 +133,17 @@ def build_continuation_regrid_auxiliary(*, cells=(16, 8), dt=.1, steps=3):
         return _approve(b, base, proposal, value, b.product(), advancing=True)
 
     def remap(b, proposal):
-        algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
         source_level = b.int64(0)
         base = b.regrid_base(source_level)
         entry = b.continuation_read(base)
         source = b.regrid_source(source_level)
-        template = proposal["templates"]["field_0"]
-
-        def move(field, target_template, family=None):
-            source_view = b.regrid_topology(field, level=source_level, side="source", dimension=2)
-            exported = b.field_bundle(field, topology=source_view, cell_capacity=32768,
-                                       patch_capacity=256, family=family)
-            target_view = b.regrid_topology(target_template, level=proposal["level"], side="target", dimension=2)
-            if family is None:
-                storage = target_template
-            else:
-                storage = b.scalar_field(like=target_template, topology=target_view, initial=b.float64(0))
-            target = b.field_bundle(storage, topology=target_view, cell_capacity=32768,
-                                     patch_capacity=256, family=exported)
-            transferred = _injection(b, algebra, exported, target,
-                target_level=proposal["level"], cells=cells)
-            return b.bundle_field(transferred, template=target_template, topology=target_view), transferred
-
-        current, bundle = move(source["state"], template)
-        old, _ = move(source["previous"], source["previous"], family=bundle)
+        # Each target cell reads its parent source cell (Parent(r), the identity on level 0).
+        current = b.regrid_read(source["state"])
+        old = b.regrid_read(source["previous"])
         value = b.product(state=current, previous=old, time=entry["time"], step=entry["step"],
                            counter=entry["counter"], controls=entry["controls"])
-        return _approve(b, base, proposal, value, b.product(mass=_bundle_mass(b, algebra, bundle)), advancing=False)
+        return _approve(b, base, proposal, value, b.product(mass=b.regrid_integral(current[0])),
+                        advancing=False)
 
     def remap_parent(b, base, proposal):
         entry = b.continuation_read(base)

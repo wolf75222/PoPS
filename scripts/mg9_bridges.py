@@ -10,8 +10,7 @@ neither ``pops`` nor a case.
 ``classify`` sorts every module of ``pops.lib`` into a module of the surface (it imports
 ``pops.surface``, or no module of ``pops`` and ``[[earlier]]`` does not list it), a module of
 ``[[earlier]]``, a module that only a ``[[bridge]]`` holds (it builds the native route and nothing
-of the surface, like the ghost laws of ``pops.lib.numerics.ghost_laws``), a package that only
-re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
+of the surface), a package that only re-exports its submodules, or an unlisted module. ``found_bridges`` finds the bridges of the
 modules of the surface and of the bridge modules by their source: a subclass of ``SchemeValue``
 or of ``StepRuleValue`` (a value of the surface that realizes itself as a native route), or a
 call that builds a native route of face, reconstruction, diffusion, boundary or solver
@@ -205,7 +204,8 @@ def bridges_of(source: str, module: str) -> set:
                     found.add((node.name, where, route))
                     found.discard((word, where, route))
     # a private builder that the module hands to a public word at import is that word's bridge
-    # (cg.bind_relation_native(_native_cg, ...) in pops.lib.solve)
+    # (cg.bind_relation_native(_native_cg, ...) of N9 lot 4 in pops.lib.solve, until the N9 lot
+    # « La référence sous les solves de relation »)
     for node in tree.body:
         call = node.value if isinstance(node, ast.Expr) else None
         if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute) \

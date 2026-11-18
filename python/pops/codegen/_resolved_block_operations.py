@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+from urllib.parse import quote
 
 from .resolved_operations import EvaluationRequest, ExchangeRecord, TermOccurrence, build_resolved_operations
 from ._resolved_operation_inputs import _reference
@@ -210,9 +211,13 @@ def resolved_operation_mapping(blocks: Any):
 def operation_coverage(blocks: Any):
     """Use the existing lowering report with collision-free block qualification."""
     from .lowering_coverage import LoweringCoverageReport, LoweringCoverageRow
-    return LoweringCoverageReport(tuple(LoweringCoverageRow(
-        source="block:%s/resolved:%s" % (block.name, row.source),
-        disposition=row.disposition,
-        targets=tuple("block:%s/resolved:%s" % (block.name, target) for target in row.targets),
-        rule=row.rule, gate=row.gate)
-        for block in blocks for row in block.resolved_operations.coverage.rows))
+    rows = []
+    for block in blocks:
+        prefix = "block:%s/resolved:" % quote(block.name, safe="")
+        rows.extend(LoweringCoverageRow(
+            source=prefix + row.source,
+            disposition=row.disposition,
+            targets=tuple(prefix + target for target in row.targets),
+            rule=row.rule, gate=row.gate)
+            for row in block.resolved_operations.coverage.rows)
+    return LoweringCoverageReport(tuple(rows))

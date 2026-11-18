@@ -20,6 +20,7 @@ from pops.frames import Cartesian1D
 from pops.lib.solve import cg
 from pops.numerics import Diffusion, DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
+from pops.numerics.stencil_flux import StencilFlux
 from pops.params import ConstParam
 from pops.time._program.elaboration import Advance, Proposal, Retry, elaborate
 from pops.time._program.relations import (
@@ -35,23 +36,36 @@ REQUEST = Request(rtol=1e-10, atol=1e-12)
 
 
 class _Linear:
-    """A component with the linear map kappa*Laplacian and the claims ``claims``."""
+    """A component whose rate is the two-point diffusion -div_h of a ``StencilFlux`` (N3 lot 1,
+    D7), with the claims ``claims``: the operator of a solve evaluates that rate at its operand (N9
+    « La référence sous les solves de relation », §3.4)."""
 
-    def __init__(self, selection, claims):
-        self.selection = selection
+    def __init__(self, flux, claims):
+        self.flux = flux
         self.linear_claims = claims
 
     def __call__(self, state):
-        return self.selection(state)
+        program = state.prog
+        counts = program.__dict__.setdefault("_stencil_term_evaluations", {})
+        evaluation = counts.get("diffusion", 0)
+        counts["diffusion"] = evaluation + 1
+        return program.stencil_flux_divergence("diffusion_%d" % evaluation, state, flux=self.flux)
 
-    def linear_apply(self, P, value):
-        return KAPPA * P.laplacian(P.scalar_field("laplacian"), value)
+
+_PROVED = LinearClaims(symmetric=True, negative_semidefinite=True, homogeneous=True,
+                       proof="kappa > 0", description="kappa*Laplacian")
+_UNPROVED = LinearClaims(symmetric=True, negative_semidefinite=False, homogeneous=True,
+                         proof="no sign", description="kappa*Laplacian")
 
 
-_PROVED = LinearClaims(symmetric=True, negative_semidefinite=True, proof="kappa > 0",
-                       description="kappa*Laplacian")
-_UNPROVED = LinearClaims(symmetric=True, negative_semidefinite=False, proof="no sign",
-                         description="kappa*Laplacian")
+def _two_point(nu):
+    """The two-point face -nu (u_R - u_L) / h and its frequency (nu / h) / h (D10)."""
+    def body(sample, spacing, axis):
+        h = spacing[axis]
+        left, right = sample((-1,), 0), sample((0,), 0)
+        return ((-nu) * ((right - left) / h),), (nu / h) / h
+
+    return StencilFlux(dimension=1, components=1, radius=1, body=body)
 
 
 def _case():
@@ -75,12 +89,12 @@ def _case():
     case = pops.Case("transport")
     block = case.block("transport", model)
     case.numerics(plan, block=block)
-    return case, block[u], advection, diffusion
+    return case, block[u], advection, diffusion, _two_point(nu)
 
 
 def _elaborate(body, *, claims=_PROVED, request=REQUEST, realization=None, attempts=2):
-    case, state, advection, diffusion = _case()
-    specialized = method(body)(explicit=advection, implicit=_Linear(diffusion, claims))
+    case, state, advection, _, stencil = _case()
+    specialized = method(body)(explicit=advection, implicit=_Linear(stencil, claims))
     realization = {"%s/*" % specialized.name: cg()} if realization is None else realization
     return elaborate(Advance(specialized, retry=Retry(max_attempts=attempts)), case=case,
                      state=state, proposal=Proposal(1e-3, request=request),
@@ -124,7 +138,8 @@ def test_the_solve_takes_the_request_of_the_proposal_and_the_path_of_the_method(
     (site,) = elaboration.trace.solves
     assert site.request is REQUEST and site.path == "imex" and site.spd
     rows = [json.loads(row) for row in elaboration.control.trial_failures]
-    assert rows[-1] == {"site": "imex/solve", "guard": "solve", "variant": "SolveFailed",
+    assert rows[-1] == {"site": "imex/solve", "guard": "solve",
+                        "variant": ["BudgetExhausted", "SolveFailed"],
                         "retry_can_change": True, "classified": True, "lot": None}
 
 
@@ -223,8 +238,108 @@ def test_a_component_without_a_linear_map_names_its_lot():
             explicit(z.U, B.time + p.dt)
         return Candidate(B.state, B.time + p.dt)
 
-    with pytest.raises(NotYetElaborated, match="states no linear map"):
+    with pytest.raises(NotYetElaborated, match="states no linear claims"):
         _elaborate(body)
+
+
+# --- The operator at the State (N9 « La référence sous les solves de relation », §3.4, §3.7) ---
+
+def test_the_operator_of_a_solve_is_the_rate_of_its_component_at_a_state_operand():
+    elaboration = _elaborate(imex)
+    (operator,) = [value for value in elaboration.program._values
+                   if value.op == "matrix_free_operator"]
+    assert operator.attrs["apply_operand"] == "state"
+    assert "stencil_flux_divergence" in [node.op for node in operator.attrs["apply_block"]]
+    (solve_node,) = [value for value in elaboration.program._values if value.op == "solve_linear"]
+    assert solve_node.attrs["realization"]["kind"] == "reference"
+    assert solve_node.inputs[0] is operator
+
+
+def test_the_placeholder_of_a_state_operand_is_not_a_read_of_the_state():
+    """§3.4: the placeholders of the apply carry the block's state_ref, and every pass that keys
+    on a State read reads them as the operand of the operator, not as a read of B.state: the T38
+    dependency set of the relation site (#776), structural_copy and _root of #781, the history
+    validation and the State inputs of the compiled Program."""
+    from pops.codegen.inspect_compiled import _required_state_refs
+    from pops.codegen.program_field_reuse import _root
+    from pops.time._history.validation import _op_is_nondeterministic, _walk_ops
+
+    program = _elaborate(imex).program
+    (operator,) = [value for value in program._values if value.op == "matrix_free_operator"]
+    (state,) = {value.state_ref for value in program._values if value.op == "state"}
+    placeholders = (operator.attrs["apply_in"], operator.attrs["apply_out"])
+    assert [(value.op, value.vtype, value.state_ref) for value in placeholders] == [
+        ("apply_in", "state", state), ("apply_out", "state", state)]
+    block = operator.attrs["apply_block"]
+    assert {id(value) for value in placeholders} <= {id(node) for node in block}
+    # #781: no node of the apply has a State read for its root (a structural copy of the operand
+    # stops at the placeholder).
+    assert [node.op for node in block if _root(node).op == "state"] == []
+    # The history validation walks the apply block and reads the placeholders as deterministic
+    # ops, not as State reads (the rest of the block is read as on the explicit route).
+    walked = {id(node) for node in _walk_ops(program._values)}
+    assert {id(node) for node in block} <= walked
+    assert [_op_is_nondeterministic(value) for value in placeholders] == [None, None]
+    # The compiled Program reads the State it commits, and the placeholders add none.
+    assert _required_state_refs(program) == {state}
+    # T38 (#776): the relation reads p.dt, so its site is not fixed and a retry can change it.
+    (outcome,) = [value for value in program._values if value.op == "solve_outcome"]
+    assert {key: outcome.attrs["trial_site"][key] for key in ("site", "retry_can_change")} == {
+        "site": "imex/solve", "retry_can_change": True}
+
+
+def test_a_rate_that_is_not_stated_homogeneous_is_refused_by_name():
+    affine = LinearClaims(symmetric=True, negative_semidefinite=True, homogeneous=False,
+                          proof="a diffusion and a constant source", description="affine")
+    with pytest.raises(NotYetElaborated,
+                       match="the rate of 'implicit' is not stated linear and homogeneous"):
+        _elaborate(imex, claims=affine)
+
+
+def test_a_rate_that_a_region_does_not_run_is_refused_by_name_at_elaboration():
+    """b6's Diffusion (diffusive_rhs), which two_point() realized before N3 lot 1: the operator
+    of the solve would evaluate it inside the reference region."""
+    case, state, advection, diffusion, _ = _case()
+
+    class _B6Diffusion:
+        linear_claims = _PROVED
+
+        def __call__(self, value):
+            return diffusion(value)
+
+    specialized = method(imex)(explicit=advection, implicit=_B6Diffusion())
+    with pytest.raises(NotYetElaborated,
+                       match="implicit\\(U, t\\) at the unknown of the solve imex evaluates "
+                             "'diffusive_rhs', the diffusion of b6, which a reference region does "
+                             "not run"):
+        elaborate(Advance(specialized, retry=Retry(max_attempts=2)), case=case, state=state,
+                  proposal=Proposal(1e-3, request=REQUEST), realization={"imex/*": cg()})
+
+
+def test_a_fixed_site_under_a_reference_realization_is_refused_by_name():
+    """§3.7: a relation that reads no p.dt is a fixed failure site, which T7 reuses across the
+    attempts; cg() never reaches one (PropertyNotDerived first), a solver without that
+    requirement does, and is refused naming the follow-up."""
+    import pops.surface as surface
+
+    @surface.solver
+    def once(problem, region):
+        start = surface.record(x=problem.apply(problem.rhs), r=0.0, k=0)
+        result = region.iterate(start=start, step=lambda s: surface.record(x=s.x, r=s.r, k=s.k + 1),
+                                stop=lambda s: s.k > 0, max_steps=1)
+        return problem.candidate(result.x, iterations=result.iterations, residual_norm=result.r)
+
+    def fixed(B, p, explicit, implicit):
+        with unknowns(U=B.state.space) as z:
+            s = solve(Problem(unknowns=z, equations=(
+                z.U == B.state + 0.5 * implicit(z.U, B.time + p.dt),)), request=p.request)
+        return Candidate(require_success(s).values.U, B.time + p.dt)
+
+    with pytest.raises(PropertyNotDerived):
+        _elaborate(fixed)
+    with pytest.raises(NotYetElaborated, match="the solve fixed is a fixed failure site .*the "
+                                               "reuse of a reference solve across attempts"):
+        _elaborate(fixed, realization={"fixed/*": once()})
 
 
 def test_relations_outside_this_lot_name_their_lot():
@@ -288,11 +403,13 @@ def test_a_request_states_a_positive_tolerance():
 
 
 def test_a_relation_solve_under_cg_is_never_a_fixed_site():
-    """``cg()``, the one solver of this lot with a native, needs an SPD operator (IR16): every
-    ``b_k`` is a nonpositive multiple of ``p.dt``, so every image of the unknown depends on the
-    proposal and the site is retryable (T38). A relation whose image has no ``p.dt`` is refused,
-    and so is a relation without image. So ``require_success`` never writes a fixed trial site,
-    which ``_attempt_reuse`` would otherwise reach (``test_reuse_across_stages_n8.py``)."""
+    """``cg()`` needs an SPD operator (IR16): every ``b_k`` is a nonpositive multiple of
+    ``p.dt``, so every image of the unknown depends on the proposal and the site is retryable
+    (T38). A relation whose image has no ``p.dt`` is refused, and so is a relation without image.
+    So ``require_success`` never writes a fixed trial site under ``cg()``; under another reference
+    a fixed site is refused by name (§3.7 of the N9 lot « La référence sous les solves de
+    relation »), and the emission of a reference solve never reaches ``_attempt_reuse``
+    (``test_reuse_across_stages_n8.py``)."""
     (site,) = _elaborate(imex).trace.solves
     assert not site.fixed
 

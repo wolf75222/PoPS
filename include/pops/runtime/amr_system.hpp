@@ -685,15 +685,19 @@ class AmrSystem {
   /// Install a refinement criterion generated into the compiled Program (DM13b) in place of the
   /// bytecode: its identity, its field table (the qualified state of each field, its block, the
   /// variables read in it with their component indices, the reach of the reads per axis) and the
-  /// bound values of its runtime parameters. install_program then requires the Program to export
-  /// this criterion. Hysteresis and the buffer stay downstream, as for the bytecode.
+  /// bound values of its case parameters, then, for each runtime parameter of a model that it
+  /// reads, the Program block and the slot of that parameter in the block's RuntimeParams table,
+  /// read when the tagging program is prepared. install_program then requires the Program to
+  /// export this criterion. Hysteresis and the buffer stay downstream, as for the bytecode.
   void set_generated_tagging(const std::string& identity,
                              const std::vector<std::string>& field_identities,
                              const std::vector<std::string>& field_blocks,
                              const std::vector<std::vector<std::string>>& field_variables,
                              const std::vector<std::vector<int>>& field_components,
                              const std::vector<std::vector<std::size_t>>& field_reach,
-                             const std::vector<double>& parameters, int min_cycles,
+                             const std::vector<double>& parameters,
+                             const std::vector<int>& parameter_blocks,
+                             const std::vector<int>& parameter_slots, int min_cycles,
                              const std::string& clock_identity,
                              const std::string& provider_identity);
   /// Install the regrid decision generated into the compiled Program (DM13b, T33) in place of

@@ -953,6 +953,11 @@ struct ProgramRuntimeState {
     balance_replay_active_ = prepared.balance_replay_active_;
     balance_step_completed_ = prepared.balance_step_completed_;
     balance_program_was_due_ = prepared.balance_program_was_due_;
+    // Invariant (N12 lot 3c-2a): a generated AMR refinement criterion caches the values it read
+    // from these tables when its tagging program was prepared, and only AmrSystem's
+    // set_program_params drops that cache. This swap may only reinstall the tables the cache read:
+    // set_program_params is refused during an accepted point, and the auxiliary path requires the
+    // same bytes. A path that changes a table's values here must also drop the AMR tagging cache.
     block_params_.swap(prepared.block_params_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);
@@ -1112,6 +1117,9 @@ struct ProgramRuntimeState {
     history_replay_authorities_ = std::move(snapshot.history_replay_authorities);
     checkpoint_metadata_ = std::move(snapshot.checkpoint_metadata);
     block_map_ = std::move(snapshot.block_map);
+    // Same invariant as the accepted-candidate swap above: a restored snapshot reinstalls the tables
+    // that the AMR tagging cache read; a restore that could change their values must also drop that
+    // cache (N12 lot 3c-2a).
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
     accepted_exchanges_.swap(snapshot.accepted_exchanges);

@@ -20,6 +20,7 @@ from pops.numerics.reconstruction import MUSCL
 from pops.numerics.reconstruction.limiters import VanLeer
 from pops.numerics.riemann import ScalarUpwind
 from pops.numerics.variables import Conservative
+from pops.params import ConstParam
 from pops.projection import ConservativeCellAverage
 
 
@@ -28,20 +29,34 @@ FIRST = {"case": "advection", "blocks": ("alpha", "beta"), "models": ("alpha_mod
 RENAMED = {"case": "transport_pair", "blocks": ("zeta", "eta"), "models": ("zeta_model", "eta_model")}
 
 
-def _transport_model(name, frame, *, speed, loss, state_name="U", rate_name="balance"):
+def _transport_model(name, frame, *, speed, loss, state_name="U", rate_name="balance",
+                     auxiliary_offset=None, speed_parameter=None):
     model = pops.Model(name, frame=frame)
     state = model.state(state_name, components=("q",))
     (q,) = state
+    if speed_parameter is not None:
+        speed = model.value(model.param(ConstParam(speed_parameter, speed)))
     flux = model.flux("F", frame=frame, state=state,
                       components={frame.x: (speed * q,), frame.y: (0 * q,)},
                       waves={frame.x: (speed,), frame.y: (0,)})
     velocity = model.vector("a", frame=frame, components={frame.x: speed, frame.y: 0})
-    rate = model.rate(rate_name, equation=ddt(state) == -div(flux) - loss * q ** 2)
+    sink = loss * q ** 2
+    if auxiliary_offset is not None:
+        coefficient = model.auxiliary("coefficient", frame=frame.canonical_id, unit="1")
+        sink = loss * coefficient * q ** 2
+    rate = model.rate(rate_name, equation=ddt(state) == -div(flux) - sink)
+    if auxiliary_offset is not None:
+        from pops.analytic import x
+        from pops.fields import AnalyticAux
+
+        module = model.module
+        handle = module.aux_handle(module.aux()["coefficient"])
+        module.aux_provider(AnalyticAux(handle, auxiliary_offset + x(frame), frame=frame))
     return model, state, flux, velocity, rate
 
 
 def build_named_case(names=FIRST, *, state_name="U", rate_name="balance", cells=(8, 8),
-                     speeds=(1, 2)):
+                     speeds=(1, 2), auxiliary_offset=None, speed_parameter=None):
     """Return ``(case, layout)`` for the two-block transport case under ``names``.
 
     Block ``k`` advects at ``speeds[k]`` with the loss ``0.5 / speeds[k]``.
@@ -52,7 +67,8 @@ def build_named_case(names=FIRST, *, state_name="U", rate_name="balance", cells=
     for index, (block_name, model_name) in enumerate(zip(names["blocks"], names["models"])):
         model, state, flux, velocity, rate = _transport_model(
             model_name, frame, speed=speeds[index], loss=0.5 / speeds[index],
-            state_name=state_name, rate_name=rate_name)
+            state_name=state_name, rate_name=rate_name, auxiliary_offset=auxiliary_offset,
+            speed_parameter=speed_parameter)
         block = case.block(block_name, model)
         plan = DiscretizationPlan()
         plan.rates.add(rate, FiniteVolume(flux=flux, variables=Conservative(state),

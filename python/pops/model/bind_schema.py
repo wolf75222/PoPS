@@ -40,20 +40,10 @@ def _resolved_bind_data(declaration: Any, resolver: Any) -> dict[str, Any]:
     if not isinstance(raw_row, Mapping):
         raise TypeError("parameter declaration bind_data() must return a mapping")
     row = dict(raw_row)
-    if row.get("kind") != "derived":
-        return row
-    expression = getattr(declaration, "expression", None)
-    resolve_references = getattr(expression, "resolve_references", None)
-    if not callable(resolve_references):
-        raise TypeError("DerivedParam expression must expose resolve_references(resolver)")
-    resolved = resolve_references(resolver)
-    from pops._ir.visitors import _key
-    from pops.params._declaration_data import freeze_json, thaw_json
+    if row.get("kind") == "derived":
+        from ._bind_expression import resolved_declaration_expression
 
-    row["expression"] = {
-        "protocol": "pops.expr.key.v1",
-        "value": thaw_json(freeze_json(_key(resolved), where="resolved DerivedParam expression")),
-    }
+        row["expression"] = resolved_declaration_expression(declaration, resolver)
     return row
 
 

@@ -103,7 +103,7 @@ def _data_layout(plan: Any) -> dict[str, Any]:
 
         return data_layout_and_distribution(plan)
     except Exception as exc:  # noqa: BLE001 - A1: a report never refuses a compiled plan
-        return {"schema_version": 3, "unreported": "%s: %s" % (type(exc).__name__, exc)}
+        return {"schema_version": 5, "unreported": "%s: %s" % (type(exc).__name__, exc)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -998,11 +998,25 @@ class CompiledSimulationArtifact:
 
     @property
     def source_maps(self) -> dict[str, Any]:
-        """Owner-qualified exact Program maps; no model-carrier substitution."""
+        """Owner-qualified exact maps; no model-carrier substitution.
+
+        The Program maps (``pops.program-source-map@1``), under ``layout:<id>`` or ``program``,
+        and, under ``block:<name>``, the map of each block whose model C++ holds a policy
+        generated from a Python body (``pops.model-source-map@1``): the face of a
+        ``riemann.User`` and the trace of a ``reconstruction.User``, with the file and line where
+        each body is written."""
         if self.layout_programs:
-            return {"layout:" + row.layout_id: row.program.source_maps["program"]
+            maps = {"layout:" + row.layout_id: row.program.source_maps["program"]
                     for row in self.layout_programs if "program" in row.program.source_maps}
-        return {} if self.program is None else self.program.source_maps
+        else:
+            maps = {} if self.program is None else dict(self.program.source_maps)
+        from .model_source_map import model_source_map, user_bodies
+
+        for block in getattr(self, "blocks", ()):
+            source = getattr(block.model, "_generated_cpp", None)
+            if type(source) is str and user_bodies(block.spatial):
+                maps["block:" + block.name] = model_source_map(source, block.spatial)
+        return maps
 
     def inspect(self) -> Any:
         from pops.codegen.inspect_report import build_compiled_report

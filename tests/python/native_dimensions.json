@@ -110,6 +110,8 @@
     "tests/python/integration/runtime/test_finite_bdf2_v14_native.py": 2,
     "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 2,
     "tests/python/integration/runtime/test_finite_structural_depth_native.py": 2,
+    "tests/python/integration/runtime/test_g03_cell_totals_native.py": 1,
+    "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 1,
     "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 2,
     "tests/python/integration/runtime/test_implicit_arrays_v14_native.py": 2,
     "tests/python/integration/runtime/test_implicit_domain_v14_native.py": 2,
@@ -136,6 +138,7 @@
     "tests/python/integration/runtime/test_stencil_flux_v02_native.py": 2,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
     "tests/python/integration/runtime/test_uniform_cp9_dim3_runtime.py": 3,
+    "tests/python/integration/surface/test_cf17_l1_swaps.py": 1,
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
     "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
     "tests/python/unit/runtime/test_step_strategy.py": 2

@@ -34,8 +34,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc",
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
         "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
-        "pops/runtime/program/amr_program_context_field_allocation.inc",
-        "pops/runtime/program/amr_program_context_field_bundle.inc",
+        "pops/runtime/program/amr_program_context_regrid_read.inc",
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
         "pops/runtime/program/amr_program_context_composite_integral.inc",
         "pops/runtime/program/amr_program_context_affine_history.inc",
@@ -115,8 +114,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     }),
     "continuation_field_storage": frozenset({
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
-        "pops/runtime/program/amr_program_context_field_allocation.inc",
-        "pops/runtime/program/amr_program_context_field_bundle.inc",
+    }),
+    "regrid_read": frozenset({
+        "pops/runtime/program/amr_program_context_regrid_read.inc",
     }),
     "continuation_field_provider": frozenset({
         "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
@@ -254,6 +254,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "continuation_regrid": 512,
     # Exact provider geometry and coverage capabilities, including route consensus.
     "continuation_regrid_topology": 144,
+    # N10 lot 3b: the one relayout of phase 1, the parent read of a regrid child, and the
+    # target level's share of the composite integral (DM6, DM9, DM13).
+    "regrid_read": 288,
     # Producer metadata and exact allocation/lifetime authentication share the
     # copy authority; revoked instances remain tombstones while copies live.
     "continuation_field_storage": 336,
@@ -323,15 +326,6 @@ PROGRAM_CONTRACT_EXTENSIONS = {
         ("amr_program_context_continuation_field_storage.inc",
          "void continuation_require_field_type_(",
          "private:\ntemplate <class Lifetime>"),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_regrid_field_topology",
-         "  return field_bundle::export_field"),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_field_topology(topology);",
-         "  auto field ="),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_continuation_regrid_().allocated_fields.push_back(field);",
-         "  return field;"),
             ('amr_program_context_continuation_field_storage.inc', '  const auto& manager = runtime_state().hist_;', '  if (const auto found = continuation_field_storage_.find(&field);'),
     )),
     # Observation route validation, metadata budget and canonical origin are
@@ -499,6 +493,10 @@ TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET = 34
 # program closure, with the same tokens (18230 to 18252 lines at 6e0a3ef5): both margins stay
 # what they were before the sweep.
 N5_SWEEP_PROGRAM_FRAGMENT_LINES = 22
+# N10 lot 3b (DM6, DM13): regrid_read and regrid_integral (275 lines, amr_program_context_
+# regrid_read.inc) replace the bridge's field_bundle.inc and field_allocation.inc (76 lines);
+# the regrid frame's views become private at the same length: 275 - 76, exactly.
+N10_REGRID_READ_FRAGMENT_LINES = 199
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
@@ -506,7 +504,7 @@ PROGRAM_FRAGMENT_BUDGET = (
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
-    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES + N10_REGRID_READ_FRAGMENT_LINES
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -549,7 +547,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
-    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES + N10_REGRID_READ_FRAGMENT_LINES
 )
 PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
     "pops/runtime/program/prepared_program_field_stages.hpp",
@@ -578,7 +576,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/temporal_sample_source.hpp",
         "pops/runtime/program/composite_integral_kernel.hpp",
         "pops/runtime/program/field_topology_view.hpp",
-        "pops/runtime/program/field_bundle_port.hpp",
+        "pops/runtime/program/regrid_read_support.hpp",
         "pops/runtime/program/amr_finite_value_lifetime.hpp",
         "pops/runtime/program/continuation_authority.hpp",
         "pops/runtime/program/continuation_forest_distributed_migration.hpp",
@@ -857,8 +855,8 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
             (80, "struct CompositeIntegralKernel"),
         "pops/runtime/program/field_topology_view.hpp":
             (144, "class FieldTopologyView"),
-        "pops/runtime/program/field_bundle_port.hpp":
-            (480, "namespace pops::runtime::program::field_bundle"),
+        "pops/runtime/program/regrid_read_support.hpp":
+            (64, "struct RegridParentKernel"),
         "pops/runtime/program/amr_finite_value_lifetime.hpp":
             (64, "struct AmrFiniteValueLifetime"),
         "pops/runtime/program/continuation_authority.hpp":

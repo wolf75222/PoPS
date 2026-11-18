@@ -18,7 +18,7 @@ from pops.identity.presentation import (
     PresentationMap, PresentationProjectionError, ReservedOwnerNameError,
 )
 from pops.problem._snapshot import AuthoringSnapshot
-from tests.python.support.presentation_case import FIRST, RENAMED, resolve_named_case
+from tests.python.support.presentation_case import FIRST, RENAMED, build_named_case, resolve_named_case
 
 
 def _identities(resolved):
@@ -44,6 +44,261 @@ def test_renamed_owners_keep_every_identity(first):
     authored = json.dumps(renamed.snapshot.to_dict())
     for name in (RENAMED["case"], *RENAMED["blocks"], *RENAMED["models"]):
         assert name in authored
+
+
+def test_parameterized_models_keep_identity_under_owner_rename():
+    literal = "case:advection"
+    first = resolve_named_case(FIRST, speed_parameter=literal)
+    renamed = resolve_named_case(RENAMED, speed_parameter=literal)
+    changed = resolve_named_case(FIRST, speed_parameter=literal, speeds=(1, 3))
+    assert _identities(first) == _identities(renamed)
+    assert _identities(first)["artifact_hash"] != _identities(changed)["artifact_hash"]
+    assert first.plan_identity != changed.plan_identity
+    assert first.bind_schema.artifact_hash != renamed.bind_schema.artifact_hash
+    for plan in (first, renamed):
+        plan.verify()
+        assert [slot.handle.local_id for slot in plan.bind_schema] == [literal, literal]
+
+
+def test_case_parameter_expression_projects_only_authenticated_handle_leaves():
+    from pops.params import DerivedParam, ParamInvalidation, ParamPhase, ParamStorage, RuntimeParam
+
+    literal = "case:advection"
+
+    def resolve(names, *, factor=2, default=2.0):
+        case, layout = build_named_case(names)
+        alpha = case.param(RuntimeParam(literal, default=default))
+        case.param(DerivedParam(
+            "beta", case.value(alpha) * factor, depends_on=(alpha,), phase=ParamPhase.Bind,
+            storage=ParamStorage.DerivedCache, invalidation=ParamInvalidation.OnDependencies))
+        return pops.resolve(pops.validate(case), layout=layout)
+
+    first = resolve(FIRST)
+    renamed = resolve(RENAMED)
+    changed_default = resolve(FIRST, default=4.0)
+    changed_expression = resolve(FIRST, factor=3)
+    assert _identities(first) == _identities(renamed) == _identities(changed_default)
+    assert first.bind_schema.hash != changed_default.bind_schema.hash
+    assert first.bind_schema.artifact_hash == changed_default.bind_schema.artifact_hash
+    assert first.bind_schema.artifact_hash != renamed.bind_schema.artifact_hash
+    assert first.snapshot.hash != renamed.snapshot.hash
+    assert first.snapshot.artifact_hash != changed_expression.snapshot.artifact_hash
+    assert first.plan_identity != changed_expression.plan_identity
+    for plan in (first, renamed):
+        plan.verify()
+        params = plan.snapshot.artifact_to_dict()["payload"]["params"]
+        assert params["beta"]["depends_on"] == [{"name": literal, "param_kind": "runtime"}]
+        assert params[literal]["name"] == literal
+        assert params["beta"]["expression"]["value"][1][0] == [
+            "handle_value", params[literal]["qid"]]
+        assert "#authoring=" not in params[literal]["qid"]
+        values = plan.bind_schema.resolve_bind({}, compile_values=plan.bind_schema.resolve_compile())
+        assert values[plan.bind_schema.slots[1].handle] == 4.
+
+
+@pytest.mark.parametrize("block_name", (
+    "blocks", "payload", "[]", "accepted Program exchange mailbox", "left/right:100%",
+))
+def test_block_names_may_match_schema_keys_and_continuation_labels(first, block_name):
+    renamed = resolve_named_case(dict(FIRST, blocks=("alpha", block_name)))
+    renamed.verify()
+    assert _identities(renamed) == _identities(first)
+    manifest_blocks = renamed.snapshot.artifact_to_dict()["payload"]["blocks"]
+    assert [row["model"]["manifest"]["name"] for row in manifest_blocks.values()] == [
+        "$model0", "$model1",
+    ]
+    rows = renamed._payload()["continuation_transitions"]["objects"]
+    mailbox = next(row for row in rows if row["kind"] == "accepted_exchanges")
+    assert mailbox["name"] == "accepted Program exchange mailbox"
+
+
+@pytest.mark.parametrize("name", (
+    "case:user", "case:advection", "pops.handle.v1::case:advection::state::U",
+))
+def test_literal_quantity_names_are_opaque_to_owner_projection(first, name):
+    named = resolve_named_case(FIRST, state_name=name)
+    renamed = resolve_named_case(RENAMED, state_name=name)
+    assert _identities(named) == _identities(renamed)
+    for key, identity in _identities(first).items():
+        assert _identities(named)[key] != identity, key
+    manifest_blocks = named.snapshot.artifact_to_dict()["payload"]["blocks"]
+    for row in manifest_blocks.values():
+        assert name in row["model"]["manifest"]["state_spaces"]
+
+
+def test_retained_auxiliary_keeps_owner_renames_and_distinguishes_its_expression():
+    first = resolve_named_case(FIRST, auxiliary_offset=2)
+    renamed = resolve_named_case(RENAMED, auxiliary_offset=2)
+    changed = resolve_named_case(FIRST, auxiliary_offset=3)
+    renamed.verify()
+    assert _identities(first) == _identities(renamed)
+    for key, identity in _identities(first).items():
+        assert _identities(changed)[key] != identity, key
+
+    def retained(plan, *, projected):
+        data = plan._payload() if projected else plan._named_payload()
+        return {row["identity"] for row in data["continuation_transitions"]["objects"]
+                if row["kind"] == "auxiliary"}
+
+    assert len(retained(first, projected=True)) == 2
+    assert retained(first, projected=True) == retained(renamed, projected=True)
+    assert retained(first, projected=True).isdisjoint(retained(changed, projected=True))
+    assert retained(first, projected=False).isdisjoint(retained(renamed, projected=False))
+
+
+def test_explicit_layout_names_are_presentation():
+    from pops.mesh import LayoutPlanBuilder
+
+    def explicit_layouts(names, layout_names):
+        case, layout = build_named_case(names)
+        validated = pops.validate(case)
+        subjects = validated.layout_subjects()
+        builder = LayoutPlanBuilder(validated.owner_path.canonical())
+        handles = dict(zip(names["blocks"], (builder.layout(name, layout) for name in layout_names),
+                           strict=True))
+        for block in subjects.blocks:
+            builder.assign_block(block, handles[block.local_id])
+        for state in subjects.states:
+            builder.assign_state(state, handles[state.block_ref.local_id])
+        plan = builder.resolve(**subjects.to_dict())
+        return pops.resolve(validated, layout=plan, layout_providers=dict.fromkeys(
+            handles.values(), layout))
+
+    first = explicit_layouts(FIRST, ("one", "two"))
+    layout_only = explicit_layouts(FIRST, ("three", "zero"))
+    all_owners = explicit_layouts(RENAMED, ("Z/~?", "A:payload"))
+    assert _identities(first) == _identities(layout_only) == _identities(all_owners)
+
+
+def _resolve_m14(case_name, *, block_name="fluid", layout_name=None, inlet=None, brick_name=None):
+    from types import FunctionType
+    from examples.api_v02 import models_M14
+    from pops.mesh import LayoutPlanBuilder
+
+    class ModuleWithOverride:
+        def __init__(self, module, **overrides):
+            self.module, self.overrides = module, overrides
+
+        def __getattr__(self, name):
+            return self.overrides[name] if name in self.overrides else getattr(self.module, name)
+
+    def make_case(_):
+        case = pops.Case(case_name)
+        block = case.block
+        case.block = lambda name, model, **options: block(block_name, model, **options)
+        return case
+
+    base = models_M14.build_m14
+    namespace = dict(base.__globals__)
+    namespace["pops"] = ModuleWithOverride(pops, Case=make_case)
+    if inlet is not None:
+        namespace["RESERVOIR"] = inlet
+    if brick_name is not None:
+        riemann = namespace["riemann"]
+        namespace["riemann"] = ModuleWithOverride(
+            riemann, User=lambda **options: riemann.User(name=brick_name, **options))
+    build = FunctionType(base.__code__, namespace, base.__name__, base.__defaults__, base.__closure__)
+    build.__kwdefaults__ = base.__kwdefaults__
+    spec = build(cells=(4, 1))
+    case = pops.validate(spec.case)
+    if layout_name is None:
+        return pops.resolve(case, layout=spec.layout)
+    subjects = case.layout_subjects()
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
+    layout = builder.layout(layout_name, spec.layout)
+    for subject in subjects.blocks:
+        builder.assign_block(subject, layout)
+    for subject in subjects.states:
+        builder.assign_state(subject, layout)
+    for subject in subjects.fields:
+        builder.assign_field(subject, layout)
+    return pops.resolve(case, layout=builder.resolve(**subjects.to_dict()),
+                        layout_providers={layout: spec.layout})
+
+
+def test_m14_case_rename_keeps_derived_identities_in_parallel(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+    from pops.boundary.transport import ResolvedTransportCondition
+    from pops.problem._snapshot_presentation import ghost_presentation_map
+
+    nested = []
+    original = ResolvedTransportCondition.presentation_handles
+
+    def resolve_inside_projection(condition, names):
+        if names.case == "sheath" and not nested:
+            nested.append(_resolve_m14("nested_sheath"))
+        return original(condition, names)
+
+    monkeypatch.setattr(ResolvedTransportCondition, "presentation_handles", resolve_inside_projection)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, renamed = pool.map(_resolve_m14, ("sheath", "renamed_sheath"))
+    assert _identities(first) == _identities(renamed) == _identities(nested[0])
+    for plan in (renamed, first):
+        plan.verify()
+        ghost, = plan.blocks[0].numerics.boundaries
+        producers = [row.producer for row in ghost.execution_order()]
+        ordered = [producer.handle for producer in producers]
+        assert any(producer.dependencies for producer in producers)
+        for producer in producers:
+            for dependency in producer.dependencies:
+                if dependency in ordered:
+                    assert ordered.index(dependency) < ordered.index(producer.handle)
+
+    def named_authorities(plan):
+        ghost, = plan.blocks[0].numerics.boundaries
+        field, = plan.field_plans.values()
+        return ghost.coverage.layout_manifest.qualified_id, field.native_install_data()["provider_slot"]
+
+    first_ids, second_ids = named_authorities(first), named_authorities(renamed)
+    assert all(left != right for left, right in zip(first_ids, second_ids, strict=True))
+    block = first.blocks[0]
+    ghost, = block.numerics.boundaries
+    foreign, = renamed.blocks[0].numerics.boundaries
+    origins = ghost._presentation_origins
+    with pytest.raises(ValueError, match="composition evidence"):
+        replace(origins.handles[0], evidence={}).named_evidence()
+    altered = replace(ghost, _presentation_origins=replace(
+        origins, handles=(foreign._presentation_origins.handles[0],)))
+    altered_block = replace(block, numerics=replace(block.numerics, boundaries=(altered,)))
+    with pytest.raises(ValueError, match="another boundary owner"):
+        ghost_presentation_map(first.snapshot.presentation, (altered_block,), first.layout_plan)
+
+
+def test_m14_tracks_layout_and_block_roles_and_keeps_boundary_data_and_brick_names():
+    first = _resolve_m14("sheath", layout_name="old_layout")
+    layout_renamed = _resolve_m14("sheath", layout_name="another/layout")
+    block_renamed = _resolve_m14("sheath", block_name="new_fluid", layout_name="old_layout")
+    assert _identities(first) == _identities(layout_renamed) == _identities(block_renamed)
+    changed_inlet = _resolve_m14("sheath", layout_name="old_layout", inlet=(1.2, 2., 1., 3.))
+    ghost, = first.blocks[0].numerics.boundaries
+    literal = ghost.coverage.layout_manifest.qualified_id
+    changed_brick = _resolve_m14("sheath", layout_name="old_layout", brick_name=literal)
+    for changed in (changed_inlet, changed_brick):
+        for key, identity in _identities(first).items():
+            assert _identities(changed)[key] != identity, key
+    assert literal in set(_strings(changed_brick.snapshot.artifact_to_dict()))
+
+
+def test_field_provider_identity_keeps_the_order_of_two_rhs_contributions():
+    from pops.fields._identity import field_identity
+    from tests.python.unit.codegen.test_uniform_field_roles import uniform_multiphysics
+
+    plan = uniform_multiphysics.__wrapped__()
+    named, = plan.field_plans.values()
+    projected, = plan._payload()["field_plans"].values()
+    options = projected["value"]["native_options"]
+    named_rows = named.native_install_data()["provider_identity"]["contributions"]
+    evidence = options["provider_identity"]
+    projected_rows = evidence["contributions"]
+    assert len(named_rows) == len(projected_rows) == 2
+    for before, after in zip(named_rows, projected_rows, strict=True):
+        assert after["owner_block"] == plan.snapshot.presentation.block_label(before["owner_block"])
+        assert after["coefficient"] == {"binary64": before["coefficient"].hex()}
+    assert options["provider_slot"] == field_identity("qualified-field-provider", evidence).token
+    assert options["provider_slot"] != field_identity("qualified-field-provider", {
+        **evidence, "contributions": projected_rows[::-1],
+    }).token
 
 
 def _owner_names(text):

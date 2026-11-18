@@ -78,7 +78,7 @@ def test_native_renamed_owners_keep_the_program_id(
     # program_id matched; the native images still spell the names until lot 2c.
     _restart_is_refused(first, renamed, RENAMED["blocks"],
                         r"equal program_id.*no member state_eta, state_zeta.*native checkpoint "
-                        r"images.*lot 2c")
+                        r"images.*lot 2c-ii")
 
     # A kept name (a term name, gap C52) changes it.
     assert _compile(FIRST, rate_name="other_balance").program_id != first.program_id

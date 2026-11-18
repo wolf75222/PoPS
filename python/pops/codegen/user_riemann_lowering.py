@@ -101,6 +101,7 @@ def _concealed_operand_keys(roots: Any) -> tuple[set[Any], dict[int, Any]]:
     intermediate is non-finite: from a non-finite intermediate, follow its consumers towards a
     root; each one either carries the non-finite value or is a position checked here.
     """
+    from pops._ir.expr import is_boolean_expression
     from pops._ir.visitors import _children, _key
 
     key_memo: dict[int, Any] = {}
@@ -112,7 +113,7 @@ def _concealed_operand_keys(roots: Any) -> tuple[set[Any], dict[int, Any]]:
         seen.add(id(node))
         for operand, child in enumerate(_children(node)):
             # A Boolean is 0 or 1; the comparisons below it carry their own checks.
-            boolean = callable(getattr(child, "resolve_for_amr_predicate", None))
+            boolean = is_boolean_expression(child)
             if not boolean and not _carries_non_finite(node, operand):
                 concealed.add(_key(child, key_memo))
             pending.append(child)

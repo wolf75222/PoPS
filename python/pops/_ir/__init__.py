@@ -33,7 +33,7 @@ Pure-symbolic helpers
 from .expr import (
     Expr, _wrap,
     Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Minimum, Maximum, Compare,
-    BooleanAnd, BooleanOr, BooleanNot, Neg, Sqrt, Exp, UnaryMath, Sin, Cos, Log, Expm1, Abs, Sign,
+    BooleanAnd, BooleanOr, BooleanNot, is_boolean_expression, Neg, Sqrt, Exp, UnaryMath, Sin, Cos, Log, Expm1, Abs, Sign,
     # board nodes
     Equation, _BoardNode,
     Partial, Gradient, GradientMagnitude, Laplacian,
@@ -74,7 +74,7 @@ from .lowering import (
 __all__ = [
     # node classes
     "Expr", "Const", "Var", "ValueExpr", "parameter_value", "Add", "Sub", "Mul", "Div", "Pow", "Minimum", "Maximum", "Compare",
-    "BooleanAnd", "BooleanOr", "BooleanNot",
+    "BooleanAnd", "BooleanOr", "BooleanNot", "is_boolean_expression",
     "Neg", "Sqrt", "Exp", "UnaryMath", "Sin", "Cos", "Log", "Expm1", "Abs", "Sign",
     # board nodes
     "Equation",
