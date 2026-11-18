@@ -15,7 +15,7 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
   averages; the projection by encode is N16 lot 2's (plan/routes_transitoires.md, line 4);
 - any Program operation other than the stored state, its linear combinations, the two rates
   that read the decoded state (a stencil flux is refused until a case runs it under a total) and
-  the acceptance test ``finite()``, which reads the same on U as on ū (``finite_guard_values``);
+  the Advance assessment ``finite()`` of the stored candidate coefficients (``finite_guard_values``);
 - a consumer of the case that reads the state: a diagnostic reduces the stored totals weighed by
   the cell measure, Σ μ(K) U_K, not the inventory Σ U_K (row D4 of note §4.3), and a field
   output would write the totals U_K under the name of the state (obligation 1 of the record).
@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
 from pops.time._program.traced_method import NotYetElaborated
+from pops.time.solve_outcome import RejectAttempt
 
 # The operations that a Program of a total may hold: the state, its combinations, and the rates
 # that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
@@ -60,31 +62,37 @@ def total_blocks(plan: Any) -> tuple[Any, ...]:
 
 
 def finite_guard_values(values: Any) -> frozenset[int]:
-    """The ids of the values of the acceptance test ``finite()`` (``pops.Advance``, accept
-    finite(), the default of the surface): ``acceptance_guard(guard="finite")`` of
-    ``scalar_isfinite(reduce(kind="norm_inf_all"))``, each value read by the next one only.
-    U = μ(K) ū with μ(K) finite and positive, so U is finite exactly when ū is: the test reads the
-    same on a total as on its density, and a total serves it (N16, the lot that lifts the table for
-    the three words). Any other reduction of a total is a diagnostic that reads U, refused."""
-    values = list(values)
-    readers: dict[int, list[Any]] = {}
+    """Identify the default Advance assessment of the exact candidate's stored coefficients.
+
+    The Advance issues the guard and its RejectAttempt action. The all-component norm reads the
+    candidate, and the norm and predicate are reserved for this assessment. Decoding U/μ(K) is
+    outside this test and can overflow for finite U. Every other reduction remains unsupported.
+    """
+    values = tuple(values)
+    readers: dict[int, list[int]] = {}
     for value in values:
-        for source in getattr(value, "inputs", ()) or ():
-            readers.setdefault(getattr(source, "id", -1), []).append(value)
+        for source in value.inputs:
+            readers.setdefault(source.id, []).append(value.id)
     served: set[int] = set()
     for guard in values:
-        if guard.op != "acceptance_guard" or guard.attrs.get("guard") != "finite":
+        if (guard.op != "acceptance_guard" or guard.vtype != "state" or len(guard.inputs) != 2
+                or set(guard.attrs) != {"guard", "action", "assessment"}
+                or guard.attrs["guard"] != "finite"
+                or guard.attrs["assessment"] != ADVANCE_ASSESSMENT_CONTRACT
+                or type(guard.attrs["action"]) is not RejectAttempt):
             continue
-        for test in guard.inputs:
-            if test.op != "scalar_isfinite" or len(test.inputs) != 1:
-                continue
-            (reduction,) = test.inputs
-            if reduction.op != "reduce" or reduction.attrs.get("kind") != "norm_inf_all":
-                continue
-            if all(reader.op == "scalar_isfinite" for reader in readers.get(reduction.id, ())) \
-                    and all(reader.op == "acceptance_guard" and reader.attrs.get("guard") ==
-                            "finite" for reader in readers.get(test.id, ())):
-                served.update((guard.id, test.id, reduction.id))
+        candidate, test = guard.inputs
+        if (candidate.vtype != "state" or test.op != "scalar_isfinite" or test.vtype != "bool"
+                or len(test.inputs) != 1 or readers.get(test.id) != [guard.id]):
+            continue
+        (reduction,) = test.inputs
+        if (reduction.op != "reduce" or reduction.vtype != "scalar"
+                or reduction.attrs.get("kind") != "norm_inf_all"
+                or reduction.attrs.get("component_contract") != "pops.program.norm-inf-all@1"
+                or len(reduction.inputs) != 1 or reduction.inputs[0] is not candidate
+                or readers.get(reduction.id) != [test.id]):
+            continue
+        served.update((guard.id, test.id, reduction.id))
     return frozenset(served)
 
 
