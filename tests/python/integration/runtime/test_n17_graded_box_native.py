@@ -154,5 +154,13 @@ def test_an_affine_field_at_the_neighbour_centroids_returns_its_slope_on_the_box
     slopes = np.stack([native(component) for component in slopes])
     floor = rounding_floor(rows, largest_value(arrays, offset, slope), slope)
     for axis in range(3):
-        assert np.array_equal(slopes[axis], differences[axis] / rows[..., axis, axis]), axis
+        quotient = differences[axis] / rows[..., axis, axis]
+        assert np.array_equal(slopes[axis].view("uint64"), quotient.view("uint64")), axis
         assert np.all(np.abs(slopes[axis] - slope[axis]) <= floor), axis
+    differences[0].fill(-1.)
+    differences[1].fill(-0.)
+    differences[2].fill(0.)
+    slopes = system._static_geometry_centroid_slopes(ranked(differences))
+    for axis in range(3):
+        quotient = differences[axis] / rows[..., axis, axis]
+        assert np.array_equal(native(slopes[axis]).view("uint64"), quotient.view("uint64")), axis

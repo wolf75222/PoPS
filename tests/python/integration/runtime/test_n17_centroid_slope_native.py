@@ -31,18 +31,22 @@ centroids that the reflected centroid reads.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pops
 import pytest
-from pops.analytic import coordinates
+from pops.analytic import coordinates, cos, sin
 from pops.domain import CartesianDomain
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes
+from pops.lib.quadrature import GaussLegendre
+from pops.mesh import CartesianGrid, GeometryEvolution, MovingControlVolumes, PeriodicAxes
 
 from examples.api_v02.models_charted_supports import PLANE_SHEAR, build_chart_diffusion
 from examples.api_v02.models_graded_spacing import build_graded_plane
 from examples.api_v02.models_static_geometry import build_annulus_diffusion
+from tests.python.support.public_native_profile import native_profile
 from tests.python.support.static_geometry_arrays import (
     affine_differences, centroid_rows, largest_value, layout_static_system, native, ranked,
     rounding_floor)
@@ -70,6 +74,44 @@ def annulus_system():
 def walled_plane_system():
     case, layout = walled_plane()
     return layout_static_system(dimension=2, layout=layout, owner=case)
+
+
+def periodic_shears(*, reverse_orientation=False):
+    """Two determinant-one shears, sampled at the midpoint of each logical cell."""
+    owner = pops.Case("N17_two_periodic_shears")
+    frame = CartesianDomain("N17_two_periodic_shears", (0., 0.), (1., 1.)).frame(Cartesian2D())
+    x, y = coordinates(frame)
+    turn = 2 * math.pi
+    anchor = y - 0.625
+    shear = sin(2 * turn * y)**2 * (1 + cos(turn * anchor)) * (1 + cos(2 * turn * anchor)) / 4
+    X = x + shear
+    Y = y - cos(turn * (X - 0.125)) * sin(2 * turn * X)**2 / 8
+    grid = CartesianGrid(frame=frame, cells=(4, 4), periodic=PeriodicAxes(frame.axes))
+    evolution = GeometryEvolution((Y, X) if reverse_orientation else (X, Y))
+    return owner, MovingControlVolumes(Uniform(grid), evolution=evolution, geometry=GaussLegendre(1))
+
+
+def test_the_slope_refuses_the_singular_centroid_rows_of_a_certified_chart(native_cxx, kokkos_root):
+    del native_cxx, kokkos_root
+    module, _ = native_profile(dimension=2, scope="N17 DN39 certified chart")
+    owner, layout = periodic_shears(reverse_orientation=True)
+    with pytest.raises(ValueError, match="det DX is not positive"):
+        layout_static_system(dimension=2, layout=layout, owner=owner)
+    owner, layout = periodic_shears()
+    system = layout_static_system(dimension=2, layout=layout, owner=owner)
+    arrays = system._static_geometry_snapshot()
+    assert arrays["kind"] == "chart"
+    assert np.all(np.asarray(arrays["cell_measure"]) > 0.)
+    np.testing.assert_array_equal(centroid_rows(arrays)[1, 1], [[0.5, 0.25], [1., 0.5]])
+    for first in (1., 0.5):
+        differences = np.ones((2, 4, 4))
+        differences[0, 1, 1] = first
+        with pytest.raises(module.StepAttemptRejected) as rejected:
+            system._static_geometry_centroid_slopes(differences)
+        error = rejected.value
+        assert (error.phase, error.status, error.disposition) == (
+            "centroid_slope", "invalid_evaluation", "reject")
+        assert error.detail == "singular centroid differences"
 
 
 # name: (the bare System of its arrays, kind, periodicity, seam translations).
@@ -111,7 +153,23 @@ def test_an_affine_field_at_the_neighbour_centroids_returns_its_slope(native_cxx
         if kind == "nodes":
             assert np.all(rows[..., 0, 1] == 0.0) and np.all(rows[..., 1, 0] == 0.0)
             for axis in range(2):
-                assert np.array_equal(slopes[axis], differences[axis] / rows[..., axis, axis])
+                quotient = differences[axis] / rows[..., axis, axis]
+                assert np.array_equal(slopes[axis].view("uint64"), quotient.view("uint64"))
+
+
+@pytest.mark.parametrize("name", ["graded plane", "walled plane"])
+def test_diagonal_slope_keeps_both_zero_signs(name, native_cxx, kokkos_root):
+    del native_cxx, kokkos_root
+    system = LAYOUTS[name][0]()
+    rows = centroid_rows(system._static_geometry_snapshot())
+    for values in ((-1., -0.), (1., 0.), (1., -0.), (-1., 0.), (-0., -1.), (0., 1.)):
+        differences = np.empty((2, *rows.shape[:2]))
+        for axis, value in enumerate(values):
+            differences[axis].fill(value)
+        slopes = system._static_geometry_centroid_slopes(ranked(differences))
+        for axis in range(2):
+            quotient = differences[axis] / rows[..., axis, axis]
+            assert np.array_equal(native(slopes[axis]).view("uint64"), quotient.view("uint64"))
 
 
 def test_the_snapshot_publishes_the_face_centroids_that_the_reflected_centroid_reads(

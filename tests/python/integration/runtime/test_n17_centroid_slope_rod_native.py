@@ -38,9 +38,11 @@ import pops
 import pytest
 
 from examples.api_v02.models_static_geometry import SLOPE_CELLS, build_graded_slope, graded_nodes
+from tests.python.support.api_v02_native import recorded_attempt
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.native_execution_context import artifact_execution_context
-from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
+from tests.python.support.public_native_profile import (
+    compile_profile_plan_once, native_profile, profile_gather_value, rank_and_size)
 from tests.python.support.static_geometry_arrays import (
     affine_differences, centroid_rows, largest_value, layout_static_system, ranked,
     rounding_floor)
@@ -71,6 +73,12 @@ def session_differences(values, periodic):
     return upper - lower
 
 
+def bind_slope(world, artifact, subject, values):
+    return collective_call(world, lambda: pops.bind(
+        artifact, initial_values={subject: values[None]},
+        resources={"execution_context": artifact_execution_context(artifact)}))
+
+
 def run_slope(periodic):
     """Generate the arrays of the layout in a bare System, bind the field of the case at their
     centroids, take the one step of the Program and return the bare System, the arrays, the bound
@@ -85,14 +93,62 @@ def run_slope(periodic):
     values = (ring_values if periodic else rod_values)(centroids)
     plan = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
     artifact = compile_profile_plan_once(world, plan, route=scope, compile_artifact=pops.compile)
-    runtime = collective_call(world, lambda: pops.bind(
-        artifact, initial_values={subject: values[None]},
-        resources={"execution_context": artifact_execution_context(artifact)}))
+    runtime = bind_slope(world, artifact, subject, values)
     report = collective_call(world, lambda: pops.run(runtime, t_end=1.0, max_steps=1,
                                                      console=False))
     slopes = np.asarray(collective_call(world, lambda: runtime.state_global("rod")))[0]
     bound = collective_call(world, lambda: runtime._executor._s._static_geometry_snapshot())
-    return world, system, arrays, bound, values, report, slopes
+    return world, system, arrays, bound, values, report, slopes, artifact, subject
+
+
+def accepted_slope_image(world, runtime):
+    executor = runtime._executor
+    system = executor._s
+    pieces = collective_call(world, lambda: system.output_state_local_pieces("rod", 0))
+    return (
+        tuple((piece["lower"], piece["upper"], piece["owner_rank"], piece["values"].tobytes())
+              for piece in pieces),
+        collective_call(world, system.checkpoint_state_carriers),
+        collective_call(world, system.capture_auxiliary_checkpoint_accepted_state),
+        collective_call(world, executor._checkpoint_program_exchanges),
+        system._checkpoint_continuation_schema(), system._checkpoint_continuation_capacity(),
+        runtime.time(), runtime.macro_step(),
+    )
+
+
+def check_nonfinite_slope_refusal(world, artifact, subject, rows):
+    module, _ = native_profile(dimension=1, scope="N17 DN39 nonfinite rod slope")
+    values = np.zeros(SLOPE_CELLS)
+    values[2] = np.finfo(np.float64).max * .25
+    differences = session_differences(values, periodic=False)
+    with collective_check(world):
+        assert np.isfinite(values).all() and np.isfinite(differences).all()
+        assert np.all(np.isfinite(rows) & (rows > 0.))
+        with np.errstate(over="ignore"):
+            invalid_cells = np.flatnonzero(~np.isfinite(differences / rows)).tolist()
+        assert invalid_cells == [1, 3]
+    runtime = bind_slope(world, artifact, subject, values)
+    before = accepted_slope_image(world, runtime)
+    rank, size = rank_and_size(world)
+    bounds = tuple((lower[0], upper[0]) for lower, upper, _, _ in before[0])
+    owners = profile_gather_value(world, [i for i in invalid_cells
+                                         if any(lo <= i < hi for lo, hi in bounds)])
+    with collective_check(world):
+        assert before[-4:] == ("", 0, 0., 0)
+        assert all(owner == rank for _, _, owner, _ in before[0])
+        assert len(owners) == size and list(owners[0]) == invalid_cells
+        assert all(not cells for cells in owners[1:])
+    for _ in range(2):
+        error, failures = recorded_attempt(
+            world, lambda: pops.run(runtime, t_end=1., max_steps=1, console=False))
+        after = accepted_slope_image(world, runtime)
+        with collective_check(world):
+            assert type(error) is module.StepAttemptRejected
+            assert (error.phase, error.status, error.disposition) == (
+                "centroid_slope", "invalid_evaluation", "reject")
+            assert error.detail == "singular centroid differences or non-finite slope evaluation"
+            assert len(failures) == size and all(failures)
+            assert after == before
 
 
 def test_the_slope_of_the_rod_reads_its_centroids_and_its_reflected_ends(
@@ -101,7 +157,7 @@ def test_the_slope_of_the_rod_reads_its_centroids_and_its_reflected_ends(
     repeated end value on the reflected centroid 2 m_f - c_K, as the oracle of the same ghosts
     does; the seam of the System returns the slopes of the Program, bitwise."""
     del isolated_native_cache, native_cxx, kokkos_root
-    world, system, arrays, bound, values, report, slopes = run_slope(periodic=False)
+    world, system, arrays, bound, values, report, slopes, artifact, subject = run_slope(periodic=False)
     differences = session_differences(values, periodic=False)
     rows = centroid_rows(arrays)[:, 0, 0]
     through_seam = collective_call(
@@ -116,14 +172,15 @@ def test_the_slope_of_the_rod_reads_its_centroids_and_its_reflected_ends(
         np.testing.assert_allclose(nodes, graded_nodes(SLOPE_CELLS), rtol=0.0, atol=4e-16)
         assert np.array_equal(np.asarray(arrays["face_centroid"][0][0]), nodes)
         assert slopes.shape == (SLOPE_CELLS,)
-        assert np.array_equal(slopes, differences / rows)
+        assert np.array_equal(slopes.view("uint64"), (differences / rows).view("uint64"))
         floor = rounding_floor(rows[1:-1, None, None], np.max(np.abs(values)), (SLOPE,))
         assert np.all(np.abs(slopes[1:-1] - SLOPE) <= floor)
         # The end cells read the reflected centroid: c_1 + c_0 - 2 m_0 below, about half the slope.
         centroids = np.asarray(arrays["centroid"][0])
         assert rows[0] == centroids[1] - (2 * nodes[0] - centroids[0])
         assert rows[-1] == (2 * nodes[-1] - centroids[-1]) - centroids[-2]
-        assert np.array_equal(np.asarray(through_seam)[0], slopes)
+        assert np.array_equal(np.asarray(through_seam)[0].view("uint64"), slopes.view("uint64"))
+    check_nonfinite_slope_refusal(world, artifact, subject, rows)
 
 
 def test_the_slope_of_the_ring_reads_the_translated_seam(isolated_native_cache, native_cxx,
@@ -132,7 +189,7 @@ def test_the_slope_of_the_ring_reads_the_translated_seam(isolated_native_cache, 
     halo copies the cells of the other end); the seam of the System returns the slopes of the
     Program, bitwise."""
     del isolated_native_cache, native_cxx, kokkos_root
-    world, system, arrays, bound, values, report, slopes = run_slope(periodic=True)
+    world, system, arrays, bound, values, report, slopes, _, _ = run_slope(periodic=True)
     differences = session_differences(values, periodic=True)
     rows = centroid_rows(arrays)[:, 0, 0]
     through_seam = collective_call(
@@ -146,8 +203,8 @@ def test_the_slope_of_the_ring_reads_the_translated_seam(isolated_native_cache, 
         centroids = np.asarray(arrays["centroid"][0])
         assert rows[0] == centroids[1] - (centroids[-1] - 1.0)
         assert rows[-1] == (centroids[0] + 1.0) - centroids[-2]
-        assert np.array_equal(slopes, differences / rows)
-        assert np.array_equal(np.asarray(through_seam)[0], slopes)
+        assert np.array_equal(slopes.view("uint64"), (differences / rows).view("uint64"))
+        assert np.array_equal(np.asarray(through_seam)[0].view("uint64"), slopes.view("uint64"))
 
 
 @pytest.mark.parametrize("periodic", [False, True], ids=["rod", "ring"])
