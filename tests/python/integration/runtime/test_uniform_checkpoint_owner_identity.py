@@ -306,8 +306,8 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
         def unexpected_begin():
             pytest.fail("the invalid inner image reached the restart transaction")
 
-        with monkeypatch.context() as patch:
-            patch.setattr(resumed._executor, "_begin_checkpoint_restart", unexpected_begin)
+        with monkeypatch.context() as guard:
+            guard.setattr(resumed._executor, "_begin_checkpoint_restart", unexpected_begin)
             with pytest.raises(ValueError, match="differs from the sealed provider registry"):
                 resumed.restart(rehashed)
             with pytest.raises(ValueError, match="carrier and auxiliary checkpoint authority differ"):
