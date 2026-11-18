@@ -42,14 +42,14 @@ def _native_literal(expression: Const) -> str:
     literal = expression.literal
     token = literal.to_cpp()
     try:
-        magnitude = abs(literal.to_python())
+        value = literal.to_python()
     except TypeError:
         # Custom and algebraic literals supply their own lowering. Check its value before
         # the generated local narrows it to Real.
         return "pops_checked_criterion_literal(%s)" % token
-    if magnitude > _FLOAT64_MAX:
+    if not -_FLOAT64_MAX <= value <= _FLOAT64_MAX:
         raise ValueError("refinement criterion literal exceeds the finite native scalar range")
-    if magnitude > _FLOAT32_MAX:
+    if not -_FLOAT32_MAX <= value <= _FLOAT32_MAX:
         invalid = "%s::quiet_NaN()" % _REAL_LIMITS
         if literal.target == "float":
             return invalid
