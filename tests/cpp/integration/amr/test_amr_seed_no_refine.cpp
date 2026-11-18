@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "amr_fixture_criteria.hpp"
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 
@@ -178,10 +179,11 @@ std::vector<PhysicalPatch<Dim>> physical_patches(const std::vector<pops::AmrPatc
 template <int Dim>
 pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
                                  const std::vector<double>& initial,
-                                 const std::string& physical_face = {}) {
+                                 const std::string& physical_face = {},
+                                 const char* state_route = "state/tracer") {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "test.amr-seed-no-refine.runtime@1");
-  system.install_block_state_route("tracer", "state/tracer");
+  system.install_block_state_route("tracer", state_route);
   if (!physical_face.empty()) {
     std::vector<std::string> face_types;
     std::vector<std::string> face_identities;
@@ -194,7 +196,7 @@ pops::AmrSystem<Dim> make_system(const pops::AmrSystemConfig<Dim>& config,
     system.install_hyperbolic_boundary("tracer", "test.amr-seed-no-refine.boundary@1", 1,
                                        face_types,
                                        std::vector<double>(static_cast<std::size_t>(2 * Dim), 0.0),
-                                       face_identities, {"Scalar"}, "state/tracer");
+                                       face_identities, {"Scalar"}, state_route);
   }
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>(), "minmod", "rusanov",
                                 "conservative", "explicit",
@@ -280,8 +282,9 @@ TEST(test_amr_seed_no_refine, PreparedTaggingSeedsExactGeometryWithoutReadMutati
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
   config.regrid_every = 4;
-  auto system = make_system(config, gaussian(config.shape));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.2}});
+  const auto& criterion = pops::test::standalone_tracer;
+  auto system = make_system(config, gaussian(config.shape), {}, criterion.state);
+  criterion.install<Dim>(system);
 
   const std::vector<pops::AmrPatch<Dim>> first = system.patch_boxes();
   ASSERT_FALSE(first.empty());

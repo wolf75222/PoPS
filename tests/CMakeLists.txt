@@ -699,7 +699,8 @@ pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES 
 # tagged fixture targets require this interpreter and its NumPy dependency.
 set(_amr_criteria_dir "${CMAKE_CURRENT_BINARY_DIR}/amr-fixture-criteria")
 set(_amr_criteria_outputs "${_amr_criteria_dir}/amr_fixture_criteria_generated.hpp")
-foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence)
+foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence
+    standalone_tracer standalone_energy standalone_density)
   list(APPEND _amr_criteria_outputs "${_amr_criteria_dir}/${_criterion}.cpp")
 endforeach()
 file(GLOB_RECURSE _pops_criterion_python_sources CONFIGURE_DEPENDS
@@ -728,6 +729,8 @@ function(pops_use_amr_fixture_criteria target)
 endfunction()
 pops_use_amr_fixture_criteria(test_amr_synthetic_program_loader_transaction)
 pops_use_amr_fixture_criteria(test_prepared_field_rhs_inputs)
+pops_use_amr_fixture_criteria(test_amr_seed_no_refine)
+pops_use_amr_fixture_criteria(test_amr_regrid_variable)
 
 # CTest starts a fresh process for every case. Build the seven exact source variants once,
 # rather than repeating eleven expensive compiler invocations inside the test watchdog.

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "amr_fixture_criteria.hpp"
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 
@@ -89,8 +90,9 @@ std::vector<double> energy_bump(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
-std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable, int tag_buffer = 0,
-                                                    std::uint32_t tag_selection = 1) {
+std::unique_ptr<pops::AmrSystem<Dim>> make_selector(
+    const std::string& variable, int tag_buffer = 0, std::uint32_t tag_selection = 1,
+    const pops::test::FixtureCriterion* criterion = nullptr) {
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
@@ -100,13 +102,16 @@ std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable,
   config.regrid_every = 1;
   auto system = std::make_unique<pops::AmrSystem<Dim>>(config);
   pops::test::install_amr_runtime_authority(*system, "test.amr-regrid-variable/runtime@1");
-  system->install_block_state_route("gas", "state/gas");
+  system->install_block_state_route("gas", criterion ? criterion->state : "state/gas");
   pops::add_compiled_model<Dim>(
       *system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
       static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
       static_cast<double>(pops::kWenoEpsilon), false, "test.amr-regrid-variable/physical-flux");
   system->set_conservative_state("gas", energy_bump(config.shape));
-  pops::test::install_prepared_threshold_union(*system, {{"gas", variable, 4.0}});
+  if (criterion)
+    criterion->install<Dim>(*system);
+  else
+    pops::test::install_prepared_threshold_union(*system, {{"gas", variable, 4.0}});
   return system;
 }
 
@@ -163,7 +168,7 @@ TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
 
 TEST(test_amr_regrid_variable, FixedRefineRequestsDoNotRedilateExistingBuffer) {
   constexpr int Dim = pops::kNativeDimension;
-  auto system = make_selector<Dim>("E", 1);
+  auto system = make_selector<Dim>("E", 1, 1, &pops::test::standalone_energy);
   const auto initial = system->patch_boxes();
   ASSERT_FALSE(initial.empty());
   for (int cycle = 0; cycle < 4; ++cycle) {

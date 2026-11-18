@@ -45,13 +45,20 @@ def main(output, dimension):
         ("field_rhs_value", ("material",), ("u",), "u", 2.4, False, "test.field-rhs-v2.clock"),
         ("field_rhs_incidence", ("material",), ("u", "tag"), "tag", 2.4, False,
          "test.field-rhs-v2.clock"),
+        ("standalone_tracer", ("tracer",), ("u",), "u", 1.2, False, "test.clock.macro"),
+    )
+    euler_variables = ("rho", *(f"momentum_{axis}" for axis in range(dimension)), "E")
+    mounts += (
+        ("standalone_energy", ("gas",), euler_variables, "E", 4.0, False, "test.clock.macro"),
+        ("standalone_density", ("gas",), euler_variables, "rho", 4.0, False, "test.clock.macro"),
     )
     output.mkdir(parents=True, exist_ok=True)
     declarations = []
     for name, blocks, variables, variable, threshold, coarsen, clock in mounts:
-        model = pops.Model(name)
+        owner = "standalone_euler" if name in ("standalone_energy", "standalone_density") else name
+        model = pops.Model(owner)
         state = model.state("U", components=variables)
-        case = pops.Case(name)
+        case = pops.Case(owner)
         handles = [case.block(block, model, states=(state,))[state] for block in blocks]
         checked = pops.validate(case)
         routes = [checked.resolve(handle) for handle in handles]
