@@ -645,7 +645,8 @@ void bind_system_assembly(py::class_<System>& cls) {
       // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
       // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
       .def("install_program", &System::install_program, py::arg("so_path"))
-      .def("_install_program_with_exchange_incidence", &System::install_program_with_exchange_incidence)
+      .def("_install_program_with_exchange_incidence",
+           &System::install_program_with_exchange_incidence)
       .def("_mounted_exchange_incidence", &System::mounted_exchange_incidence)
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
       // installed program closure (cf. System::step). Separate from install_program so the .so

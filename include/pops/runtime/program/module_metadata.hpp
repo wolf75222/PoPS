@@ -88,15 +88,15 @@ struct ProgramExchangeIncidenceRow {
 };
 
 using MountedExchangeIncidenceRow =
-    std::tuple<int, int, int, std::string, std::string, std::string,
-               std::string, std::string, int, int, int, double, std::string, double>;
+    std::tuple<int, int, int, std::string, std::string, std::string, std::string, std::string, int,
+               int, int, double, std::string, double>;
 
 inline std::vector<MountedExchangeIncidenceRow> read_exchange_incidence(
     pops::dynlib::handle handle, const std::vector<int>& block_map, std::size_t authored_count,
     int dimension) {
   using Read = const ProgramExchangeIncidenceRow* (*)(int*);
-  const auto read = reinterpret_cast<Read>(
-      pops::dynlib::sym(handle, "pops_program_exchange_incidence_v1"));
+  const auto read =
+      reinterpret_cast<Read>(pops::dynlib::sym(handle, "pops_program_exchange_incidence_v1"));
   if (!read)
     return {};
   int count = 0;
@@ -109,12 +109,11 @@ inline std::vector<MountedExchangeIncidenceRow> read_exchange_incidence(
   for (int ordinal = 0; ordinal < count; ++ordinal) {
     const auto& row = rows[ordinal];
     if (!row.destination || !*row.destination || !row.operation || !*row.operation ||
-        !row.occurrence || !*row.occurrence || !row.point || !*row.point ||
-        !row.evaluation || !*row.evaluation || !row.units || row.ordinal != ordinal ||
-        row.block < 0 || std::size_t(row.block) >= block_map.size() ||
-        row.axis < 0 || row.axis >= dimension || (row.side != 0 && row.side != 1) ||
-        row.component < 0 || row.scale == 0 || !std::isfinite(row.scale) ||
-        !std::isfinite(row.initial))
+        !row.occurrence || !*row.occurrence || !row.point || !*row.point || !row.evaluation ||
+        !*row.evaluation || !row.units || row.ordinal != ordinal || row.block < 0 ||
+        std::size_t(row.block) >= block_map.size() || row.axis < 0 || row.axis >= dimension ||
+        (row.side != 0 && row.side != 1) || row.component < 0 || row.scale == 0 ||
+        !std::isfinite(row.scale) || !std::isfinite(row.initial))
       throw std::invalid_argument("installed Program exchange incidence has an invalid row");
     const std::string_view destination(row.destination);
     const auto name_separator = destination.rfind('/');
@@ -126,16 +125,19 @@ inline std::vector<MountedExchangeIncidenceRow> read_exchange_incidence(
       if (units.empty() || unit_separator == std::string_view::npos ||
           destination.substr(unit_separator + 1, name_separator - unit_separator - 1) !=
               pops::identity::sha256_hex(std::vector<std::uint8_t>(units.begin(), units.end())))
-        throw std::invalid_argument("exchange incidence units differ from the declared destination");
+        throw std::invalid_argument(
+            "exchange incidence units differ from the declared destination");
     } else if (!destination.starts_with("pops.integral.v1/") || *row.units) {
       throw std::invalid_argument("exchange incidence destination has an unsupported contract");
     }
-    if (!selections.emplace(row.operation, row.occurrence, row.evaluation,
-                            row.axis, row.side, row.component).second)
+    if (!selections
+             .emplace(row.operation, row.occurrence, row.evaluation, row.axis, row.side,
+                      row.component)
+             .second)
       throw std::invalid_argument("installed Program exchange incidence has ambiguous consumption");
-    result.emplace_back(row.ordinal, row.block, block_map[row.block], row.destination, row.operation,
-                        row.occurrence, row.point, row.evaluation, row.axis, row.side, row.component,
-                        row.scale, row.units, row.initial);
+    result.emplace_back(row.ordinal, row.block, block_map[row.block], row.destination,
+                        row.operation, row.occurrence, row.point, row.evaluation, row.axis,
+                        row.side, row.component, row.scale, row.units, row.initial);
   }
   return result;
 }

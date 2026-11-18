@@ -1375,8 +1375,9 @@ class System {
 
  public:
   POPS_EXPORT void install_program(const std::string& so_path);
-  POPS_EXPORT void install_program_with_exchange_incidence(
-      const std::string& so_path, const std::string& binary_identity, std::size_t authored_count);
+  POPS_EXPORT void install_program_with_exchange_incidence(const std::string& so_path,
+                                                           const std::string& binary_identity,
+                                                           std::size_t authored_count);
   POPS_EXPORT std::vector<runtime::program::MountedExchangeIncidenceRow>
   mounted_exchange_incidence() const;
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),

@@ -672,16 +672,17 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
 }
 
 template <int Dim>
-void System<Dim>::install_program_with_exchange_incidence(
-    const std::string& so_path, const std::string& binary_identity, std::size_t authored_count) {
+void System<Dim>::install_program_with_exchange_incidence(const std::string& so_path,
+                                                          const std::string& binary_identity,
+                                                          std::size_t authored_count) {
   if (binary_identity.empty() || authored_count == 0 || n_ranks() != 1)
     throw std::invalid_argument("exchange incidence requires the serial Program artifact identity");
   install_program_image_(so_path, binary_identity, authored_count);
 }
 
 template <int Dim>
-std::vector<runtime::program::MountedExchangeIncidenceRow>
-System<Dim>::mounted_exchange_incidence() const {
+std::vector<runtime::program::MountedExchangeIncidenceRow> System<Dim>::mounted_exchange_incidence()
+    const {
   if (p_->exchange_incidence_generation_ != p_->program_.step_install_generation_ ||
       p_->mounted_exchange_incidence_.empty())
     throw std::runtime_error("installed Program has no complete exchange incidence authority");
@@ -1043,7 +1044,8 @@ void System<Dim>::install_program_image_(const std::string& so_path,
         runtime::program::read_program_owned_clock_manifest(h, installed_hash);
     candidate_history_metadata = runtime::program::read_program_checkpoint_histories(h, true);
     if (authenticated_file)
-      incidence = runtime::program::read_exchange_incidence(h, program_block_map, authored_count, Dim);
+      incidence =
+          runtime::program::read_exchange_incidence(h, program_block_map, authored_count, Dim);
     for (const auto& history : candidate_history_metadata)
       if (static_cast<std::size_t>(history.program_owner) >= program_block_map.size())
         throw std::invalid_argument("System Program history descriptor has a foreign block route");
@@ -1253,9 +1255,11 @@ void System<Dim>::install_program_image_(const std::string& so_path,
     p_->program_.require_exact_artifact_step_install(*previous_install, "System::install_program:");
     for (const auto& row : incidence) {
       const auto initial = static_cast<double>(static_cast<Real>(std::get<13>(row)));
-      if (std::bit_cast<std::uint64_t>(initial) != std::bit_cast<std::uint64_t>(
+      if (std::bit_cast<std::uint64_t>(initial) !=
+          std::bit_cast<std::uint64_t>(
               p_->program_.accepted_exchanges_.integral_initial(std::get<3>(row))))
-        throw std::invalid_argument("exchange incidence initial differs from its installed declaration");
+        throw std::invalid_argument(
+            "exchange incidence initial differs from its installed declaration");
     }
 
     p_->program_.block_map_ = std::move(program_block_map);
@@ -1436,8 +1440,9 @@ template void System<kNativeDimension>::restore_history_slot_dt(const std::strin
 template int System<kNativeDimension>::rebuild_history_slots(const std::string&,
                                                              const std::vector<int>&);
 template void System<kNativeDimension>::install_program(const std::string&);
-template void System<kNativeDimension>::install_program_with_exchange_incidence(
-    const std::string&, const std::string&, std::size_t);
+template void System<kNativeDimension>::install_program_with_exchange_incidence(const std::string&,
+                                                                                const std::string&,
+                                                                                std::size_t);
 template std::vector<runtime::program::MountedExchangeIncidenceRow>
 System<kNativeDimension>::mounted_exchange_incidence() const;
 template std::vector<int> System<kNativeDimension>::program_cache_nodes() const;
