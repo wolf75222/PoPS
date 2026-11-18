@@ -76,6 +76,8 @@
 
 namespace pops::runtime::program {
 
+struct StepBoundReduction;
+
 /// Frozen codegen capability: a width-one, two-slot scalar ring with no Program reader.
 inline constexpr std::string_view kScalarOutputHistorySpace = "scalar-output-field-v1";
 /// Artifact-issued store-only rings, including global observations and arbitrary typed depths.
@@ -643,9 +645,9 @@ struct ProgramRuntimeState {
   std::vector<int> advance_output_scalar_counts_;
   std::function<void(int, Real*)> advance_output_scalars_;
   /// The step bound of a cells rule (generated_step_bound.hpp): the generated entry that reduces
-  /// the bound over the cells of this rank in one mode, and the identity of that bound; empty when
+  /// the bound and invalid cell ordinals on this rank, and the identity of that bound; empty when
   /// the Program has no cells rule. Read only by System::run_advance and System::step_bound.
-  std::function<int(int, double, double*)> advance_step_bound_;
+  std::function<int(StepBoundReduction*)> advance_step_bound_;
   std::string advance_step_bound_identity_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
   /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
@@ -826,7 +828,7 @@ struct ProgramRuntimeState {
     AdvanceSegment advance_segment{};
     std::vector<int> advance_output_scalar_counts;
     std::function<void(int, Real*)> advance_output_scalars;
-    std::function<int(int, double, double*)> advance_step_bound;
+    std::function<int(StepBoundReduction*)> advance_step_bound;
     std::string advance_step_bound_identity;
     std::uint64_t generation = 0;
     std::string installed_hash;

@@ -172,7 +172,7 @@ def test_a_parameter_that_a_kernel_reads_is_routed_to_the_bound():
     assert entries == [(0, "nu", 0, 1e-2)]
     cpp = _emit(resolved)
     kernel = cpp.split("struct pops_program_advance_step_bound_kernel", 1)[1].split(
-        "POPS_HD pops::Real operator()", 1)[1].split("\n  }\n", 1)[0]
+        "POPS_HD void operator()", 1)[1].split("\n  }\n", 1)[0]
     assert "params.get(0)" in kernel
     assert "  kernel.params = ctx.program_params(0);" in cpp
 

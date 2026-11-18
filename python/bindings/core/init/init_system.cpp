@@ -1354,7 +1354,7 @@ void bind_system_stepping(py::class_<System>& cls) {
       .def("_advance_max_attempts", &System::advance_max_attempts)
       // The step bound of a cells rule at the accepted state (N8 « dt= as a function of cell »):
       // the proposal of pops.run's CellStepBound strategy. Collective.
-      .def("_step_bound", &System::step_bound)
+      .def("_step_bound", &System::step_bound, py::arg("bound_identity") = "")
       .def("_step_bound_identity", &System::step_bound_identity)
       .def("_step_at_fraction", &System::step_at_fraction, py::arg("dt"), py::arg("fraction"))
       .def_static(

@@ -3,9 +3,9 @@ design note ``n8/cell_step_rule/design_note.md``, D2, C4, P3).
 
 ``pops.Advance(method, dt=f)``, with ``f`` a function of ``cell``, bounds each step by the smallest
 value over the valid cells of the evolving block, at the accepted state, of the expression E that
-``f`` returns. The compiled Program exports ``pops_program_advance_step_bound``, which reduces one
-mode of E over the cells of this rank (``include/pops/runtime/program/generated_step_bound.hpp``),
-and the identity of the bound; ``System::step_bound`` reduces each mode over the ranks.
+``f`` returns. The compiled Program exports one summary of the bound over the cells of this rank
+(``include/pops/runtime/program/generated_step_bound.hpp``) and the identity of the bound.
+``System::step_bound`` reduces the summaries over the ranks with the installed-plan status.
 
 E is emitted as N12's indicators are (``program_emit_regrid_decision.py``): a cell read is the view
 of the state at the cell, a width the spacing of the layout along its axis, a runtime parameter its
@@ -19,18 +19,18 @@ rewriting a quotient into a product by a reciprocal (P3), so ``(cfl * w) / s`` i
   constant such as the +infinity of ``cfl_limit`` without ``max_dt`` (2.6.9);
 * E itself, which may be +infinity, a step to the frontier.
 
-E is NaN or -infinity, or an observed operation is not finite: the cell's code is
-``kNonfinite`` (``step_bound_nonfinite``); E is zero or negative: ``kNonpositive``
-(``step_bound_nonpositive``).
+E is NaN or -infinity, or an observed operation is not finite: the cell is recorded as
+``step_bound_nonfinite```; a zero or negative E is recorded as ``step_bound_nonpositive``.
 """
 from __future__ import annotations
 
 from typing import Any
 
-ENTRY_SYMBOL = "pops_program_advance_step_bound"
+ENTRY_SYMBOL = "pops_program_advance_step_bound_v2"
 IDENTITY_SYMBOL = "pops_program_advance_step_bound_identity"
 _INPUT_KIND = "step_bound_input"
 _DIM = "pops::kNativeDimension"
+_REDUCTION = "pops::runtime::program::StepBoundReduction"
 
 
 def _cpp_string(text: str) -> str:
@@ -63,7 +63,7 @@ def _parameter_indices(program: Any, model: Any, block: int, bound: Any) -> dict
 
 
 def _kernel(bound: Any, components: dict[str, int], parameters: dict[str, int]) -> list[str]:
-    """The functor that returns one mode of E at a cell."""
+    """The functor that observes E once at a cell."""
     from pops._ir.application import substitute_quantities
     from pops._ir.control_expr import Where
     from pops._ir.expr import Var
@@ -99,43 +99,37 @@ def _kernel(bound: Any, components: dict[str, int], parameters: dict[str, int]) 
         return not isinstance(expression, Where) and _key(expression) != root_key
 
     lines, rendered, observed = _cse_emit(
-        [root], "pops::Real", "    ", materialize_all=True, return_names=True,
+        [root], "double", "    ", materialize_all=True, return_names=True,
         scalar_bindings=bindings, observe=observe)
     finite = " &&\n        ".join(["true"] + ["Kokkos::isfinite(%s)" % name for name in observed])
     return [
         "struct pops_program_advance_step_bound_kernel {",
         "  pops::FieldView<const pops::Real, %s> field;" % _DIM,
-        "  std::array<pops::Real, %s> spacing{};" % _DIM,
+        "  std::array<double, %s> spacing{};" % _DIM,
         "  pops::RuntimeParams params{};",
         "  std::array<std::int64_t, %s> lower{};" % _DIM,
         "  std::array<std::int64_t, %s> length{};" % _DIM,
-        "  int mode = 0;",
-        "  pops::Real target = 0;",
         "",
-        "  POPS_HD pops::Real operator()(const pops::Index<%s>& index) const {" % _DIM,
+        "  POPS_HD void operator()(const pops::Index<%s>& index, %s& result) const {"
+        % (_DIM, _REDUCTION),
         *lines,
-        "    const pops::Real bound = pops::Real(%s);" % rendered[0],
+        "    const double bound = double(%s);" % rendered[0],
         "    const bool observed = %s;" % finite,
-        "    const pops::Real infinity = Kokkos::Experimental::infinity<pops::Real>::value;",
-        "    const pops::Real lowest = Kokkos::Experimental::finite_min<pops::Real>::value;",
-        "    pops::Real code = pops::Real(1);",
-        "    if (!observed || Kokkos::isnan(bound) || bound == -infinity)",
-        "      code = pops::Real(3);",
-        "    else if (!(bound > pops::Real(0)))",
-        "      code = pops::Real(2);",
-        "    else if (bound == infinity)",
-        "      code = pops::Real(0);",
-        "    if (mode == 0)",
-        "      return code;",
-        "    if (mode == 1)",
-        "      return code == pops::Real(1) ? -bound : lowest;",
-        "    if (code != target)",
-        "      return lowest;",
+        "    if (observed && bound > 0.0) {",
+        "      if (bound < result.bound)",
+        "        result.bound = bound;",
+        "      return;",
+        "    }",
+        "    constexpr double infinity = Kokkos::Experimental::infinity<double>::value;",
         "    std::int64_t linear = 0;",
         "    for (int axis = %s - 1; axis >= 0; --axis)" % _DIM,
         "      linear = linear * length[axis] + (static_cast<std::int64_t>(index[axis]) - "
         "lower[axis]);",
-        "    return -static_cast<pops::Real>(linear);",
+        "    const auto ordinal = static_cast<std::uint64_t>(linear);",
+        "    auto& first = (!observed || Kokkos::isnan(bound) || bound == -infinity)",
+        "                      ? result.nonfinite : result.nonpositive;",
+        "    if (ordinal < first)",
+        "      first = ordinal;",
         "  }",
         "};",
         "",
@@ -170,6 +164,8 @@ def emit_step_bound(program: Any, model: Any, target: str) -> str:
     params = ["  kernel.params = ctx.program_params(%d);" % block] if parameters else []
     return "\n".join([
         "",
+        "#include <pops/runtime/program/generated_step_bound.hpp>",
+        "",
         "// The step bound of the cells rule of the elaborated Advance (N8 « dt= as a function of",
         "// cell », D2): the smallest value over the valid cells of the evolving block at the accepted",
         "// state, reduced here over this rank's cells and by System::step_bound over the ranks.",
@@ -182,31 +178,30 @@ def emit_step_bound(program: Any, model: Any, target: str) -> str:
         "  return %s;" % _cpp_string(bound.qualified_id),
         "}",
         "",
-        'extern "C" int %s(pops::System<%s>* sys, int mode, double target, double* result) {'
-        % (ENTRY_SYMBOL, _DIM),
-        "  if (result == nullptr || mode < 0 || mode > 2)",
+        'extern "C" int %s(pops::System<%s>* sys, %s* result) {'
+        % (ENTRY_SYMBOL, _DIM, _REDUCTION),
+        "  if (result == nullptr)",
         "    return 1;",
         "  auto ctx = pops::runtime::program::make_program_execution_view(sys);",
         "  const pops::MultiFab<%s>& state = ctx.state(%d);" % (_DIM, block),
         "  pops_program_advance_step_bound_kernel kernel{};",
         "  const auto& geometry = ctx.geometry();",
+        "  const auto domain = geometry.domain();",
+        "  (void)domain.numPts();  // The global axis-0-fast ordinal fits int64_t.",
         "  for (int axis = 0; axis < %s; ++axis) {" % _DIM,
         "    kernel.spacing[axis] = geometry.spacing(axis);",
-        "    kernel.lower[axis] = static_cast<std::int64_t>(geometry.domain().lo[axis]);",
-        "    kernel.length[axis] = static_cast<std::int64_t>(geometry.domain().length(axis));",
+        "    kernel.lower[axis] = static_cast<std::int64_t>(domain.lo[axis]);",
+        "    kernel.length[axis] = static_cast<std::int64_t>(domain.length(axis));",
         "  }",
         *params,
-        "  kernel.mode = mode;",
-        "  kernel.target = static_cast<pops::Real>(target);",
-        "  pops::Real largest = std::numeric_limits<pops::Real>::lowest();",
+        "  *result = {};",
         "  for (int local = 0; local < static_cast<int>(state.local_size()); ++local) {",
         "    const auto& box = state.box(local);",
         "    if (box.empty())",
         "      continue;",
         "    kernel.field = state.fab(local).view();",
-        "    largest = std::max(largest, pops::for_each_cell_reduce_max(box, kernel));",
+        "    result->join(pops::runtime::program::reduce_step_bound_cells(box, kernel));",
         "  }",
-        "  *result = static_cast<double>(largest);",
         "  return 0;",
         "}",
         "",

@@ -206,7 +206,8 @@ def test_the_bound_is_emitted_in_the_order_it_is_written():
     resolved = _resolved(case.elaborated.case, case.elaborated.layout)
     cpp = emit_cpp_program(resolved.time,
                            model_graph=ProgramModelGraph.from_resolved_blocks(resolved.blocks))
-    assert "pops_program_advance_step_bound(" in cpp
+    assert "pops_program_advance_step_bound_v2(" in cpp
+    assert "double guard1_cse3_" in cpp
     assert "guard1_cse3_ = (0.45 * guard1_cse2_); guard1_cse4_ = (guard1_cse3_ / cse2_);" in cpp
     assert "1.0 /" not in cpp.split("pops_program_advance_step_bound_kernel", 1)[1]
 

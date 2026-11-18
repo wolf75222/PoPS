@@ -962,11 +962,9 @@ class CellStepBoundController(StepController[CellStepBound]):
         remaining = t_end - float(native.time())
         if not remaining > 0.0:
             raise RuntimeError("CellStepBound has no positive interval left before the final time")
-        if native._step_bound_identity() != self.strategy.bound:
-            raise RuntimeError("CellStepBound names a step bound that the installed Program does "
-                               "not export")
-        # Collective: every rank takes the same bound (PF8); +infinity steps to the final time.
-        cap = [min(float(native._step_bound()), remaining)]
+        # The installed-plan and bound-identity checks join the same collective as the minimum.
+        # At +infinity the rule steps to the final time.
+        cap = [min(float(native._step_bound(self.strategy.bound)), remaining)]
         number = self.strategy.fraction
 
         def attempt() -> None:

@@ -368,10 +368,7 @@ class Simulation:
         if native._advance_max_attempts() != control.max_attempts:
             raise RuntimeError("the installed Program does not export the attempt budget of its "
                                "compiled control")
-        if control.step_bound is not None and \
-                native._step_bound_identity() != control.step_bound[1]:
-            raise RuntimeError("the installed Program does not export the step bound of its "
-                               "compiled control")
+        # The native startup checks the bound identity collectively before the first output.
         self._runtime = runtime
         self._control = control
         self._continuation: Continuation | None = None

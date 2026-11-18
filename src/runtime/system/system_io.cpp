@@ -849,16 +849,20 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   }
   // The step bound of a cells rule (N8 « dt= as a function of cell », D2): the generated entry
   // that reduces the bound over this rank's cells, and its identity, both or neither.
-  using advance_step_bound_t = int (*)(System<Dim>*, int, double, double*);
+  using runtime::program::StepBoundReduction;
+  using advance_step_bound_t = int (*)(System<Dim>*, StepBoundReduction*);
   using advance_step_bound_identity_t = const char* (*)();
   auto advance_step_bound = reinterpret_cast<advance_step_bound_t>(
       pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundEntrySymbol));
   auto advance_step_bound_identity = reinterpret_cast<advance_step_bound_identity_t>(
       pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundIdentitySymbol));
+  const bool legacy_step_bound =
+      pops::dynlib::sym(h, pops::runtime::program::kLegacyStepBoundEntrySymbol) != nullptr;
   std::string step_bound_identity;
-  if (advance_step_bound || advance_step_bound_identity) {
+  if (advance_step_bound || advance_step_bound_identity || legacy_step_bound) {
     const char* identity = advance_step_bound_identity ? advance_step_bound_identity() : nullptr;
-    if (!advance_attempts || !advance_step_bound || identity == nullptr || identity[0] == '\0') {
+    if (legacy_step_bound || !advance_attempts || !advance_step_bound || identity == nullptr ||
+        identity[0] == '\0') {
       pops::dynlib::close(h);
       throw std::runtime_error(
           "System::install_program: Program declares a step bound without its complete entries; "
@@ -1241,9 +1245,8 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     }
     if (!step_bound_identity.empty()) {
       System<Dim>* self = this;
-      p_->program_.advance_step_bound_ = [self, advance_step_bound](int mode, double target,
-                                                                    double* result) {
-        return advance_step_bound(self, mode, target, result);
+      p_->program_.advance_step_bound_ = [self, advance_step_bound](StepBoundReduction* result) {
+        return advance_step_bound(self, result);
       };
     } else {
       p_->program_.advance_step_bound_ = nullptr;

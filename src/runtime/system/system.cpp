@@ -50,6 +50,66 @@ double& step_fraction_slot(Impl& impl) {
   return impl.active_program_step_courant_;
 }
 
+using runtime::program::StepBoundDispatch;
+
+void require_step_bound_dispatch(StepBoundDispatch status) {
+  const char* refused = nullptr;
+  switch (status) {
+    case StepBoundDispatch::kReady:
+      return;
+    case StepBoundDispatch::kDefaultFieldSolve:
+      refused = "the default field solve that the System requests before each selection";
+      break;
+    case StepBoundDispatch::kEllipticSource:
+      refused = "the elliptic source of an evolving block, which the default field solve reads";
+      break;
+    case StepBoundDispatch::kStabilityConsumer:
+      refused = "an auxiliary refreshed before the stability selection";
+      break;
+    case StepBoundDispatch::kSourceFrequency:
+      refused = "a source frequency";
+      break;
+    case StepBoundDispatch::kParabolicFrequency:
+      refused = "a parabolic frequency";
+      break;
+    case StepBoundDispatch::kStabilityBound:
+      refused = "a stability_dt";
+      break;
+    case StepBoundDispatch::kBlockCadence:
+      refused = "substeps or a stride other than 1";
+      break;
+    case StepBoundDispatch::kCoupledFrequency:
+      refused = "a coupled frequency";
+      break;
+    case StepBoundDispatch::kEvolvingBlockCount:
+      refused = "a number of evolving blocks other than one";
+      break;
+    case StepBoundDispatch::kGlobalBounds:
+      refused = "the global bounds of add_dt_bound, which read outside the accepted state";
+      break;
+    case StepBoundDispatch::kProgramBound:
+      refused =
+          "the Program dt bound of set_dt_bound, a closure on the fraction of a stability "
+          "rule, which a cells rule has not";
+      break;
+    case StepBoundDispatch::kPrecision:
+      throw std::logic_error(
+          "dt= as a function of cell requires a binary64 native state and geometry");
+    case StepBoundDispatch::kMissingEntry:
+      throw std::logic_error(
+          "System::step_bound requires a Program elaborated from dt= as a function of cell");
+    case StepBoundDispatch::kIdentityMismatch:
+      throw std::logic_error(
+          "CellStepBound names a step bound that the installed Program does not export");
+    case StepBoundDispatch::kEntryRefused:
+      throw std::logic_error("System::step_bound: the generated step bound refused its dispatch");
+    case StepBoundDispatch::kEvaluationException:
+      throw std::runtime_error("System::step_bound evaluation failed collectively");
+  }
+  throw std::logic_error(std::string("System with dt= as a function of cell refuses ") + refused +
+                         "; a later lot of N8 « dt= as a function of cell » elaborates it");
+}
+
 }  // namespace
 
 POPS_EXPORT std::string abi_key() {
@@ -288,12 +348,14 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
     if (!std::isfinite(rule->fraction) || !(rule->fraction > 0.0) || rule->fraction > 1.0)
       throw std::invalid_argument(
           "System::run_advance cells rule requires a Courant budget in (0, 1]");
-    if (rule->bound_identity.empty() ||
-        rule->bound_identity != p_->program_.advance_step_bound_identity_)
+    if (rule->bound_identity.empty())
       throw std::invalid_argument(
           "System::run_advance cells rule names a step bound that the installed Program does "
           "not export");
-    require_cells_rule_plan_();
+    // Startup guard runs before any output. Selection fuses this same authority with the minimum.
+    const auto status = all_reduce_max(
+        static_cast<std::uint64_t>(cells_rule_dispatch_(rule->bound_identity)), communicator);
+    require_step_bound_dispatch(static_cast<StepBoundDispatch>(status));
   } else if (rule != nullptr) {
     if (rule->kind != runtime::program::AdvanceStepRuleKind::kStability ||
         !rule->bound_identity.empty())
@@ -370,7 +432,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       // The generated bound on the accepted state, taken once for the attempts of the step; at
       // +infinity on every cell the step goes to the frontier (2.6.9). The step starts its own
       // segment, as a stability rule's does.
-      step_proposal = step_bound();
+      step_proposal = step_bound(rule->bound_identity);
       p_->last_dt_reason_ = "cells:step_bound";
       if (!std::isfinite(step_proposal))
         step_proposal = frontier - p_->t;
@@ -1469,40 +1531,35 @@ double System<Dim>::select_step_(double cfl, double speed_floor, double max_dt, 
 }
 
 template <int Dim>
-double System<Dim>::step_bound() {
-  using runtime::program::StepBoundCode;
-  using runtime::program::StepBoundMode;
+double System<Dim>::step_bound(std::string_view bound_identity) {
+  using runtime::program::StepBoundReduction;
   const ExecutionLane& lane = prepared_boundary_execution_lane();
-  const auto& entry = p_->program_.advance_step_bound_;
-  // Every rank holds the same installed Program: the presence of the entry is collective.
-  if (all_reduce_max(entry ? 0L : 1L, lane) != 0)
-    throw std::logic_error(
-        "System::step_bound requires a Program elaborated from dt= as a function of cell");
-  const auto reduce = [&](StepBoundMode mode, double target) {
-    double local = std::numeric_limits<double>::lowest();
-    std::exception_ptr error;
+  auto status = cells_rule_dispatch_(bound_identity);
+  StepBoundReduction local;
+  std::exception_ptr error;
+  if (status == StepBoundDispatch::kReady) {
     try {
-      if (entry(static_cast<int>(mode), target, &local) != 0)
-        throw std::logic_error("System::step_bound: the generated step bound refused its mode");
+      if (p_->program_.advance_step_bound_(&local) != 0)
+        status = StepBoundDispatch::kEntryRefused;
     } catch (...) {
       error = std::current_exception();
+      status = StepBoundDispatch::kEvaluationException;
     }
-    if (all_reduce_max(error ? 1L : 0L, lane) != 0) {
-      if (lane.size() == 1 && error)
-        std::rethrow_exception(error);
-      throw std::runtime_error("System::step_bound evaluation failed collectively");
-    }
-    return static_cast<double>(all_reduce_max(static_cast<Real>(local), lane.communicator()));
-  };
-  // The largest code over the cells and the ranks: a failure if any cell fails, otherwise whether
-  // a cell bounds the step (PF8).
-  const double code = reduce(StepBoundMode::kCode, 0.0);
-  if (code >= static_cast<double>(StepBoundCode::kNonpositive)) {
-    const bool nonfinite = code >= static_cast<double>(StepBoundCode::kNonfinite);
-    const double first = reduce(StepBoundMode::kFirstCell, code);
-    // The linear index of the first cell, axis 0 fastest, in the domain of the geometry.
+  }
+
+  // PF8: the same rank reduction selects the minimum and the dispatch or cell failure.
+  auto words = runtime::program::step_bound_words(status, local);
+  all_reduce_max_inplace(words.data(), static_cast<int>(words.size()), lane.communicator());
+  const auto [dispatch, nonfinite, nonpositive, bound] = words;
+  status = static_cast<StepBoundDispatch>(dispatch);
+  if (status == StepBoundDispatch::kEvaluationException && error && lane.size() == 1)
+    std::rethrow_exception(error);
+  require_step_bound_dispatch(status);
+
+  if (nonfinite || nonpositive) {
+    const std::uint64_t first = nonfinite ? nonfinite : nonpositive;
     const Box<Dim> domain = p_->geom.domain();
-    std::int64_t linear = static_cast<std::int64_t>(-first);
+    std::int64_t linear = static_cast<std::int64_t>(runtime::program::kNoStepBoundCell - first);
     std::string cell = "(";
     for (int axis = 0; axis < Dim; ++axis) {
       const std::int64_t length = domain.length(axis);
@@ -1517,50 +1574,50 @@ double System<Dim>::step_bound() {
                    : "zero or negative") +
         " at the cell " + cell + " of the accepted state at t=" + std::to_string(p_->t));
   }
-  if (code < static_cast<double>(StepBoundCode::kFinite))
-    return std::numeric_limits<double>::infinity();  // +infinity on every cell: to the frontier
-  return -reduce(StepBoundMode::kValue, 0.0);
+  return runtime::program::decode_step_bound(bound);
 }
 
 template <int Dim>
-void System<Dim>::require_cells_rule_plan_() const {
-  // b6's selection does more than read speeds on these plans (design note D2, C3, C5): the
-  // elaborator refuses them, and the run checks the installed System again.
-  const char* refused = nullptr;
+StepBoundDispatch System<Dim>::cells_rule_dispatch_(std::string_view bound_identity) const {
+  if (!p_->program_.advance_step_bound_)
+    return StepBoundDispatch::kMissingEntry;
+  if (!bound_identity.empty() && bound_identity != p_->program_.advance_step_bound_identity_)
+    return StepBoundDispatch::kIdentityMismatch;
+  if constexpr (!kRealIsBinary64)
+    return StepBoundDispatch::kPrecision;
+
+  // The cells entry reads only the accepted state. The b6 selection has other dependencies on
+  // these plans, so the elaborator refuses them and both native routes check the installed plan.
+  auto status = StepBoundDispatch::kReady;
   int evolving = 0;
   if (p_->default_field_solve_requested_)
-    refused = "the default field solve that the System requests before each selection";
+    status = StepBoundDispatch::kDefaultFieldSolve;
   for (const auto& block : p_->sp) {
     if (!block.evolve)
       continue;
     ++evolving;
     if (block.elliptic_source)
-      refused = "the elliptic source of an evolving block, which the default field solve reads";
+      status = StepBoundDispatch::kEllipticSource;
     else if (!block.stability_consumer_qid.empty())
-      refused = "an auxiliary refreshed before the stability selection";
+      status = StepBoundDispatch::kStabilityConsumer;
     else if (block.source_frequency)
-      refused = "a source frequency";
+      status = StepBoundDispatch::kSourceFrequency;
     else if (block.parabolic_frequency)
-      refused = "a parabolic frequency";
+      status = StepBoundDispatch::kParabolicFrequency;
     else if (block.stability_dt)
-      refused = "a stability_dt";
+      status = StepBoundDispatch::kStabilityBound;
     else if (block.substeps != 1 || block.stride != 1)
-      refused = "substeps or a stride other than 1";
+      status = StepBoundDispatch::kBlockCadence;
   }
   if (!p_->coupling_.coupled_freqs.empty() || !p_->coupling_.coupled_frequencies.empty())
-    refused = "a coupled frequency";
+    status = StepBoundDispatch::kCoupledFrequency;
   if (evolving != 1)
-    refused = "a number of evolving blocks other than one";
+    status = StepBoundDispatch::kEvolvingBlockCount;
   if (!p_->coupling_.dt_bounds.empty())
-    refused = "the global bounds of add_dt_bound, which read outside the accepted state";
+    status = StepBoundDispatch::kGlobalBounds;
   if (p_->program_.dt_bound_)
-    refused =
-        "the Program dt bound of set_dt_bound, a closure on the fraction of a stability "
-        "rule, which a cells rule has not";
-  if (refused != nullptr)
-    throw std::logic_error(
-        std::string("System::run_advance with dt= as a function of cell refuses ") + refused +
-        "; a later lot of N8 « dt= as a function of cell » elaborates it");
+    status = StepBoundDispatch::kProgramBound;
+  return status;
 }
 
 template <int Dim>
@@ -1783,9 +1840,9 @@ template void System<kNativeDimension>::finalize_restart_transaction() noexcept;
 template void System<kNativeDimension>::rollback_restart_transaction();
 template double System<kNativeDimension>::step_cfl(double, double, double, double);
 template double System<kNativeDimension>::select_step_(double, double, double, double);
-template double System<kNativeDimension>::step_bound();
+template double System<kNativeDimension>::step_bound(std::string_view);
 template void System<kNativeDimension>::step_at_fraction(double, double);
-template void System<kNativeDimension>::require_cells_rule_plan_() const;
+template StepBoundDispatch System<kNativeDimension>::cells_rule_dispatch_(std::string_view) const;
 template const std::string& System<kNativeDimension>::step_bound_identity() const noexcept;
 template double System<kNativeDimension>::active_program_step_courant() const;
 template int System<kNativeDimension>::macro_step() const;
