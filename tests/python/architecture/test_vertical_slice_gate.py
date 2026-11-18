@@ -130,6 +130,10 @@ def _change(path, **changes):
     ({"omp_proc_bind": "close"}, "omp_proc_bind"),
     ({"omp_places": "cores"}, "omp_places"),
     ({"native_build": {"module_sha256": "b"*64}}, "native_build"),
+    ({"python_runtime": {"source_sha256": "b"*64}}, "python_runtime"),
+    ({"include_signature": "b"*64}, "include_signature"),
+    ({"native_abi": {"key": "other abi"}}, "native_abi"),
+    ({"compiler": {"sha256": "b"*64}}, "compiler"),
     ({"kernel_timer": "b"*64}, "kernel_timer"),
     ({"schema": "unrelated"}, "not a measurement"),
     ({"steps_per_block": 3, "clocks": {"slice": [8, 0.25]}}, "steps_per_block"),
@@ -172,6 +176,7 @@ def test_pf10_can_read_older_process_receipts_and_recompute_their_verdict(pf10, 
     pf10.merge(_write_case(tmp_path / "four", cells=4, order=reverse), large)
     assert result["parity"]["bitwise_equal"]
     assert "native_build" in result["missing_provenance"]
+    assert set(pf10._RUNTIME_CONTEXT) <= set(result["missing_provenance"])
     assert "clean_source_tree" in result["missing_provenance"]
     assert result["timing"]["slice"]["throughput_vs_master"] == 2.0
     for path in (small, large):
@@ -210,3 +215,73 @@ def test_pf10_keeps_the_single_process_route_and_requires_every_scaling_pair(pf1
     result = pf10.verdict(measurements)
     assert not result["holds"]
     assert result["missing_scaling_threads"] == [4]
+
+
+def test_pf10_hashes_the_imported_python_package(pf10, tmp_path):
+    from types import SimpleNamespace
+
+    def package(folder, implementation):
+        root = tmp_path / folder / "pops"
+        root.mkdir(parents=True)
+        init = root / "__init__.py"
+        init.write_text("", encoding="utf-8")
+        (root / "runtime.py").write_text(implementation, encoding="utf-8")
+        return SimpleNamespace(__file__=str(init), __version__="1.1.0")
+
+    checkout = package("source", "CHECKOUT = True")
+    installed = package("installed", "CHECKOUT = False")
+    mirror = package("duplicate", "CHECKOUT = False")
+    assert pf10._python_runtime(checkout) != pf10._python_runtime(installed)
+    assert pf10._python_runtime(installed) == pf10._python_runtime(mirror)
+
+
+def _phase1_profiles(pf10, tmp_path):
+    measurements = []
+    for i, (cells, threads) in enumerate(sorted(pf10._PHASE1_PROFILES)):
+        path = tmp_path / ("production%d.json" % i)
+        run = pf10.merge(_write_case(tmp_path / ("raw%d" % i), threads=threads), path)
+        run.update(cells=[cells, cells], order=run["order"] * 3,
+                   processes=[str(j) for j in range(12)], omp_places="threads", kernel_timer=None,
+                   python_runtime={"source_sha256": "b"*64}, include_signature="c"*64,
+                   native_abi={"key": "native key", "version": 13},
+                   compiler={"sha256": "d"*64},
+                   input_sources={str(source.relative_to(pf10.ROOT)): "e"*64
+                                  for source in pf10._INPUTS},
+                   native_build={"dimension": 2, "kokkos_backend": "OpenMP",
+                                 "module_sha256": "f"*64})
+        for route in pf10.ROUTES:
+            size_ratio = (cells / 2048)**2
+            run["timing"][route]["samples"] = [size_ratio * sample
+                                               for sample in run["timing"][route]["samples"] * 3]
+        path.write_text(json.dumps(run), encoding="utf-8")
+        measurements.append(path)
+    return measurements
+
+
+def test_pf10_phase1_checks_the_published_profiles_and_protocol(pf10, tmp_path):
+    measurements = _phase1_profiles(pf10, tmp_path)
+    result = pf10.verdict(measurements, phase1=True)
+    assert result["holds"] and result["phase1_protocol"]
+    assert len(result["pf10_1"]) == len(result["pf10_3"]) == 4
+    one_thread = measurements[::2]
+    assert pf10.verdict(one_thread)["holds"]
+    with pytest.raises(ValueError, match="both 1 and 4 threads"):
+        pf10.verdict(one_thread, phase1=True)
+    _change(measurements[0], omp_places="cores")
+    with pytest.raises(ValueError, match="OpenMP placement"):
+        pf10.verdict(measurements, phase1=True)
+
+
+def test_pf10_compares_runtime_provenance_for_scaling_and_phase1(pf10, tmp_path):
+    measurements = _phase1_profiles(pf10, tmp_path)
+    example = {"source_sha256": "a"*64}
+    _change(measurements[1], python_runtime=example)
+    with pytest.raises(ValueError, match="different comparison context: python_runtime"):
+        pf10.verdict(measurements)
+    _change(measurements[3], python_runtime=example)
+    assert pf10.verdict(measurements)["holds"]
+    with pytest.raises(ValueError, match="different phase 1 comparison context: python_runtime"):
+        pf10.verdict(measurements, phase1=True)
+    _change(measurements[0], include_signature=None)
+    with pytest.raises(ValueError, match="lacks phase 1 execution provenance: include_signature"):
+        pf10.verdict(measurements, phase1=True)

@@ -21,7 +21,9 @@ least 0.9 of master's at each size and thread count (OD9), and PF10 (3), the tim
 each route growing at most 1.25 times the ratio of the cells when they quadruple (OD24; the step
 is linear in the cells). Both comparisons use the raw samples. Split-process receipts must
 follow ABBA and hold the same comparison context. Historical receipts remain readable and
-report which provenance was outside their recording protocol.
+report which provenance was outside their recording protocol. The checkout revision describes
+the driver. The imported Python package, native module, effective headers and compiler have
+separate identities. Use ``verdict --phase1`` to qualify the four T8 production profiles.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import math
 import os
 import platform
 import resource
+import shutil
 import statistics
 import subprocess
 import time
@@ -43,13 +46,16 @@ ROOT = Path(__file__).resolve().parents[2]
 MASTER = ROOT / "docs" / "tutorials" / "scalar_advection" / "02_openmp_explicit_ssprk2.py"
 SLICE = ROOT / "examples" / "surface" / "tutorials" / "scalar_advection" / \
     "02_openmp_explicit_ssprk2.py"
+_INPUTS = (Path(__file__).resolve(), MASTER, SLICE)
 ROUTES = ("master", "slice")
 SCHEMA = "pops.slice.t02_pf10.v1"
 PF10_1 = 0.9            # OD9
 PF10_3 = 1.25           # OD24: the measured growth exceeds the stated complexity by at most 25 %
 _CONTEXT = ("host", "processor", "cpus", "source", "omp_proc_bind")
+_RUNTIME_CONTEXT = ("python_runtime", "include_signature", "native_abi", "compiler")
 _OPTIONAL_CONTEXT = ("omp_places", "omp_num_threads", "cpu_affinity",
-                     "input_sources", "native_build", "kernel_timer")
+                     "input_sources", "native_build", "kernel_timer", *_RUNTIME_CONTEXT)
+_PHASE1_PROFILES = {(cells, threads) for cells in (2048, 4096) for threads in (1, 4)}
 
 
 def _once(source: str, old: str, new: str, where: Path) -> str:
@@ -114,19 +120,67 @@ def _file_digest(path):
     return digest.hexdigest()
 
 
+def _python_runtime(pops):
+    """Fingerprint the source package Python located, excluding caches and bundled binaries."""
+    location = getattr(pops, "__file__", None)
+    if not location:
+        return None
+    root = Path(location).parent.resolve()
+    try:
+        sources = [(path.relative_to(root).as_posix(), _file_digest(path))
+                   for path in sorted(root.rglob("*.py"))]
+    except OSError:
+        return None
+    if not sources:
+        return None
+    return {"source_sha256": hashlib.sha256(json.dumps(sources).encode()).hexdigest(),
+            "pops_version": getattr(pops, "__version__", None),
+            "interpreter": platform.python_implementation() + " " + platform.python_version()}
+
+
+def _compiler_context():
+    """Reuse the generated loader's include and compiler selection."""
+    from pops.codegen import toolchain
+
+    result = {}
+    try:
+        result["include_signature"] = toolchain.pops_header_signature(toolchain.pops_include())
+    except (AttributeError, OSError, RuntimeError):
+        pass
+    try:
+        command = toolchain._native_kokkos_compiler(None)
+        executable = shutil.which(command) if command else None
+        if executable:
+            version = subprocess.run([executable, "--version"], check=True, capture_output=True,
+                                     text=True, timeout=5).stdout.strip()
+            if version:
+                result["compiler"] = {"sha256": _file_digest(executable), "version": version}
+    except (AttributeError, OSError, RuntimeError, subprocess.SubprocessError):
+        pass
+    return result
+
+
 def _measurement_context(native, runtime):
+    import pops
+
     data = {
         "host": platform.node(), "processor": platform.processor() or platform.machine(),
         "cpus": os.cpu_count(), "source": _source_revision(),
         "omp_proc_bind": os.environ.get("OMP_PROC_BIND"),
         "omp_places": os.environ.get("OMP_PLACES"),
         "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
-        "input_sources": {str(path.relative_to(ROOT)): _file_digest(path)
-                          for path in (Path(__file__).resolve(), MASTER, SLICE)},
+        "input_sources": {str(path.relative_to(ROOT)): _file_digest(path) for path in _INPUTS},
     }
     get_affinity = getattr(os, "sched_getaffinity", None)
     if get_affinity is not None:
         data["cpu_affinity"] = sorted(get_affinity(0))
+    python_runtime = _python_runtime(pops)
+    if python_runtime is not None:
+        data["python_runtime"] = python_runtime
+    data.update(_compiler_context())
+    abi_key = getattr(native, "abi_key", None)
+    if callable(abi_key) and (key := abi_key()) and key != "unknown":
+        data["native_abi"] = {"key": key, "version": getattr(native, "__abi_version__", None)}
     module = getattr(native, "__file__", None)
     if module is not None and Path(module).is_file():
         data["native_build"] = {
@@ -317,6 +371,7 @@ def _require_same_context(first, other, path):
 
 def _missing_provenance(run):
     missing = [key for key in _OPTIONAL_CONTEXT if key not in run]
+    missing.extend(key for key in _RUNTIME_CONTEXT if key in run and not run[key])
     source = run["source"]
     if not isinstance(source, dict) or not source.get("sha") or source["sha"] == "unknown":
         missing.append("source_revision")
@@ -399,10 +454,41 @@ def merge(paths, out: Path) -> dict:
     return result
 
 
-def verdict(paths) -> dict:
+def _require_phase1(runs):
+    profiles = {(run["cells"][0], run["threads"]["running"]) for _, run in runs}
+    if profiles != _PHASE1_PROFILES:
+        raise ValueError("phase 1 requires 2048 and 4096 square grids at both 1 and 4 threads")
+    reference = runs[0][1]
+    for path, run in runs:
+        if (len(run.get("order", ())) != 12 or run["steps_per_block"] != 2
+                or run["blocks"] != 1 or run["warmup"] != 2):
+            raise ValueError("%s does not follow the phase 1 split-process ABBA protocol" % path)
+        if run["omp_proc_bind"] != "spread" or run.get("omp_places") != "threads":
+            raise ValueError("%s does not use the phase 1 OpenMP placement" % path)
+        required = (*_RUNTIME_CONTEXT, "native_build", "input_sources")
+        missing = [key for key in required if not run.get(key)]
+        if missing:
+            raise ValueError("%s lacks phase 1 execution provenance: %s" % (path, ", ".join(missing)))
+        build = run["native_build"]
+        if build.get("dimension") != 2 or build.get("kokkos_backend") != "OpenMP":
+            raise ValueError("%s is not a phase 1 Dim2 OpenMP measurement" % path)
+        if (not build.get("module_sha256") or not run["python_runtime"].get("source_sha256")
+                or not run["native_abi"].get("key") or not run["compiler"].get("sha256")
+                or set(run["input_sources"]) != {str(source.relative_to(ROOT)) for source in _INPUTS}):
+            raise ValueError("%s lacks phase 1 build or benchmark input identities" % path)
+        if _instrumented(run) is not False:
+            raise ValueError("%s does not establish uninstrumented phase 1 timing" % path)
+        # The actual build and target must agree even between groups with different thread counts.
+        for key in (*_CONTEXT, *required, "kernel_timer"):
+            if reference.get(key) != run.get(key):
+                raise ValueError("%s has a different phase 1 comparison context: %s" % (path, key))
+
+
+def verdict(paths, *, phase1=False) -> dict:
     """PF10 (1) per measurement, PF10 (3) per route and thread count over the sizes."""
     first, third, keys = [], [], set()
     by_threads: dict = {}
+    runs = []
     for path in paths:
         run = json.loads(Path(path).read_text(encoding="utf-8"))
         _check_receipt(run, path)
@@ -434,7 +520,10 @@ def verdict(paths) -> dict:
         first.append({"cells": run["cells"], "threads": threads,
                       "throughput_vs_master": ratio, "holds": ratio >= PF10_1,
                       "missing_provenance": _missing_provenance(run)})
+        runs.append((path, run))
         by_threads.setdefault(threads, []).append((path, run, medians, expected))
+    if phase1:
+        _require_phase1(runs)
     missing_scaling_threads = []
     for threads, group in sorted(by_threads.items()):
         group.sort(key=lambda row: row[1]["cells"][0])
@@ -456,10 +545,13 @@ def verdict(paths) -> dict:
                               "holds": growth <= PF10_3*cells_ratio})
         if len(third) == start:
             missing_scaling_threads.append(threads)
-    return {"pf10_1": first, "pf10_3": third,
-            "missing_scaling_threads": missing_scaling_threads,
-            "holds": bool(third) and not missing_scaling_threads
-            and all(row["holds"] for row in first + third)}
+    result = {"pf10_1": first, "pf10_3": third,
+              "missing_scaling_threads": missing_scaling_threads,
+              "holds": bool(third) and not missing_scaling_threads
+              and all(row["holds"] for row in first + third)}
+    if phase1:
+        result["phase1_protocol"] = True
+    return result
 
 
 def _arguments():
@@ -480,6 +572,8 @@ def _arguments():
     many = commands.add_parser("verdict", help="PF10 (1) and (3) from measurements")
     many.add_argument("runs", nargs="+", type=Path)
     many.add_argument("--out", type=Path)
+    many.add_argument("--phase1", action="store_true",
+                      help="require the four documented production profiles and their provenance")
     return parser.parse_args()
 
 
@@ -493,7 +587,7 @@ def main() -> int:
                           "throughput_vs_master":
                               result["timing"]["slice"]["throughput_vs_master"]}, indent=1))
         return 0
-    result = verdict(args.runs)
+    result = verdict(args.runs, phase1=args.phase1)
     text = json.dumps(result, indent=1)
     if args.out is not None:
         args.out.write_text(text)
