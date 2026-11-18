@@ -1,5 +1,11 @@
 {
   "_meta": {
+    "n12_20261118_c36_multiblock": {
+      "basis": "The generated two-field refinement criterion adds one cold Program compilation to the full multiblock regression. Two cold Linux runs on one x64 node took 262 and 261 seconds; a separate x64 node took 279.39 seconds. The weight rounds the longest observation plus ten percent up to the next ten seconds. Refresh from a complete CI timing artifact.",
+      "file": "tests/python/integration/amr/test_amr_multiblock.py",
+      "previous_weight_seconds": 195,
+      "weight_seconds": 310
+    },
     "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time.",
     "adc": "ADC-623",
     "api040_full_catalog_completion_20261008": {
@@ -9526,7 +9532,7 @@
   "tests/python/integration/amr/test_amr_history_regrid.py": 295,
   "tests/python/integration/amr/test_amr_install_program.py": 15,
   "tests/python/integration/amr/test_amr_introspection_endtoend.py": 105,
-  "tests/python/integration/amr/test_amr_multiblock.py": 195,
+  "tests/python/integration/amr/test_amr_multiblock.py": 310,
   "tests/python/integration/amr/test_amr_native_params.py": 125.0,
   "tests/python/integration/amr/test_amr_newton_full.py": 600.0,
   "tests/python/integration/amr/test_amr_patch_boxes.py": 220,
