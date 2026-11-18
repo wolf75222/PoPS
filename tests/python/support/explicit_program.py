@@ -28,15 +28,20 @@ from pops.codegen.cache import (
     pops_cache_dir,
 )
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
+from pops.codegen.program_emit_refinement_criterion import emit_refinement_criterion
 from pops.codegen.toolchain import (
     _check_headers_match_module,
     _probe_cxx_std,
     _run_compile,
     loader_cxx_std,
+    loader_native_dimension,
     pops_include,
     pops_loader_build_flags,
 )
+from pops.mesh._amr.refinement_criterion import ResolvedRefinementCriterion
 from pops.runtime._system import AmrSystem, System
+
+AMR_TEST_PROGRAM_CLOCK = "pops.test.clock.macro"
 
 
 def _block_identity_exports(block_names: tuple[str, ...]) -> str:
@@ -127,7 +132,7 @@ extern "C" int pops_program_checkpoint_history_components(int) { return 0; }
 extern "C" int pops_program_checkpoint_history_ghost_depth(int) { return -1; }
 extern "C" int pops_program_checkpoint_logical_clock_count() { return 1; }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int clock) {
-  return clock == 0 ? "pops.test.clock.macro" : "";
+  return clock == 0 ? %s : "";
 }
 extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
   return "pops.temporal-partition.global@1";
@@ -145,6 +150,7 @@ extern "C" std::uint64_t pops_program_checkpoint_temporal_cells_per_topology_cel
         block_count,
         1 if coupled_sources else 0,
         coupling_identity_characters,
+        json.dumps(AMR_TEST_PROGRAM_CLOCK),
     )
 
 
@@ -306,7 +312,7 @@ extern "C" void pops_install_program(pops::System<pops::kNativeDimension>* sys) 
             """\
 extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* sys) {
   auto ctx_owner = pops::runtime::program::make_program_execution_provider(sys);
-  ctx_owner->configure_primary_clock("pops.test.clock.macro");
+  ctx_owner->configure_primary_clock(%s);
   ctx_owner->install([=](double macro_dt) {
     ctx_owner->advance_hierarchy(macro_dt, [=](double dt) {
       auto& ctx = *ctx_owner;
@@ -315,7 +321,7 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   }, ctx_owner);
 }
 """
-            % body
+            % (json.dumps(AMR_TEST_PROGRAM_CLOCK), body)
         )
     return common + install
 
@@ -378,12 +384,19 @@ def _compile_program(source: str) -> str:
     return str(destination)
 
 
-def _install_forward_euler_bridge(
+def install_forward_euler_program(
     runtime: Any,
     *,
     project_blocks: tuple[str, ...] = (),
     coupled_sources: bool = False,
+    criterion: ResolvedRefinementCriterion | None = None,
 ) -> str:
+    """Install an explicit, operator-free forward-Euler Program on ``runtime``.
+
+    ``project_blocks`` and ``coupled_sources`` are explicit because projection and source splitting
+    are Program nodes, not hidden block-time policies. A generated AMR criterion must match
+    the authority already installed on the runtime.
+    """
     if not isinstance(runtime, (System, AmrSystem)):
         raise TypeError("runtime must be a pops.runtime System or AmrSystem")
     block_names = tuple(runtime.block_names())
@@ -396,50 +409,37 @@ def _install_forward_euler_bridge(
         raise ValueError("projection names unknown runtime blocks: %s" % (unknown,))
     projection_indices = tuple(block_names.index(name) for name in project_blocks)
     target = "amr_system" if isinstance(runtime, AmrSystem) else "system"
-    seed = json.dumps(
-        {
-            "schema": "pops-test-explicit-program-v2",
-            "method": "euler",
-            "target": target,
-            "blocks": block_names,
-            "project": projection_indices,
-            "coupled_sources": coupled_sources,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    identity = hashlib.sha256(seed.encode()).hexdigest()
-    library = _compile_program(
-        _source(
-            target=target,
-            block_names=block_names,
-            projection_indices=projection_indices,
-            coupled_sources=coupled_sources,
-            identity=identity,
+    identity_data = {
+        "schema": "pops-test-explicit-program-v2",
+        "method": "euler",
+        "target": target,
+        "blocks": block_names,
+        "project": projection_indices,
+        "coupled_sources": coupled_sources,
+    }
+    criterion_source = ""
+    if criterion is not None:
+        if target != "amr_system":
+            raise ValueError("an explicit test refinement criterion requires an AmrSystem")
+        identity_data["refinement_criterion"] = criterion.qualified_id
+        criterion_source = emit_refinement_criterion(
+            criterion, native_dimension=loader_native_dimension()
         )
+    seed = json.dumps(identity_data, sort_keys=True, separators=(",", ":"))
+    identity = hashlib.sha256(seed.encode()).hexdigest()
+    source = _source(
+        target=target,
+        block_names=block_names,
+        projection_indices=projection_indices,
+        coupled_sources=coupled_sources,
+        identity=identity,
     )
+    library = _compile_program(source + criterion_source)
     runtime.install_program(library)
     return library
 
 
-def install_forward_euler_program(
-    runtime: Any,
-    *,
-    project_blocks: tuple[str, ...] = (),
-    coupled_sources: bool = False,
-) -> str:
-    """Install an explicit, operator-free forward-Euler Program on ``runtime``.
-
-    ``project_blocks`` and ``coupled_sources`` are explicit because projection and source splitting
-    are Program nodes, not hidden block-time policies.
-    """
-    return _install_forward_euler_bridge(
-        runtime,
-        project_blocks=project_blocks,
-        coupled_sources=coupled_sources,
-    )
-
-
 __all__ = [
+    "AMR_TEST_PROGRAM_CLOCK",
     "install_forward_euler_program",
 ]
