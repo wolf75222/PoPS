@@ -1,10 +1,12 @@
 """Atomic step authoring contracts and reports."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
+from pops.provenance import SourceSpan
 from pops.time.solve_outcome import FailRun, RejectAttempt, SolveAction
 from pops.time._step.strategy import StepStrategy
 
@@ -108,6 +110,74 @@ _STATUSES = frozenset(("accepted", "rejected", "failed"))
 
 
 @dataclass(frozen=True, slots=True)
+class GuardFailureSite:
+    token: str
+    name: str
+    predicate: int
+    action: str
+    retry_can_change: bool
+    python_origin: SourceSpan
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "token": self.token, "name": self.name, "variants": ["NotAdmissible"],
+            "origin": "trial", "action": self.action, "retry_can_change": self.retry_can_change,
+            "payload": {"predicate": "Index", "value": "Bool"},
+            "predicate": self.predicate,
+        }
+
+    def payload_prefix(self) -> str:
+        return self.token + format(self.predicate, "016x")
+
+
+def validate_guard_failure_sites(rows: Any) -> None:
+    fields = {"token", "name", "variants", "origin", "action", "retry_can_change",
+              "payload", "predicate"}
+    tokens: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping) or set(row) != fields:
+            raise ValueError("failure_sites requires exact global guard rows")
+        token = row["token"]
+        if (type(token) is not str or len(token) != 64
+                or any(digit not in "0123456789abcdef" for digit in token) or token in tokens):
+            raise ValueError("failure_sites requires unique canonical site tokens")
+        tokens.add(token)
+        if (type(row["name"]) is not str or not row["name"]
+                or row["variants"] != ["NotAdmissible"] or row["origin"] != "trial"
+                or row["action"] not in ("reject_attempt", "fail_run")
+                or type(row["retry_can_change"]) is not bool
+                or (row["action"] == "fail_run" and row["retry_can_change"])
+                or row["payload"] != {"predicate": "Index", "value": "Bool"}
+                or type(row["predicate"]) is not int or not 0 <= row["predicate"] < 1 << 63):
+            raise ValueError("failure_sites has an invalid global guard contract")
+
+
+class _FailureObservation(Protocol):
+    @property
+    def variant(self) -> type: ...
+
+    @property
+    def origin(self) -> str | None: ...
+
+    @property
+    def payload(self) -> Mapping[str, Any]: ...
+
+    @property
+    def site(self) -> GuardFailureSite | None: ...
+
+
+def guard_observation_data(failure: _FailureObservation) -> dict[str, Any]:
+    site = failure.site
+    if site is None:
+        raise ValueError("a global guard observation requires its authenticated site")
+    return {
+        "variant": failure.variant.__name__, "origin": failure.origin,
+        "site": site.to_data(), "python_origin": site.python_origin.to_data(),
+        "payload": {name: failure.payload[name] for name in ("predicate", "value")},
+    }
+
+
+@dataclass(frozen=True, slots=True)
 class StepTransactionReport:
     """Serializable observed result of one complete macro-step transaction."""
 
@@ -120,6 +190,7 @@ class StepTransactionReport:
     rolled_back_effects: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     projections: tuple[str, ...] = ()
+    failure: _FailureObservation | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -153,9 +224,13 @@ class StepTransactionReport:
                 "StepTransactionReport.projections must contain non-empty guard names")
         if len(set(self.projections)) != len(self.projections):
             raise ValueError("StepTransactionReport.projections cannot contain duplicates")
+        if self.failure is not None and (
+            self.failure.site is None or self.failure.site.action != self.action
+        ):
+            raise ValueError("StepTransactionReport failure must certify the observed action")
 
     def to_data(self) -> dict[str, Any]:
-        return {
+        data = {
             "status": self.status,
             "phase": self.phase,
             "action": self.action,
@@ -166,6 +241,9 @@ class StepTransactionReport:
             "projections": list(self.projections),
             "diagnostics": list(self.diagnostics),
         }
+        if self.failure is not None:
+            data["failure"] = guard_observation_data(self.failure)
+        return data
 
 
 @dataclass(frozen=True, slots=True)

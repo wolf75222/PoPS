@@ -1414,6 +1414,10 @@ void bind_system_stepping(py::class_<System>& cls) {
             result["last_prepared_solve_residual"] = report.last_prepared_solve_residual;
             result["rejection_detail"] = report.rejection_detail;
             result["rejection_status"] = report.rejection_status;
+            if (!report.typed_failure_schema.empty()) {
+              result["typed_failure_schema"] = report.typed_failure_schema;
+              result["typed_failure_payload"] = py::bytes(report.typed_failure_payload);
+            }
             result["face_frequency"] = report.face_frequency;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;

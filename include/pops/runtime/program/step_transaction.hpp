@@ -57,14 +57,19 @@ inline const char* step_attempt_disposition_name(StepAttemptDisposition disposit
 
 /// Typed control-flow signal emitted by a consumed SolveOutcome whose action is RejectAttempt.
 /// Runtime step coordinators catch this exact type, restore the accepted snapshot and leave the
-/// macro-step clock untouched.  FailRun remains an ordinary fatal exception.
+/// macro-step clock untouched. FailRun remains fatal.
 class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime_error {
  public:
-  StepAttemptRejected(SolveStatus status, std::string phase, std::string detail = {})
+  StepAttemptRejected(SolveStatus status, std::string phase, std::string detail = {},
+                      std::string typed_failure_schema = {}, std::string typed_failure_payload = {})
       : std::runtime_error(message(status, phase, detail)),
         status_(status),
         phase_(std::move(phase)),
-        detail_(std::move(detail)) {}
+        detail_(std::move(detail)),
+        typed_failure_schema_(std::move(typed_failure_schema)),
+        typed_failure_payload_(std::move(typed_failure_payload)) {
+    validate_typed_failure();
+  }
   StepAttemptRejected(SolveStatus status, StepAttemptDisposition disposition,
                       std::uint32_t reason_code, std::string phase, std::string detail = {},
                       std::string typed_failure_schema = {}, std::string typed_failure_payload = {})
@@ -76,8 +81,7 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
         reason_code_(reason_code),
         typed_failure_schema_(std::move(typed_failure_schema)),
         typed_failure_payload_(std::move(typed_failure_payload)) {
-    if (typed_failure_schema_.empty() != typed_failure_payload_.empty())
-      throw std::invalid_argument("typed failure requires both schema and payload");
+    validate_typed_failure();
   }
   ~StepAttemptRejected() noexcept override;
 
@@ -90,6 +94,11 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
   const std::string& typed_failure_payload() const noexcept { return typed_failure_payload_; }
 
  private:
+  void validate_typed_failure() const {
+    if (typed_failure_schema_.empty() != typed_failure_payload_.empty())
+      throw std::invalid_argument("typed failure requires both schema and payload");
+  }
+
   static std::string message(SolveStatus status, const std::string& phase,
                              const std::string& detail) {
     std::string out = "step attempt rejected during " + phase +
@@ -118,8 +127,26 @@ class POPS_RUNTIME_EXCEPTION_ABI StepAttemptRejected final : public std::runtime
   std::string typed_failure_payload_;
 };
 
+/// A typed terminal failure of the step. It has no controller disposition or retry protocol.
+class POPS_RUNTIME_EXCEPTION_ABI StepTerminalFailure final : public std::runtime_error {
+ public:
+  StepTerminalFailure(std::string detail, std::string schema, std::string payload)
+      : std::runtime_error(detail), schema_(std::move(schema)), payload_(std::move(payload)) {
+    if (schema_.empty() || payload_.empty())
+      throw std::invalid_argument("a typed terminal failure requires its schema and payload");
+  }
+  ~StepTerminalFailure() noexcept override;
+  const std::string& typed_failure_schema() const noexcept { return schema_; }
+  const std::string& typed_failure_payload() const noexcept { return payload_; }
+
+ private:
+  std::string schema_;
+  std::string payload_;
+};
+
 #if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
 inline StepAttemptRejected::~StepAttemptRejected() noexcept = default;
+inline StepTerminalFailure::~StepTerminalFailure() noexcept = default;
 #endif
 
 #undef POPS_RUNTIME_EXCEPTION_ABI

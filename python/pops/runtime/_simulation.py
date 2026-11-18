@@ -60,7 +60,9 @@ from pops.time.solve_outcome import solve_status_variant
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
 
-_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY = 0, 1, 2, 3, 4
+_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY, _TERMINAL_FAILURE = (
+    0, 1, 2, 3, 4, 5,
+)
 _FACE_FREQUENCY_LOT = "the faces' frequency retry of the compiled run"
 _TRIAL_PHASES = ("trial", "trial_failure")
 
@@ -74,6 +76,7 @@ class RunFailed(RuntimeError):
             raise TypeError("RunFailed is raised with the RunResult whose failure is its variant")
         super().__init__(failure.describe())
         self.result = result
+        self.failure = failure
 
 
 class BudgetExhausted(RunFailed):
@@ -116,9 +119,10 @@ class Failure:
     the run rather than of an attempt, has the origin ``None``.
     """
 
-    __slots__ = ("variant", "origin", "payload")
+    __slots__ = ("variant", "origin", "payload", "site")
 
-    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any]) -> None:
+    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any],
+                 *, site: Any = None) -> None:
         if not (isinstance(variant, type) and issubclass(variant, RunFailed)) \
                 or variant is RunFailed:
             raise TypeError("Failure.variant is a subclass of RunFailed")
@@ -127,12 +131,16 @@ class Failure:
         object.__setattr__(self, "variant", variant)
         object.__setattr__(self, "origin", origin)
         object.__setattr__(self, "payload", MappingProxyType(dict(payload)))
+        object.__setattr__(self, "site", site)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Failure is immutable")
 
     def describe(self) -> str:
         payload = self.payload
+        if self.site is not None and "site" not in payload:
+            return "%s at the trial site %s: predicate %d observed %s" % (
+                self.variant.__name__, self.site.name, payload["predicate"], payload["value"])
         if self.variant is BudgetExhausted and payload["budget"] == "max_steps":
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
@@ -348,9 +356,31 @@ def _trial_variant(control: Any, site: str, status: str) -> type:
     return _VARIANTS[variant]
 
 
-def _trial_failure(control: Any, report: Mapping[str, Any], **extra: Any) -> Failure:
-    """The Failure of the trial rejection of ``report`` at its site, with ``extra`` in its payload.
-    A solve that reached its iteration limit names its budget, ``max_iterations``."""
+def _trial_failure(control: Any, report: Mapping[str, Any], *, catalog: Any = None,
+                   action: str = "reject_attempt", **extra: Any) -> Failure:
+    """Resolve native trial control to the bound site, retaining the b6 diagnostic fields."""
+    if "typed_failure_schema" in report or "typed_failure_payload" in report:
+        from pops.runtime._guard_failure import decode_guard_failure
+
+        if catalog is None:
+            raise RuntimeError("typed trial failure requires the bound guard catalog")
+
+        failure = decode_guard_failure(
+            report.get("typed_failure_schema"), report.get("typed_failure_payload"), catalog,
+            action=action, compatibility=extra,
+        )
+        if failure is None:
+            raise RuntimeError("System::run_advance returned an unknown typed trial failure")
+        if action == "reject_attempt":
+            site = failure.site
+            phase = "trial" if site.retry_can_change else "trial_failure"
+            if (report["rejection_phase"] != phase
+                    or _trial_variant(control, site.name, report["rejection_status"])
+                    is not failure.variant):
+                raise RuntimeError("native trial failure disagrees with its bound control")
+        return failure
+    if action == "fail_run":
+        raise RuntimeError("System::run_advance lost its terminal failure record")
     site = _trial_site(report)
     variant = _trial_variant(control, site["site"], report["rejection_status"])
     payload = dict(site, **extra)
@@ -490,6 +520,7 @@ class Simulation:
                 Publication(sample["time"], sample["macro_step"], values))
         stop = report["stop"]
         failure = None
+        guard = None
         stopped = None
         if stop == _FACE_FREQUENCY:
             if cells is None:
@@ -506,7 +537,9 @@ class Simulation:
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
             if phase == "trial":
-                payload["cause"] = _trial_failure(self._control, report)
+                guard = _trial_failure(self._control, report,
+                                       catalog=runtime._guard_failure_catalog)
+                payload["cause"] = guard
             elif phase != "assessment":
                 raise RuntimeError("System::run_advance spent an attempt budget on a rejection "
                                    "of phase %r" % phase)
@@ -515,10 +548,23 @@ class Simulation:
             if report["rejection_phase"] != "trial_failure":
                 raise RuntimeError("System::run_advance ended a step at a fixed failure site "
                                    "without its phase")
-            failure = _trial_failure(self._control, report, time=time,
-                                     attempts=report["attempts"])
+            guard = failure = _trial_failure(
+                self._control, report, catalog=runtime._guard_failure_catalog,
+                time=time, attempts=report["attempts"],
+            )
+        elif stop == _TERMINAL_FAILURE:
+            guard = failure = _trial_failure(
+                self._control, report, catalog=runtime._guard_failure_catalog,
+                action="fail_run", time=time, attempts=report["attempts"],
+            )
         elif stop != _REACHED or time != until:
             raise RuntimeError("System::run_advance returned without reaching its frontier")
+        if guard is not None and guard.site is not None:
+            from pops.time._step.transaction import guard_observation_data
+
+            report.pop("typed_failure_schema")
+            report.pop("typed_failure_payload")
+            report["guard_failure"] = guard_observation_data(guard)
         result = RunResult(
             state=RunState(runtime, time, runtime.macro_step()), time=time,
             steps=report["steps"], rejections=report["rejections"],

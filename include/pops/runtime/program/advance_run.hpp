@@ -53,6 +53,7 @@ enum class AdvanceRunStop : std::uint8_t {
   /// (pops.face-step-frequency@1): the compiled run does not retry at that frequency yet (N8
   /// « dt= as a function of cell », D2), so it stops by name with the frequency.
   kFaceFrequency = 4,
+  kTerminalFailure = 5,  ///< a typed FailRun ended the run without a rejection
 };
 
 /// Typed failure schema of the face guard's refusal that carries the faces' frequency (ROM-108).
@@ -133,7 +134,9 @@ struct AdvanceRunReport {
   std::string rejection_phase;       ///< phase of that rejection: assessment, trial, trial_failure
   std::string rejection_detail;      ///< its detail; a trial site starts with the site name
   std::string rejection_status;      ///< its solve status name (solve_status_name), empty when none
-  std::int64_t prepared_solves = 0;  ///< prepared linear solves that ran, every attempt included
+  std::string typed_failure_schema;  ///< typed control of the failure which ended the run
+  std::string typed_failure_payload;  ///< its exact native bytes
+  std::int64_t prepared_solves = 0;   ///< prepared linear solves that ran, every attempt included
   /// The iteration count and final residual norm of the last of them; -1 and NaN without one.
   std::int64_t last_prepared_solve_iterations = -1;
   double last_prepared_solve_residual = std::numeric_limits<double>::quiet_NaN();

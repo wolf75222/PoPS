@@ -23,6 +23,7 @@ _System = _native_module.System
 AmrSystemConfig = _native_module.AmrSystemConfig
 _AmrSystem = _native_module.AmrSystem
 StepAttemptRejected = _native_module.StepAttemptRejected
+StepTerminalFailure = _native_module.StepTerminalFailure
 abi_key = _native_module.abi_key
 
 _authenticate_native_version(_native_module)
