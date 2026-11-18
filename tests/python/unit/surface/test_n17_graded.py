@@ -32,10 +32,11 @@ from pops.mesh import MovingControlVolumes
 from pops.surface.math import ddt, div, erf, expm1, grad, pi, sin, tanh
 
 
-def _ring_case(nodes, cells=RING_CELLS, support=None):
+def _ring_case(nodes, cells=RING_CELLS, support=None, *, model=None):
     """The diffusion of the graded ring with the node function ``nodes``."""
     ring = support or surface.Box(x=surface.Periodic(0, 1))
-    model = surface.Model("ring")
+    if model is None:
+        model = surface.Model("ring")
     u = model.quantity("u", surface.Scalar(ring))
     u0 = model.data("u0", surface.Scalar(ring))
     diffusion = model.diffusive_flux(of=u, value=-1e-2 * grad(u))
@@ -188,6 +189,29 @@ def test_a_node_function_reads_its_coordinate_numbers_pi_and_constants():
 
     with pytest.raises(surface.SupportMismatch, match="returns 's'"):
         _ring_case(returns_text)
+
+
+def test_a_node_function_reads_constants_declared_by_its_case_model():
+    model = surface.Model("ring")
+    weight = model.constant("weight", value=0.25)
+    foreign = surface.Model("ring").constant("weight", value=0.25)
+
+    def owned_nodes(s):
+        return s + weight * s * (1 - s)
+
+    def foreign_nodes(s):
+        return s + foreign * s * (1 - s)
+
+    report, reading = _reading(_ring_case(owned_nodes, model=model))
+    assert reading.kind == "nodes"
+    choices = {choice.name: choice.value for choice in _layout_row(report).choices}
+    assert choices["nodes of x"] == "owned_nodes(s) = s + weight * s * (1 - s)"
+    other_case_model = surface.Model("ring")
+    other_case_model.constant("weight", value=0.25)
+    with pytest.raises(ValueError, match=(
+            "the node function foreign_nodes of the axis x reads weight, "
+            "which another model declares")):
+        _ring_case(foreign_nodes, model=other_case_model)
 
 
 @pytest.mark.parametrize("word,owner", [("expm1", "N11"), ("erf", "N11")])

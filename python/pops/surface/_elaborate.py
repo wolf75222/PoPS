@@ -1136,7 +1136,10 @@ class _Elaboration:
     def _node_reads(self, value: Any, axis: Any, where: str, site: Any) -> None:
         """A node function reads its logical coordinate, numbers, pi and the constants of the
         model (SU5), which enter the identity of the artifact (design note N17, 3.8)."""
-        if is_number(value) or isinstance(value, ModelConstant):
+        if isinstance(value, ModelConstant):
+            self.model._own(value, where)
+            return
+        if is_number(value):
             return
         if isinstance(value, MathConstant):
             if not _math.isfinite(value.value):
