@@ -1,15 +1,16 @@
 """Atomic step authoring contracts and reports."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pops.time.solve_outcome import FailRun, RejectAttempt, SolveAction
 from pops.time._step.strategy import StepStrategy
 
 if TYPE_CHECKING:
-    from pops.runtime._simulation import Failure
+    from pops.time._program.guard_failure_sites import GuardFailureSite
 
 
 class ProvisionalStore(str, Enum):
@@ -110,6 +111,20 @@ _PHASES = frozenset((
 _STATUSES = frozenset(("accepted", "rejected", "failed"))
 
 
+class _FailureObservation(Protocol):
+    @property
+    def variant(self) -> type: ...
+
+    @property
+    def origin(self) -> str | None: ...
+
+    @property
+    def payload(self) -> Mapping[str, Any]: ...
+
+    @property
+    def site(self) -> GuardFailureSite | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class StepTransactionReport:
     """Serializable observed result of one complete macro-step transaction."""
@@ -123,7 +138,7 @@ class StepTransactionReport:
     rolled_back_effects: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     projections: tuple[str, ...] = ()
-    failure: Failure | None = None
+    failure: _FailureObservation | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -176,6 +191,7 @@ class StepTransactionReport:
         }
         if self.failure is not None:
             site = self.failure.site
+            assert site is not None  # established by __post_init__
             data["failure"] = {
                 "variant": self.failure.variant.__name__, "origin": self.failure.origin,
                 "site": site.to_data(), "payload": dict(self.failure.payload),
