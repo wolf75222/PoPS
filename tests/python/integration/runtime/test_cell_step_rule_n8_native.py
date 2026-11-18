@@ -583,7 +583,7 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
         proposal = _tutorial if rule == "cells" else lambda *_: 1e-3
         artifact, quantity, datum = _slice(
             proposal, lambda _: _mixed_phase_guard(), attempts=3,
-            output_time=surface.every(steps=1))
+            output_time=MAX_DT)
 
     initial = np.full(CELLS, FAR_FIELD)
     initial[8:23, 8:24] = 1.0
@@ -595,7 +595,7 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
     native = reference._executor._s
     schema = "pops.face-step-frequency@1"
     with pytest.raises(StepAttemptRejected) as first:
-        native.step_cfl(CFL)
+        native.step_cfl(CFL, max_dt=MAX_DT)
     assert first.value.typed_failure_schema == schema
     first_frequency = float.fromhex(first.value.typed_failure_payload.decode("ascii"))
     assert first_frequency == 2 * abs(AX) * CELLS[0]
@@ -606,6 +606,17 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
     frequency = float.fromhex(cause.typed_failure_payload.decode("ascii"))
     assert frequency > first_frequency
     assert (reference.time(), reference.macro_step()) == (0, 0)
+    _bitwise(initial, _state(reference))
+
+    cursors = reference.consumer_cursors.to_data()
+    with pytest.raises(StepAttemptRejected) as controlled:
+        pops.step(reference, t_bound=MAX_DT, console=False)
+    assert controlled.value.typed_failure_schema == schema
+    assert controlled.value.typed_failure_payload == cause.typed_failure_payload
+    notes = getattr(controlled.value, "__notes__", ())
+    assert any("after 2 attempt(s)" in note for note in notes)
+    assert (reference.time(), reference.macro_step()) == (0, 0)
+    assert reference.consumer_cursors.to_data() == cursors
     _bitwise(initial, _state(reference))
 
     simulation = surface.bind(artifact, data={datum: initial}, directory=tmp_path)
@@ -623,9 +634,7 @@ def test_a_second_face_refusal_returns_the_last_accepted_result(
     assert native_report["typed_failure_payload"] == cause.typed_failure_payload
     assert native_report["rejection"] == str(cause)
     output, = artifact.case.outputs
-    publication, = result.outputs[output]
-    assert (publication.time, publication.step) == (0.0, 0)
-    _bitwise(publication["u"], initial)
+    assert result.outputs[output] == ()
     _bitwise(result.state[quantity], _state(reference))
 
 
