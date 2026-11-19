@@ -111,6 +111,8 @@ class SystemBlockStore {
     PreparedPointBoundaryResidual boundary_full_at_point_prepared;
     PreparedPointBoundaryResidual boundary_core_at_point_prepared;
     PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
+    typename SystemBlockClosures<Dim>::PreparedChildBoundaryResidual
+        boundary_flux_at_child_point_prepared;
     PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
     typename SystemBlockClosures<Dim>::PreparedPointPeriodicResidual
         periodic_full_at_point_prepared;

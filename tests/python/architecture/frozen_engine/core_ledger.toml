@@ -799,3 +799,42 @@ paths = [
   "include/pops/runtime/program/module_metadata.hpp",
   "src/runtime/system/system_io.cpp",
 ]
+
+[[mechanism]]
+id = "uniform-child-boundary-clock"
+issue = "ROM-22"
+rule = "T23"
+pre_freeze = true
+what = """
+An application-local logical child clock and tick reach the prepared Uniform physical ghost
+closure. The macro evaluation point still serves exchanges and every other existing consumer.
+The issued subcycle and logical evaluation scopes authenticate the child before grouped halo fill.
+"""
+structures = [
+  { case = "M01 transport", builder = "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py::test_subcycled_scalar_ghost_reads_its_child_stage_clock", structure = "Scalar upwind transport with a time-dependent incoming state" },
+  { case = "M03 Euler", builder = "tests/python/integration/runtime/test_surface_lot_b_boundaries_native.py::test_subcycled_euler_ghost_reads_its_child_stage_clock", structure = "Four-component Euler with a time-dependent entropy-wave inflow" },
+]
+measurement = """
+On 1cfff866 the real public compile rejects the two authored child providers before package
+selection. The Euler case locates both consuming SSPRK2 sites in the same issued child and also
+refuses its parent clock at the same physical time. The stock primary temporal and child
+intemporal controls emit and execute. See G04 horloge_enfant_fournisseur.md and stock refusal
+receipts. The candidate tests compare two macro steps and four child steps with exact stage
+samples and independent line oracles.
+"""
+refusal_set = "Foreign, parent or inactive child scope, unprepared or coupled physical transport, and existing child diffusion, stencil, moving, JVP and AMR refusals."
+paths = [
+  "include/pops/runtime/program/boundary_ghost_evaluation.hpp",
+  "include/pops/runtime/program/clock_schedule.hpp",
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/native_package_capability.hpp",
+  "include/pops/runtime/system/system_block_closures.hpp",
+  "include/pops/runtime/system/system_block_store.hpp",
+  "src/runtime/system/system_install.cpp",
+  "src/runtime/system/system_program.cpp",
+  "python/pops/codegen/user_ghost_lowering.py",
+  "python/pops/codegen/program_emit_control.py",
+  "python/pops/codegen/program_emit_ops.py",
+]

@@ -2012,6 +2012,47 @@ TEST(ProgramContextContract, LaplacianPreservesEveryComponentAndExactStencilAuth
   EXPECT_THROW(ctx.gradient(gradient, input, *boundary), std::invalid_argument);
 }
 
+TEST(ProgramContextContract, PhysicalGhostRefusesForeignOrClosedChildScopes) {
+  ensure_kokkos();
+  NativeSystem sim(native_config(8));
+  install_execution_lane(sim, "pops.test.program-context.child-ghost-scope");
+  add_gas(sim);
+  sim.set_program_block_map({0});
+  NativeProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
+  ctx.declare_clock_relation("clock.macro", "clock.fast", 2);
+  ctx.declare_clock_relation("clock.fast", "clock.micro", 1);
+  ctx.begin_step(0.4);
+  auto& state = ctx.state(0);
+  auto& residual = ctx.rhs_scratch(1, 0, state);
+  Real frequency = 0;
+  const auto refuse = [&](const auto& time_scope, const auto& evaluation, const char* reason) {
+    try {
+      ctx.neg_div_flux_default_with_frequency_into(0, state, residual, 1, time_scope, evaluation,
+                                                   &frequency);
+      ADD_FAILURE() << "a physical ghost call accepted an invalid child scope";
+    } catch (const std::exception& error) {
+      EXPECT_NE(std::string(error.what()).find(reason), std::string::npos);
+    }
+  };
+
+  auto ticks = ctx.subcycle_scope("clock.macro", "clock.fast", 2);
+  ticks.iteration(0);
+  auto child = ctx.logical_evaluation_scope(0, 2);
+  {
+    auto micro_ticks = ctx.subcycle_scope("clock.fast", "clock.micro", 1);
+    micro_ticks.iteration(0);
+    auto micro = ctx.logical_evaluation_scope(0, 1);
+    refuse(ticks, child, "active child scope");
+    refuse(ticks, micro, "stack order");
+    micro_ticks.finish();
+    refuse(micro_ticks, micro, "no longer active");
+  }
+  EXPECT_EQ(child.dt(), Real(0.2));
+  EXPECT_EQ(ctx.boundary_evaluation_point(1).clock, "clock.macro");
+  EXPECT_EQ(frequency, Real(0));
+}
+
 TEST(ProgramContextContract, LogicalSubcycleSnapshotsCarryExactChildWindowsAndRestoreParents) {
   ensure_kokkos();
   NativeSystemConfig cfg = native_config(8);

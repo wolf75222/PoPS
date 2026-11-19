@@ -20,6 +20,7 @@
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/recovery/device_candidate_recovery.hpp>
 #include <pops/runtime/recovery/uniform_recovery_consumer.hpp>
+#include <pops/runtime/program/boundary_ghost_evaluation.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/system/provider_storage_binding.hpp>
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
@@ -835,9 +836,12 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
 
-  const auto qualify_ghost = [](Ghost& staged, const auto* point) {
+  using GhostEvaluation = runtime::program::BoundaryGhostEvaluation;
+  const auto qualify_ghost = [](Ghost& staged, const auto* point,
+                                const GhostEvaluation* child = nullptr) {
     if constexpr (requires { Ghost::evaluation_clock; }) {
-      if (point == nullptr || point->clock != Ghost::evaluation_clock)
+      if (point == nullptr || (child == nullptr ? std::string_view(point->clock) : child->clock) !=
+                                  Ghost::evaluation_clock)
         throw std::invalid_argument("SourceGhost time requires its exact consuming Program Clock");
       const Real time = static_cast<Real>(point->physical_time);
       if (!std::isfinite(time))
@@ -881,7 +885,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
        geometry, ghost, qualify_ghost](
           const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
           const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
-          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+          const GhostEvaluation* child = nullptr) {
         Ghost staged = ghost;
         prepared_boundary_collective_phase(
             lane,
@@ -891,7 +896,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                 if constexpr (requires { Ghost::evaluation_clock; }) {
                   boundary->template require_source_ghost_policy<Ghost>(geometry.domain(),
                                                                         state.ghosts());
-                  qualify_ghost(staged, &point);
+                  qualify_ghost(staged, &point, child);
                 }
               }
             },
@@ -978,8 +983,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       [prepare_state_with_transport, external_ghost_boundary, geometry](
           const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
           const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
-          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
-        prepare_state_with_transport(point, state, boundary, lane, transport);
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+          const GhostEvaluation* child = nullptr) {
+        prepare_state_with_transport(point, state, boundary, lane, transport, child);
         if (boundary != nullptr && *external_ghost_boundary)
           (*external_ghost_boundary)(point, state, geometry, lane);
       };
@@ -991,12 +997,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                                  const PreparedHyperbolicBoundary<Dim>* boundary,
                                  const ExecutionLane& lane,
                                  const runtime::program::PreparedScalarBoundarySession<Dim>&
-                                     transport) {
+                                     transport,
+                                 const GhostEvaluation* child = nullptr) {
     prepared_boundary_collective_phase(
         lane,
         [&] { require_same_layout(state, residual, Model::n_vars, "generated flux residual"); },
         "generated prepared flux preflight failed collectively");
-    prepare_state_with_external(point, state, boundary, lane, transport);
+    prepare_state_with_external(point, state, boundary, lane, transport, child);
     transport.with_boundary_scratch(state, [&](auto& scratch) {
       auto& faces = scratch.generated_faces;
       const auto omitted_faces =
@@ -1193,6 +1200,16 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                             const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         flux_with_transport(point, state, residual, &boundary, lane, transport);
       };
+  if constexpr (requires { Ghost::evaluation_clock; }) {
+    result.closures.boundary_flux_at_child_point_prepared =
+        [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
+                              const PreparedHyperbolicBoundary<Dim>& boundary,
+                              const ExecutionLane& lane,
+                              const runtime::program::PreparedScalarBoundarySession<Dim>& transport,
+                              const GhostEvaluation& child) {
+          flux_with_transport(point, state, residual, &boundary, lane, transport, &child);
+        };
+  }
   result.closures.boundary_flux_core_at_point_prepared =
       [flux_with_transport](const auto& point, MultiFab<Dim>& state, MultiFab<Dim>& residual,
                             const PreparedHyperbolicBoundary<Dim>&, const ExecutionLane& lane,

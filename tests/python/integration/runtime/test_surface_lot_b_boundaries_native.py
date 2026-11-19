@@ -47,6 +47,7 @@ from pops.projection import ConservativeCellAverage
 from pops.runtime._simulation import Simulation
 from pops.surface.discrete import Ghost, forms
 from pops.surface.math import ddt, div, outflow, sqrt, vector
+from pops.time import Clock, FixedDt, SampleAndHold, TimePoint
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.traced_method import Candidate, method
 from tests.python.support.public_native_profile import native_profile
@@ -127,7 +128,7 @@ def _vanleer_face(flux_u, u):
     return b6_numerics.rusanov(flux_u, u, reconstruction=_hand_vanleer(u))
 
 
-def _hand_case(face=_native_face, laws=_native_laws, depth=1, periodic_x=False):
+def _hand_case(face=_native_face, laws=_native_laws, depth=1, periodic_x=False, *, compose=None):
     """The same case written for b6 and N8: ``face(flux_u, u)`` is the method of its rate and
     ``laws(state, g, depth)`` the conditions of a value and of no data."""
     frame = CartesianDomain("box", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
@@ -156,8 +157,11 @@ def _hand_case(face=_native_face, laws=_native_laws, depth=1, periodic_x=False):
     case.numerics(plan, block=block)
     case.initials.add(InitialCondition(state=block[u], value=BindArray(),
                                        projection=ConservativeCellAverage()))
-    elaborate(Advance(_n8_ssprk2(rate=lambda state: selection(state))), case=case,
-              state=block[u], proposal=Proposal(0.001))
+    if compose is None:
+        elaborate(Advance(_n8_ssprk2(rate=lambda state: selection(state))), case=case,
+                  state=block[u], proposal=Proposal(0.001))
+    else:
+        compose(case, block[u], selection)
     layout = Uniform(CartesianGrid(frame=frame, cells=CELLS, periodic=periodic))
     return case, layout, block[g_handle]
 
@@ -310,22 +314,30 @@ def test_a_ghost_that_is_not_finite_is_refused_by_the_face_that_reads_it(native_
     assert "hyperbolic face evaluation refused publication" in message
 
 
-def _two_step_line(initial, dt, rhs, sample=lambda begin, stage, dt: begin + stage * dt):
+def _advance_line(initial, dt, rhs, sample=lambda begin, stage, dt: begin + stage * dt, *, steps=2):
     """Independent first-order spatial line and two SSPRK2 evaluations per step."""
     state = initial
-    for tick in range(2):
+    for tick in range(steps):
         begin = tick * dt
         first = state + dt * rhs(state, sample(begin, 0, dt))
         state = 0.5 * state + 0.5 * (first + dt * rhs(first, sample(begin, 1, dt)))
     return state
 
 
-def _check_time_oracle(initial, dt, rhs):
-    expected = _two_step_line(initial, dt, rhs)
+def _check_time_oracle(initial, dt, rhs, *, subcycles=1):
+    expected = _advance_line(initial, dt, rhs, steps=2 * subcycles)
     for wrong_sample in (lambda begin, stage, dt: 0.,
                          lambda begin, stage, dt: begin,
                          lambda begin, stage, dt: float(stage)):
-        assert np.max(np.abs(expected - _two_step_line(initial, dt, rhs, wrong_sample))) > 1e-5
+        wrong = _advance_line(initial, dt, rhs, wrong_sample, steps=2 * subcycles)
+        assert np.max(np.abs(expected - wrong)) > 1e-5
+    if subcycles > 1:
+        def macro_time(begin, stage, duration):
+            interval = duration * subcycles
+            return (begin // interval) * interval + stage * interval
+
+        wrong = _advance_line(initial, dt, rhs, macro_time, steps=2 * subcycles)
+        assert np.max(np.abs(expected - wrong)) > 1e-5
     return expected
 
 
@@ -350,9 +362,71 @@ def test_generated_scalar_ghost_reads_each_physical_stage_time(native_cache, tmp
     _bitwise(result.state[u], np.broadcast_to(expected, CELLS))
 
 
+def _ssprk2_on_child(case, subject, rate, program, child, dt):
+    parent = program.state(subject)
+    local = program.state(subject, clock=child)
+    first = program.synchronize(parent.n, at=TimePoint(child), relation=SampleAndHold())
+
+    def advance(builder, state):
+        predictor = builder.value("child_predictor", state + builder.dt * rate(state),
+                                  at=TimePoint(child, 1))
+        return builder.value("child_accepted", .5 * state + .5 * (predictor + builder.dt * rate(predictor)),
+                             at=local.next.point)
+
+    last = program.subcycle(first, clock=child, within=program.clock, count=2, body_fn=advance)
+    accepted = program.synchronize(last, at=parent.next.point, relation=SampleAndHold())
+    program.commit(parent.next, accepted)
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+
+
+def test_subcycled_scalar_ghost_reads_its_child_stage_clock(native_cache):
+    del native_cache
+    native_profile(scope="G04 subcycled scalar stage clock")
+    dt = 1 / 128
+    program = pops.Program("advection_clocked_child")
+    child = Clock("child", owner=program.owner_path)
+
+    def laws(state, g, depth):
+        del g
+        return (SourceGhost(state=state, depth=depth,
+                            body=lambda inner, k: (1 + time(child),)),
+                SourceGhost(state=state, depth=depth, body=lambda inner, k: (inner(1)[0],)))
+
+    case, layout, _ = _hand_case(
+        face=b6_numerics.rusanov, laws=laws, periodic_x=True,
+        compose=lambda case, subject, rate: _ssprk2_on_child(case, subject, rate, program, child, dt),
+    )
+    line = 1 + np.arange(CELLS[1]) / 256
+    initial = np.broadcast_to(line[:, None], CELLS[::-1])[np.newaxis, ...].copy()
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    artifact.verify()
+    (binding,) = tuple(artifact.plan.initial_condition_plan.bindings)
+    runtime = pops.bind(artifact, initial_values={binding.subject: initial})
+    report = pops.run(runtime, t_end=2 * dt, max_steps=2, console=False)
+    assert report.accepted_steps == 2 and runtime.time() == 2 * dt and runtime.macro_step() == 2
+
+    def rhs(state, physical_time):
+        return .25 * CELLS[1] * (np.r_[1 + physical_time, state[:-1]] - state)
+
+    expected = _check_time_oracle(line, dt / 2, rhs, subcycles=2)
+    actual = state_array(runtime, "advection", initial.shape)
+    _bitwise(actual, np.broadcast_to(expected[:, None], initial.shape))
+
+
 def test_generated_euler_ghost_reads_each_declared_stage_time(native_cache):
     del native_cache
     native_profile(scope="G04 generated Euler stage clock")
+    _euler_ghost_trajectory(subcycled=False)
+
+
+def test_subcycled_euler_ghost_reads_its_child_stage_clock(native_cache):
+    del native_cache
+    native_profile(scope="G04 subcycled Euler stage clock")
+    _euler_ghost_trajectory(subcycled=True)
+
+
+def _euler_ghost_trajectory(*, subcycled):
     dt = 1 / 128
     frame, layout = _domain("M03_clocked_boundary", CELLS, periodic=(1,))
     model = pops.Model("M03_clocked_boundary", frame=frame)
@@ -360,13 +434,19 @@ def test_generated_euler_ghost_reads_each_declared_stage_time(native_cache):
     state, flux, rate, _ = _euler(model, frame, gamma=gamma, pressure_offset=pressure_offset)
     case = pops.Case("M03_clocked_boundary")
     block = case.block("fluid", model)
-    program, _ = _ssprk2(case, block, state, lambda p, u, point, label: rate(u), dt,
-                          name="M03_clocked_boundary_SSPRK2")
     subject = block[state]
+    if subcycled:
+        program = pops.Program("M03_clocked_boundary_SSPRK2_child")
+        clock = Clock("child", owner=program.owner_path)
+        _ssprk2_on_child(case, subject, rate, program, clock, dt)
+    else:
+        program, _ = _ssprk2(case, block, state, lambda p, u, point, label: rate(u), dt,
+                              name="M03_clocked_boundary_SSPRK2")
+        clock = program.clock
     plan = DiscretizationPlan()
     plan.rates.add(rate, b6_numerics.rusanov(flux, state))
     energy_offset = (1 + gamma * pressure_offset) / (gamma - 1)
-    density = 1 + time(program.clock)
+    density = 1 + time(clock)
     inlet = SourceGhost(
         state=subject, depth=1,
         body=lambda inner, k: (density, vx * density, vy * density, energy_offset + 0.05 * density))
@@ -377,6 +457,8 @@ def test_generated_euler_ghost_reads_each_declared_stage_time(native_cache):
         periodic=layout.mesh.periodic))
     case.numerics(plan, block=block)
     initial = np.stack([np.full(CELLS[::-1], value) for value in (1., vx, vy, energy_offset + 0.05)])
+    if subcycled:
+        initial = _euler_entropy_wave(1 + np.arange(CELLS[0]) / 512, vx, vy, energy_offset)
     initial_values = bind_initial_array(case, subject, initial)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     artifact.verify()
@@ -393,10 +475,16 @@ def test_generated_euler_ghost_reads_each_declared_stage_time(native_cache):
         mass_flux = 0.5 * vx * (left + right) - 0.5 * speeds * (right - left)
         return -np.diff(mass_flux) * CELLS[0]
 
-    rho = np.broadcast_to(_check_time_oracle(initial[0, 0], dt, rhs), CELLS[::-1])
-    expected = np.stack((rho, vx * rho, vy * rho, energy_offset + 0.05 * rho))
+    children = 2 if subcycled else 1
+    rho = _check_time_oracle(initial[0, 0], dt / children, rhs, subcycles=children)
+    expected = _euler_entropy_wave(rho, vx, vy, energy_offset)
     actual = state_array(runtime, "fluid", initial.shape)
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-12)
     pressure = ((gamma - 1) * (actual[3] - (actual[1] ** 2 + actual[2] ** 2) / (2 * actual[0]))
                 - gamma * pressure_offset)
     np.testing.assert_allclose(pressure, 1., rtol=0, atol=2e-10)
+
+
+def _euler_entropy_wave(density, vx, vy, energy_offset):
+    rho = np.broadcast_to(density, CELLS[::-1])
+    return np.stack((rho, vx * rho, vy * rho, energy_offset + 0.05 * rho))

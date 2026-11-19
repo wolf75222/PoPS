@@ -27,7 +27,7 @@ namespace pops::runtime::system {
 
 // 9 (N3 lot 3-eps): the capability state carries the smoothness epsilon of the reconstruction route
 // to the package's block installer.
-inline constexpr int kNativeSystemPackageAbiVersion = 9;
+inline constexpr int kNativeSystemPackageAbiVersion = 10;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 
@@ -147,6 +147,7 @@ inline std::string exact_native_system_package_contract(
       .presence(static_cast<bool>(closures.boundary_full_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_core_at_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_full_at_point_prepared))
+      .presence(static_cast<bool>(closures.boundary_flux_at_child_point_prepared))
       .presence(static_cast<bool>(closures.boundary_flux_core_at_point_prepared))
       .presence(static_cast<bool>(closures.periodic_flux_at_point_prepared))
       .presence(static_cast<bool>(closures.path_rhs_at_point_prepared))

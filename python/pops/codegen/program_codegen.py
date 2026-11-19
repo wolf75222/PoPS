@@ -265,10 +265,11 @@ def _emit_cpp_program_impl(
     if model_graph is not None and type(model_graph) is not ProgramModelGraph:
         raise TypeError("model_graph must be an exact ProgramModelGraph")
     authority = model_graph if model_graph is not None else model
+    child_ghost_sites: frozenset[int] = frozenset()
     if model_graph is not None:
         from pops.codegen.user_ghost_lowering import require_clocked_ghost_program
 
-        require_clocked_ghost_program(
+        child_ghost_sites = require_clocked_ghost_program(
             model_graph._numerics_by_block.items(),
             lambda: (program, target),
         )
@@ -325,6 +326,7 @@ def _emit_cpp_program_impl(
         provider_plans=provider_plans,
         value_authority=value_authority,
         exchange_metadata=exchange_metadata,
+        child_ghost_sites=child_ghost_sites,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime

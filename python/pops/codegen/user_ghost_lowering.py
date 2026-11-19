@@ -97,14 +97,19 @@ def require_clocked_ghost_plan(plan: ResolvedSimulationPlan) -> None:
 
 def require_clocked_ghost_program(
     blocks: Iterable[tuple[str, Any]], read_program: Callable[[], tuple[Any, str]],
-) -> None:
-    """Authenticate temporal boundary uses before compiling any native package."""
+) -> frozenset[int]:
+    """Authenticate boundary uses and identify the prepared flux applications in child scopes."""
+    from pops.codegen.program_emit_kernels import _named_fluxes
+    from pops.numerics.plan import ResolvedDiscretizationPlan
     from pops.numerics.stencil_flux import StencilFlux
     from pops.time._program.traversal import all_ops_with_ancestry
     from pops.time.references import block_name
 
     clocks = {}
+    coupled = False
     for name, numerics in blocks:
+        if type(numerics) is ResolvedDiscretizationPlan:
+            coupled |= bool(numerics.interfaces)
         faces, _ = _resolved_ghost_faces(numerics)
         clock = _policy_clock(faces.values())
         if clock is not None:
@@ -112,16 +117,19 @@ def require_clocked_ghost_program(
             if numerics.interfaces:
                 raise NotImplementedError("SourceGhost time requires an uncoupled Uniform boundary")
     if not clocks:
-        return
+        return frozenset()
     program, target = read_program()
     if program is None or target != "system":
         raise NotImplementedError("SourceGhost time requires an exact Uniform Program Clock")
 
-    subcycles = set()
+    subcycles = {}
+    consumers = set()
+    child_sites = set()
     for node, ancestry in all_ops_with_ancestry(program):
         if node.op == "subcycle":
-            subcycles.add(node.id)
-        if node.block is None or block_name(node.block) not in clocks:
+            subcycles[node.id] = node.clock
+        name = None if node.block is None else block_name(node.block)
+        if name not in clocks:
             continue
         # A source-owned stencil declaration consumes state extension even when
         # its selected footprint is narrow. The emitter prepares that input first.
@@ -131,13 +139,23 @@ def require_clocked_ghost_program(
             or type(node.attrs.get("stencil_flux")) is StencilFlux
             or "cell_field_projection" in node.attrs
         )
-        child = any(owner in subcycles for owner, _ in ancestry)
-        if reads_ghosts and (child or node.clock != program.clock):
-            raise NotImplementedError(
-                "SourceGhost time has no exact Clock for child application %s" % node.name)
-    for name, clock in clocks.items():
-        if clock != program.clock.qualified_id:
+        if not reads_ghosts:
+            continue
+        child = next((subcycles[owner] for owner, _ in reversed(ancestry) if owner in subcycles), None)
+        expected = program.clock if child is None else child
+        if clocks[name] != expected.qualified_id or node.clock != expected:
             raise ValueError("SourceGhost for %s requires its exact consuming Program Clock" % name)
+        consumers.add(name)
+        if child is not None:
+            if coupled or node.op != "rhs" or _named_fluxes(node) is not None:
+                raise NotImplementedError(
+                    "SourceGhost time requires its prepared Uniform flux in child application %s"
+                    % node.name)
+            child_sites.add(node.id)
+    for name, clock in clocks.items():
+        if name not in consumers and clock != program.clock.qualified_id:
+            raise ValueError("SourceGhost for %s requires its exact consuming Program Clock" % name)
+    return frozenset(child_sites)
 
 
 def prepare_user_ghost_carrier(emitter: Any, numerics: Any) -> Any:

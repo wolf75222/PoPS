@@ -880,6 +880,8 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
       std::move(prepared.closures.boundary_core_at_point_prepared);
   candidate.boundary_flux_full_at_point_prepared =
       std::move(prepared.closures.boundary_flux_full_at_point_prepared);
+  candidate.boundary_flux_at_child_point_prepared =
+      std::move(prepared.closures.boundary_flux_at_child_point_prepared);
   candidate.boundary_flux_core_at_point_prepared =
       std::move(prepared.closures.boundary_flux_core_at_point_prepared);
   candidate.periodic_full_at_point_prepared =
