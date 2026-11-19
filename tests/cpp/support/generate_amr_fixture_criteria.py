@@ -145,6 +145,7 @@ def euler(output, dimension):
     for name, blocks, variables, field, threshold in (
         ("compiled_parity", ("gas",), euler_state, "rho", 1.2),
         ("gravity", ("gas",), euler_state, "rho", 1.2),
+        ("riemann", ("gas",), euler_state, "rho", 1.2),
         ("regrid_parity", ("a", "b"), ("n",), "n", 1.5),
     ):
         model = pops.Model(name)

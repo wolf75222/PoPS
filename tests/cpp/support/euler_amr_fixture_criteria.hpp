@@ -30,7 +30,7 @@ struct FixtureCriterionGroup {
   }
 
   template <int Dim, class Runtime>
-  void install(Runtime& system) const {
+  void install(Runtime& system, const char* clock = "test.clock.macro") const {
     std::vector<std::string> states, blocks;
     std::vector<std::vector<std::string>> variables;
     std::vector<std::vector<int>> components;
@@ -41,8 +41,8 @@ struct FixtureCriterionGroup {
       components.push_back({field.component});
     }
     system.set_generated_tagging(identity, states, blocks, variables, components,
-                                 {Size, std::vector<std::size_t>(Dim, 0)}, {}, {}, {}, 0,
-                                 "test.clock.macro", provider);
+                                 {Size, std::vector<std::size_t>(Dim, 0)}, {}, {}, {}, 0, clock,
+                                 provider);
   }
 };
 
