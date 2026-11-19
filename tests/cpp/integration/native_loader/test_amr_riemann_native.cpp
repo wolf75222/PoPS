@@ -189,6 +189,7 @@ Snap run(AmrSystem<Dim>& s, int nsteps, bool exercise_wrong_program = false) {
     EXPECT_DOUBLE_EQ(s.time(), 0.0);
   }
   s.install_program(POPS_TEST_RIEMANN_PROGRAM_SO);
+  s.mark_bound();
   EXPECT_TRUE(s.uses_runtime_engine());
   EXPECT_EQ(s.installed_program_hash(),
             std::string("test-forward-euler-amr/") + test::riemann.identity);
