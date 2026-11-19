@@ -496,6 +496,18 @@ class Simulation:
             and dt == self._control.first_dt == installed_strategy.dt == temporal.fixed_dt()
             and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
         )
+        if project_fixed and until > start and max_steps > 0:
+            from pops.runtime._run_manifest import begin_run
+            from pops.runtime._step_strategy import prepare_program_run
+
+            prepared = prepare_program_run(runtime._executor)
+            begin_run(
+                runtime._executor, t_end=until, max_steps=max_steps, output_dir=None,
+                step_transaction={
+                    **prepared.control_payload,
+                    "compiled_advance": self._control.to_data(),
+                },
+            )
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
                 rule[0], math.inf if rule[1] is None else rule[1]), cells)
