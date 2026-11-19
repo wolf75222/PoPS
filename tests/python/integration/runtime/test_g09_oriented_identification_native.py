@@ -9,6 +9,7 @@ import pops
 import pops.surface as surface
 from examples.api_v02.common import state_array
 from examples.api_v02.models_M01_M14 import _euler, _initial, _traced_ssprk2, rusanov
+from pops.codegen.lowering_coverage import LoweringRejection
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
@@ -25,8 +26,10 @@ from pops.mesh.boundaries import (
 )
 from pops.model import OwnerPath
 from pops.numerics import DiscretizationPlan
+from pops.numerics.terms import Flux
 from pops.physics import Density, Energy, Momentum
 from pops.surface.math import ddt, div, vector
+from pops.time import FixedDt
 from tests.python.support.collective_checks import collective_call, collective_check
 from tests.python.support.g09_oriented_halo_oracles import (
     CELLS,
@@ -81,7 +84,7 @@ def _quarter_topology():
     ), ())
 
 
-def build_g09_quarter_euler(*, identified=True):
+def build_g09_quarter_euler(*, identified=True, named=False):
     """The M03 constitutive law and method with both moment roles stated explicitly."""
     frame = Rectangle("offset_euler", lower=(2.0, -2.0), upper=(3.0, -1.0)).frame(Cartesian2D())
     model = pops.Model("offset_stiffened_Euler", frame=frame)
@@ -96,7 +99,19 @@ def build_g09_quarter_euler(*, identified=True):
     discretization = DiscretizationPlan()
     discretization.rates.add(rate, rusanov(flux, state))
     case.numerics(discretization, block=block)
-    _traced_ssprk2(case, block, state, rate, EULER_DT, name="Euler_SSPRK2")
+    if named:
+        program = pops.Program("explicitly_selected_transport")
+        authorized_flux = next(entry for entry in model.module.operator_registry()
+                               if entry.kind == "grid_operator")
+        variable = program.state(block[state])
+        rhs = program.rhs("transport", state=variable.n,
+                          terms=[Flux(model.module.operator_handle(authorized_flux.name))])
+        program.commit(variable.next, program.value(
+            "next", variable.n + program.dt * rhs, at=variable.next.point))
+        program.step_strategy(FixedDt(EULER_DT))
+        case.program(program)
+    else:
+        _traced_ssprk2(case, block, state, rate, EULER_DT, name="Euler_SSPRK2")
     values = _initial(case, block[state], euler_initial())
     if identified:
         grid = CartesianGrid(frame=frame, cells=(CELLS, CELLS), identifications=_quarter_topology())
@@ -145,6 +160,45 @@ def test_mapped_layout_identity_includes_the_exact_resolved_offsets():
     assert NativeSpatialLayout.from_data(first.to_data()).identity == first.identity
     with pytest.raises(ValueError, match="tangential identification offset"):
         layout(shift=Fraction(1, 5))
+
+
+def test_identification_preserves_the_translation_axis_set_in_three_dimensions():
+    def resolved(*, mixed):
+        box = surface.Box(x=(0, 1), y=(0, 1), z=surface.Periodic(0, 1))
+        tangent = ({box.y: box.z, box.z: box.y + Fraction(1, 4)} if mixed
+                   else {box.z: box.z + Fraction(1, 4)})
+        box = box.identify(box.boundary.x_min, box.boundary.x_max, by=tangent)
+        box = box.identify(box.boundary.y_min, box.boundary.y_min, by={box.y: -box.y})
+        box = box.identify(box.boundary.y_max, box.boundary.y_max, by={box.y: 2 - box.y})
+        model = surface.Model("offset_transport")
+        q = model.quantity("q", surface.Scalar(box))
+        data = model.data("initial", surface.Scalar(box))
+        flux = model.flux(of=q, value=vector(-1.0, 0.0, 0.0) * q)
+        model.balance(ddt(q) == -div(flux))
+        case = surface.Case(
+            model=model,
+            numerics=surface.Numerics(represent={q: surface.CellAverage()},
+                                      schemes={flux: upwind()}),
+            program=surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=0.01),
+                                    initial={q: data}),
+            layout={box: surface.Uniform(cells=(4, 4, 4))},
+        ).elaborated
+        plan = pops.resolve(pops.validate(case.case), layout=case.layout)
+        return plan.layout_plan.layouts[0].native_spatial_layout
+
+    with pytest.raises(ValueError, match="must preserve the ordinary translation axes"):
+        resolved(mixed=True)
+    layout = resolved(mixed=False)
+    assert layout is not None
+    assert layout.shape == (4, 4, 4) and layout.periodicity == (False, False, True)
+    assert len(layout.identifications) == 3
+
+
+def test_named_flux_on_the_identified_finite_volume_rate_is_refused():
+    case, mesh, _ = build_g09_quarter_euler(named=True)
+    with pytest.raises(LoweringRejection) as caught:
+        pops.resolve(pops.validate(case), layout=mesh)
+    assert caught.value.gate == "numerical_method_realization_mismatch"
 
 
 def test_quarter_euler_consumes_density_and_both_oriented_moments():

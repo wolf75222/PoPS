@@ -148,6 +148,33 @@ TEST(test_fill_boundary, polar_families_and_scalars_use_the_same_composed_ghost_
   }
 }
 
+TEST(test_fill_boundary, identified_crossings_preserve_the_translation_axes) {
+  const auto domain = cube<3>(0, 3);
+  const auto layout = BoxArray<3>::from_domain(domain, Extent<3>{4, 4, 2});
+  const auto distribution = Distribution<3>::replicated(layout, one_rank_space<3>());
+  HostMultiFab<3> fields(layout, distribution, Index<3>{}, 1, Extent<3>{2, 2, 2});
+  fill_valid_encoded(fields, Real{-777});
+  const auto before = snapshot(fields);
+  EXPECT_THROW(BoundaryTopology<3>::uniform_identifications(
+                   {false, false, true}, {{0, 1, {0, 2, 1}, {1, 1, 1}, {4, 0, 1}},
+                                          {2, 2, {0, 1, 2}, {1, -1, 1}, {0, -1, 0}},
+                                          {3, 3, {0, 1, 2}, {1, -1, 1}, {0, 7, 0}}}),
+               std::invalid_argument);
+  EXPECT_EQ(snapshot(fields), before);
+
+  const auto topology = BoundaryTopology<3>::uniform_identifications(
+      {false, false, true}, {{0, 1, {0, 1, 2}, {1, 1, 1}, {4, 0, 1}},
+                             {2, 2, {0, 1, 2}, {1, -1, 1}, {0, -1, 0}},
+                             {3, 3, {0, 1, 2}, {1, -1, 1}, {0, 7, 0}}});
+  const VariableSet variables{VariableKind::Conservative, {"q"}, 1, {VariableRole::Scalar}};
+  const auto schedule =
+      prepare_halo_schedule(fields, domain, topology, HaloLayoutCoverage::full_domain,
+                            halo_budget<3>(layout.size(), 256), &variables);
+  fill_boundary(fields, schedule);
+  EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<3>{4, -1, 0}), encoded_value(Index<3>{0, 0, 3}));
+  EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<3>{5, -2, -1}), encoded_value(Index<3>{1, 1, 2}));
+}
+
 TEST(test_fill_boundary, remote_schedule_refuses_before_local_mutation) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
   const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{2});

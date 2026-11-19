@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.codegen._static_geometry_consumers import STATIC_GEOMETRY_PROGRAM_OPS
+from pops.codegen.program_emit_kernels import _named_fluxes
 from pops.codegen.program_lowerability import all_ops
 from pops.time._step.strategy import FixedDt
 
@@ -43,5 +44,6 @@ def validate_identified_halo_consumers(plan: Any) -> None:
         if value.op not in STATIC_GEOMETRY_PROGRAM_OPS or (value.op != "rhs" and spatial_inputs):
             raise NotImplementedError(
                 "G09 I1 identified halos have no qualified %s Program consumer" % value.op)
-        if value.op == "rhs" and (value.attrs.get("named_fluxes") or value.attrs.get("sources")):
+        if value.op == "rhs" and (_named_fluxes(value) is not None or value.attrs.get("flux_handles")
+                                  or value.attrs.get("sources")):
             raise NotImplementedError("G09 I1 identified halos require one default transport route")

@@ -115,7 +115,7 @@ std::vector<ExteriorPiece<Dim>> split_exterior(const Box<Dim>& box, const Box<Di
 template <int Dim>
 std::vector<Image<Dim>> resolve(const Box<Dim>& destination, const Box<Dim>& domain,
                                 const std::array<Map<Dim>, 2 * Dim>& crossings,
-                                const Map<Dim>& read_from_destination, int crossings_used,
+                                const Map<Dim>& read_from_destination, int crossings_left,
                                 std::size_t& work) {
   if (work == 0)
     throw std::length_error("identified halo affine image budget exceeded");
@@ -128,18 +128,15 @@ std::vector<Image<Dim>> resolve(const Box<Dim>& destination, const Box<Dim>& dom
       result.push_back({region, read_from_destination});
       continue;
     }
-    // At depth no greater than the corresponding domain extent, a valid chain can use at
-    // most one crossing and one tangential wrap per axis. Permit one extra wrap per axis
-    // during checking, then refuse a cycle or an inaccessible image before any publication.
-    if (crossings_used == 3 * Dim)
-      throw std::invalid_argument("identified halo corner chain cannot reach an owned cell");
+    if (crossings_left == 0)
+      throw std::logic_error("identified halo corner violated the qualified crossing bound");
     auto selected = resolve<Dim>(region, domain, crossings,
                                  read_from_destination.compose(crossings[piece.faces[0]]),
-                                 crossings_used + 1, work);
+                                 crossings_left - 1, work);
     for (int alternative = 1; alternative < piece.count; ++alternative) {
       auto other = resolve<Dim>(region, domain, crossings,
                                 read_from_destination.compose(crossings[piece.faces[alternative]]),
-                                crossings_used + 1, work);
+                                crossings_left - 1, work);
       for (const auto& a : selected)
         for (const auto& b : other)
           if (!a.destination.intersect(b.destination).empty() &&

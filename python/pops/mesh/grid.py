@@ -279,6 +279,10 @@ class CartesianGrid:
             for j, k in enumerate(orientation.permutation):
                 if self.cells[j] != self.cells[k] or width[j] != width[k]:
                     raise ValueError("identified axes require equal extents and spacing at axis %d" % k)
+                if (j in flags) != (k in flags):
+                    raise ValueError(
+                        "G09 I1 identification must preserve the ordinary translation axes; "
+                        "a mixed tangent needs a normalized corner proof")
                 sign = orientation.signs[j]
                 if j == source.axis:
                     interior = self.cells[j] - 1 if source.outward_sign > 0 else 0

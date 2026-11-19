@@ -451,14 +451,22 @@ class HaloSchedule {
                                     std::to_string(axis));
     halo_schedule_detail::ComponentGatherTable<Dim> component_gathers(*field_roles);
     const auto crossings = identified_halo_detail::prepare_crossings(topology_, domain_);
+    int translations = 0;
+    for (int axis = 0; axis < Dim; ++axis)
+      translations += topology_.is_periodic({axis, BoundarySide::lower});
+    // Each identified crossing removes a nontranslated exterior axis. Its signed tangential
+    // permutation preserves both families of axes, and its shifts on translation axes are each
+    // shorter than one tile. With depths at most one tile, each coordinate can start one tile
+    // outside and every identified crossing can add at most one wrap per translation axis.
+    const int crossing_bound = Dim + translations * (Dim - translations);
     std::size_t intersections = 0;
     std::vector<job_type> jobs;
     for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
       auto work = budget.periodic_images;
       const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
       for (const auto& region : halo_schedule_detail::subtract(grown, layout_[destination])) {
-        for (const auto& image :
-             identified_halo_detail::resolve<Dim>(region, domain_, crossings, {}, 0, work)) {
+        for (const auto& image : identified_halo_detail::resolve<Dim>(region, domain_, crossings,
+                                                                      {}, crossing_bound, work)) {
           const auto& gather = image.read_from_destination;
           const auto inverse = gather.inverse();
           const auto source_image = gather.apply(image.destination);

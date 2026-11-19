@@ -38,6 +38,26 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
                                const BoundaryTopology<Dim>& topology) {
   const std::size_t boxes = field.layout().size();
   const std::size_t pairs = checked_product(boxes, boxes, "Program scalar halo pair overflow");
+  const std::size_t peers =
+      checked_product(boxes, std::size_t{2}, "Program scalar halo peer overflow");
+  if (topology.has_identifications()) {
+    // Qualified corner paths have a geometric depth bound. Count storage by the actual
+    // destination halo: every published job covers a nonempty disjoint part of it.
+    constexpr std::size_t representable = std::numeric_limits<std::size_t>::max();
+    std::size_t ghosts = 0;
+    for (const auto& box : field.layout().boxes()) {
+      const auto grown = halo_schedule_detail::grow(box, field.ghosts());
+      const std::int64_t slots = grown.numPts() - box.numPts();
+      if (slots < 0 || static_cast<std::uint64_t>(slots) > representable)
+        throw std::length_error("Program identified halo slot count exceeds size_t");
+      halo_schedule_detail::checked_add(ghosts, static_cast<std::size_t>(slots), representable,
+                                        "Program identified halo slot sum exceeds size_t");
+    }
+    const std::size_t elements = checked_product(ghosts, static_cast<std::size_t>(field.ncomp()),
+                                                 "Program identified halo element overflow");
+    return {{boxes, pairs}, representable, ghosts,   representable,
+            peers,          elements,      elements, elements};
+  }
   std::size_t images = 1;
   for (int axis = 0; axis < Dim; ++axis) {
     std::size_t count = 1;
@@ -51,9 +71,6 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
     }
     images = checked_product(images, count, "Program scalar halo image product overflow");
   }
-  // Oriented corner proof visits intermediate affine images as well as publishable ones.
-  if (topology.has_identifications())
-    images = 512 * Dim;
   const std::size_t work = checked_product(pairs, images, "Program scalar halo work overflow");
   const std::size_t jobs =
       checked_product(work, static_cast<std::size_t>(2 * Dim), "Program scalar halo job overflow");
@@ -64,14 +81,7 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
       checked_product(jobs, static_cast<std::size_t>(signed_cells),
                       "Program scalar halo element overflow"),
       static_cast<std::size_t>(field.ncomp()), "Program scalar halo component overflow");
-  return {{boxes, pairs},
-          work,
-          jobs,
-          images,
-          checked_product(boxes, std::size_t{2}, "Program scalar halo peer overflow"),
-          elements,
-          elements,
-          elements};
+  return {{boxes, pairs}, work, jobs, images, peers, elements, elements, elements};
 }
 
 template <int Dim>

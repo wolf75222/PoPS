@@ -123,6 +123,11 @@ class BoundaryTopology {
     BoundaryTopology result{periodic_axes};
     for (const auto& identification : identifications) {
       identification.validate(true);
+      for (int axis = 0; axis < Dim; ++axis)
+        if (periodic_axes[axis] != periodic_axes[identification.permutation[axis]])
+          throw std::invalid_argument(
+              "G09 I1 identification must preserve the ordinary translation axes; "
+              "a mixed tangent needs a normalized corner proof");
       const int source = identification.source_face;
       const int target = identification.target_face;
       if (result.faces_[source].kind != BoundaryFaceKind::physical ||
