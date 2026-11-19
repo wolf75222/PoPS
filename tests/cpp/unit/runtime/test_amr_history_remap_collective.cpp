@@ -283,11 +283,23 @@ TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) 
   restored.fill_history(pops::Real(80));
   restored.regrid(false);
   restored.regrid(true);
-  for (int level = 0; level < 2; ++level)
-    for (int slot = 0; slot < 2; ++slot)
+  restored.system.begin_restart_transaction();
+  for (int level = 0; level < 2; ++level) {
+    std::vector<double> duration;
+    for (int slot = 0; slot < 2; ++slot) {
       restored.system.restore_history(kHistory, level, slot,
                                       fixture.system.history_global(kHistory, level, slot));
+      duration.push_back(fixture.system.history_slot_dt(kHistory, level, slot));
+    }
+    restored.system.restore_history_provenance(kHistory, level, duration,
+                                               fixture.system.history_initialized(kHistory, level),
+                                               fixture.system.history_fill_count(kHistory, level));
+    restored.system.restore_history_sample_identity(
+        kHistory, level, fixture.system.history_sample_identity(kHistory, level));
+  }
   ASSERT_NO_THROW(restored.system.restore_checkpoint_accepted_state(bytes));
+  ASSERT_NO_THROW(restored.system.commit_restart_transaction());
+  restored.system.finalize_restart_transaction();
   restored.expect_declared_storage();
   EXPECT_EQ(restored.system.program_accepted_state(), bytes);
   for (int level = 0; level < 2; ++level)
