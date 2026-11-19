@@ -24,7 +24,7 @@ namespace detail {
 // backend distinction in one narrow layer rather than leaking it into the recurrence arithmetic.
 namespace scaled_scalar_math {
 
-POPS_HD [[nodiscard]] inline bool isfinite(Real value) {
+[[nodiscard]] POPS_HD inline bool isfinite(Real value) {
 #if defined(POPS_HAS_KOKKOS)
   return Kokkos::isfinite(value);
 #else
@@ -32,7 +32,7 @@ POPS_HD [[nodiscard]] inline bool isfinite(Real value) {
 #endif
 }
 
-POPS_HD [[nodiscard]] inline Real frexp(Real value, int* exponent) {
+[[nodiscard]] POPS_HD inline Real frexp(Real value, int* exponent) {
 #if defined(KOKKOS_ENABLE_SYCL)
   return sycl::frexp(value, exponent);
 #else
@@ -40,7 +40,7 @@ POPS_HD [[nodiscard]] inline Real frexp(Real value, int* exponent) {
 #endif
 }
 
-POPS_HD [[nodiscard]] inline Real ldexp(Real value, int exponent) {
+[[nodiscard]] POPS_HD inline Real ldexp(Real value, int exponent) {
 #if defined(KOKKOS_ENABLE_SYCL)
   return sycl::ldexp(value, exponent);
 #else
@@ -60,7 +60,7 @@ enum class ScaledScalarState : std::uint8_t { kZero, kFinite, kNonFinite };
 class ScaledScalar {
  public:
   /// Construct a normalized representation of a finite `Real`, or preserve its exceptional state.
-  POPS_HD [[nodiscard]] static ScaledScalar from(Real value) {
+  [[nodiscard]] POPS_HD static ScaledScalar from(Real value) {
     if (value == Real(0))
       return zero();
     if (!finite(value))
@@ -72,17 +72,17 @@ class ScaledScalar {
   }
 
   /// Exact zero, represented independently of a finite mantissa/exponent pair.
-  POPS_HD [[nodiscard]] static constexpr ScaledScalar zero() {
+  [[nodiscard]] POPS_HD static constexpr ScaledScalar zero() {
     return ScaledScalar{ScaledScalarState::kZero, Real(0), 0};
   }
 
   /// Invalid or non-finite coefficient. It must be handled before field application.
-  POPS_HD [[nodiscard]] static constexpr ScaledScalar nonfinite() {
+  [[nodiscard]] POPS_HD static constexpr ScaledScalar nonfinite() {
     return ScaledScalar{ScaledScalarState::kNonFinite, Real(0), 0};
   }
 
   /// Multiply without first materializing the potentially overflowing coefficient.
-  POPS_HD [[nodiscard]] static ScaledScalar product(const ScaledScalar& left,
+  [[nodiscard]] POPS_HD static ScaledScalar product(const ScaledScalar& left,
                                                     const ScaledScalar& right) {
     if (!left.is_finite() || !right.is_finite())
       return nonfinite();
@@ -96,7 +96,7 @@ class ScaledScalar {
   }
 
   /// Divide without first materializing the potentially overflowing quotient.
-  POPS_HD [[nodiscard]] static ScaledScalar quotient(const ScaledScalar& numerator,
+  [[nodiscard]] POPS_HD static ScaledScalar quotient(const ScaledScalar& numerator,
                                                      const ScaledScalar& denominator) {
     if (!numerator.is_finite() || !denominator.is_finite() || denominator.is_zero())
       return nonfinite();
@@ -116,7 +116,7 @@ class ScaledScalar {
   /// away only after it is below the precision of the larger normalized mantissa; this is the same
   /// binary rounding decision a correctly staged `Real` addition would make, without an exponent
   /// range limit.  Exact cancellation remains an exact scaled zero.
-  POPS_HD [[nodiscard]] static ScaledScalar sum(const ScaledScalar& left,
+  [[nodiscard]] POPS_HD static ScaledScalar sum(const ScaledScalar& left,
                                                 const ScaledScalar& right) {
     if (!left.is_finite() || !right.is_finite())
       return nonfinite();
@@ -147,12 +147,12 @@ class ScaledScalar {
     return normalize(larger->mantissa_ + aligned_smaller, larger->exponent_);
   }
 
-  POPS_HD [[nodiscard]] static ScaledScalar difference(const ScaledScalar& left,
+  [[nodiscard]] POPS_HD static ScaledScalar difference(const ScaledScalar& left,
                                                        const ScaledScalar& right) {
     return sum(left, negated(right));
   }
 
-  POPS_HD [[nodiscard]] static ScaledScalar negated(const ScaledScalar& value) {
+  [[nodiscard]] POPS_HD static ScaledScalar negated(const ScaledScalar& value) {
     if (!value.is_finite())
       return nonfinite();
     if (value.is_zero())
@@ -163,7 +163,7 @@ class ScaledScalar {
   /// Form `left_coefficient * left_value + right_coefficient * right_value` in one scaled
   /// expression.  In particular, a pair of individually non-materializable products may cancel to
   /// a finite `Real`; only an unrepresentable final result is rejected.
-  POPS_HD [[nodiscard]] static bool try_sum_products(const ScaledScalar& left_coefficient,
+  [[nodiscard]] POPS_HD static bool try_sum_products(const ScaledScalar& left_coefficient,
                                                      Real left_value,
                                                      const ScaledScalar& right_coefficient,
                                                      Real right_value, Real& result) {
@@ -174,7 +174,7 @@ class ScaledScalar {
 
   /// Three-term variant used by the full BiCGStab iterate update.  Keeping the cancellation in one
   /// kernel prevents an overflowing intermediate field value from poisoning a finite final cell.
-  POPS_HD [[nodiscard]] static bool try_sum_products(const ScaledScalar& first_coefficient,
+  [[nodiscard]] POPS_HD static bool try_sum_products(const ScaledScalar& first_coefficient,
                                                      Real first_value,
                                                      const ScaledScalar& second_coefficient,
                                                      Real second_value,
@@ -187,7 +187,7 @@ class ScaledScalar {
   }
 
   /// Compare magnitudes without converting an extreme coefficient to `Real`.
-  POPS_HD [[nodiscard]] static bool abs_less_equal(const ScaledScalar& left,
+  [[nodiscard]] POPS_HD static bool abs_less_equal(const ScaledScalar& left,
                                                    const ScaledScalar& right) {
     if (!left.is_finite() || !right.is_finite())
       return false;
@@ -208,7 +208,7 @@ class ScaledScalar {
   /// the mathematical result cannot be represented as a non-zero finite `Real`.  Finite results
   /// are reconstructed in bounded base-two stages, preserving cellwise values such as
   /// `(3.2e199 * 1e109) * 0.03125` even though the parenthesized coefficient overflows `Real`.
-  POPS_HD [[nodiscard]] bool try_apply(Real value, Real& result) const {
+  [[nodiscard]] POPS_HD bool try_apply(Real value, Real& result) const {
     result = quiet_nan();
     if (!is_finite() || !finite(value))
       return false;
@@ -226,7 +226,7 @@ class ScaledScalar {
   }
 
   /// Checked conversion for callers that genuinely need a scalar `Real`.
-  POPS_HD [[nodiscard]] bool try_materialize(Real& result) const {
+  [[nodiscard]] POPS_HD bool try_materialize(Real& result) const {
     result = quiet_nan();
     if (!is_finite())
       return false;
@@ -237,18 +237,18 @@ class ScaledScalar {
     return materialize(mantissa_, exponent_, result);
   }
 
-  POPS_HD [[nodiscard]] constexpr ScaledScalarState state() const { return state_; }
-  POPS_HD [[nodiscard]] constexpr bool is_zero() const {
+  [[nodiscard]] POPS_HD constexpr ScaledScalarState state() const { return state_; }
+  [[nodiscard]] POPS_HD constexpr bool is_zero() const {
     return state_ == ScaledScalarState::kZero;
   }
-  POPS_HD [[nodiscard]] constexpr bool is_finite() const {
+  [[nodiscard]] POPS_HD constexpr bool is_finite() const {
     return state_ == ScaledScalarState::kZero || state_ == ScaledScalarState::kFinite;
   }
-  POPS_HD [[nodiscard]] constexpr bool is_nonfinite() const {
+  [[nodiscard]] POPS_HD constexpr bool is_nonfinite() const {
     return state_ == ScaledScalarState::kNonFinite;
   }
-  POPS_HD [[nodiscard]] constexpr Real mantissa() const { return mantissa_; }
-  POPS_HD [[nodiscard]] constexpr std::int64_t exponent() const { return exponent_; }
+  [[nodiscard]] POPS_HD constexpr Real mantissa() const { return mantissa_; }
+  [[nodiscard]] POPS_HD constexpr std::int64_t exponent() const { return exponent_; }
 
  private:
   static constexpr int kExponentStage = 512;
@@ -261,13 +261,13 @@ class ScaledScalar {
   constexpr ScaledScalar(ScaledScalarState state, Real mantissa, std::int64_t exponent)
       : state_(state), mantissa_(mantissa), exponent_(exponent) {}
 
-  POPS_HD [[nodiscard]] static bool finite(Real value) {
+  [[nodiscard]] POPS_HD static bool finite(Real value) {
     return scaled_scalar_math::isfinite(value);
   }
 
-  POPS_HD [[nodiscard]] static Real quiet_nan() { return std::numeric_limits<Real>::quiet_NaN(); }
+  [[nodiscard]] POPS_HD static Real quiet_nan() { return std::numeric_limits<Real>::quiet_NaN(); }
 
-  POPS_HD [[nodiscard]] static bool combine_exponents(std::int64_t left, std::int64_t right,
+  [[nodiscard]] POPS_HD static bool combine_exponents(std::int64_t left, std::int64_t right,
                                                       std::int64_t& result) {
     if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
         (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
@@ -276,14 +276,14 @@ class ScaledScalar {
     return true;
   }
 
-  POPS_HD [[nodiscard]] static bool negate_exponent(std::int64_t value, std::int64_t& result) {
+  [[nodiscard]] POPS_HD static bool negate_exponent(std::int64_t value, std::int64_t& result) {
     if (value == std::numeric_limits<std::int64_t>::min())
       return false;
     result = -value;
     return true;
   }
 
-  POPS_HD [[nodiscard]] static ScaledScalar normalize(Real mantissa, std::int64_t exponent) {
+  [[nodiscard]] POPS_HD static ScaledScalar normalize(Real mantissa, std::int64_t exponent) {
     if (!finite(mantissa))
       return nonfinite();
     if (mantissa == Real(0))
@@ -296,7 +296,7 @@ class ScaledScalar {
     return ScaledScalar{ScaledScalarState::kFinite, mantissa, exponent};
   }
 
-  POPS_HD [[nodiscard]] static bool materialize(Real mantissa, std::int64_t exponent,
+  [[nodiscard]] POPS_HD static bool materialize(Real mantissa, std::int64_t exponent,
                                                 Real& result) {
     result = quiet_nan();
     if (!finite(mantissa) || mantissa == Real(0))
