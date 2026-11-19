@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
@@ -387,15 +387,42 @@ class _Projection:
         self.field_slots = dict(presentation.field_slots)
         self.field_coverage = dict(presentation.field_coverage)
 
-    def walk(self, value: Any, path: tuple[Any, ...], block: str | None = None, *,
-             expression: bool = False) -> Any:
+    def walk(self, value: Any, path: tuple[Any, ...]) -> Any:
+        # Resume one parent entry only after its child has been projected. The same
+        # node can appear in several positions with different projection rules.
+        identity = id(value)
+        active = {identity}
+        stack = [(identity, self._visit(value, path, None, False))]
+        result = None
+        while stack:
+            identity, visit = stack[-1]
+            try:
+                child, child_path, block, expression = visit.send(result)
+            except StopIteration as completed:
+                stack.pop()
+                active.remove(identity)
+                result = completed.value
+                continue
+            child_identity = id(child)
+            if child_identity in active:
+                raise PresentationProjectionError("projection contains a cycle at %r" % (child_path,))
+            active.add(child_identity)
+            stack.append((child_identity, self._visit(child, child_path, block, expression)))
+            result = None
+        return result
+
+    def _visit(
+        self, value: Any, path: tuple[Any, ...], block: str | None, expression: bool,
+    ) -> Generator[tuple[Any, tuple[Any, ...], str | None, bool], Any, Any]:
         if any(_matches(pattern, path) for pattern in self.derived):
             return None
         if isinstance(value, dict):
-            return self._mapping(value, path, block, expression=expression)
+            return (yield from self._mapping(value, path, block, expression=expression))
         if isinstance(value, (list, tuple)):
-            items = [self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
-                     for item in value]
+            items = []
+            item_path = path + (_LIST_ITEM,)
+            for item in value:
+                items.append((yield item, item_path, block, expression))
             # These two forms encode expression_handle_key and ValueExpr in the Expr DAG.
             if expression and len(value) == 2 and value[0] in ("qualified", "handle_value") \
                     and isinstance(value[1], str):
@@ -404,8 +431,11 @@ class _Projection:
                 items.sort(key=_order_key)
             return items if isinstance(value, list) else tuple(items)
         if isinstance(value, (set, frozenset)):
-            return frozenset(self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
-                             for item in value)
+            projected = set()
+            item_path = path + (_LIST_ITEM,)
+            for item in value:
+                projected.add((yield item, item_path, block, expression))
+            return frozenset(projected)
         if isinstance(value, str):
             if path and any(_matches(pattern, path)
                             for pattern in self.references.get(
@@ -444,8 +474,9 @@ class _Projection:
             return self.map.block_model_label(block)
         raise ValueError("unknown presentation kind %r" % (kind,))
 
-    def _mapping(self, value: dict[str, Any], path: tuple[Any, ...], block: str | None, *,
-                 expression: bool) -> dict[str, Any]:
+    def _mapping(
+        self, value: dict[str, Any], path: tuple[Any, ...], block: str | None, *, expression: bool,
+    ) -> Generator[tuple[Any, tuple[Any, ...], str | None, bool], Any, dict[str, Any]]:
         if set(value) == _OWNER_RECORD_KEYS and isinstance(value.get("nodes"), list):
             return self.map.project_owner_record(value)
         if value.keys() == _COMPONENT_KEY_FIELDS:
@@ -478,8 +509,7 @@ class _Projection:
                 derived = self.map.derived_local_id(value["qualified_id"])
                 result[projected_key] = item if derived is None else derived
             else:
-                result[projected_key] = self.walk(
-                    item, item_path, key if keyed else block, expression=expression)
+                result[projected_key] = yield item, item_path, key if keyed else block, expression
         if value.get("op") == "state" and isinstance(value.get("block"), dict) \
                 and value.get("name") == value["block"].get("local_id") \
                 and isinstance(value.get("name"), str):
