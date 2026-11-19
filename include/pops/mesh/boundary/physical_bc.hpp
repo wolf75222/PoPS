@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace pops {
@@ -192,11 +193,19 @@ inline void validate_axis_sample(std::int64_t index, int lo, int hi, PhysicalBou
   }
 }
 
+struct AxisBoundaryFaces {
+  PhysicalBoundaryFace lower;
+  PhysicalBoundaryFace upper;
+};
+
+static_assert(std::is_trivially_copyable_v<AxisBoundaryFaces>);
+static_assert(sizeof(AxisBoundaryFaces) == 2 * sizeof(PhysicalBoundaryFace));
+
 template <int Dim>
 struct ApplyPhysicalRegion {
   FieldView<Real, Dim> values{};
   Box<Dim> domain{};
-  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  std::array<AxisBoundaryFaces, Dim> faces{};
   RealVector<Dim> spacing{};
   BoundaryRegionPlan<Dim> plan{};
   int first_component = 0;
@@ -212,12 +221,9 @@ struct ApplyPhysicalRegion {
       if (op.kind != BoundaryFaceKind::physical)
         continue;
       const int axis = op.face.axis;
-      const PhysicalBoundaryFace low =
-          faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::lower}.ordinal())];
-      const PhysicalBoundaryFace high =
-          faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::upper}.ordinal())];
+      const AxisBoundaryFaces& axis_faces = faces[static_cast<std::size_t>(axis)];
       const AffineSample sample = sample_axis(destination[axis], domain.lo[axis], domain.hi[axis],
-                                              low, high, spacing[axis]);
+                                              axis_faces.lower, axis_faces.upper, spacing[axis]);
       source[axis] = sample.source;
       offset = sample.scale * offset + sample.offset;
       scale *= sample.scale;
@@ -240,6 +246,16 @@ class PreparedPhysicalBoundary {
     if (conditions_.topology() != schedule_.topology())
       throw std::invalid_argument(
           "prepared physical boundary topology disagrees with its region schedule");
+    for (const auto& plan : schedule_.entries()) {
+      if (plan.operation_count > plan.operations.size())
+        throw std::invalid_argument("prepared physical boundary plan has too many operations");
+      for (std::size_t operation = 0; operation < plan.operation_count; ++operation) {
+        const int axis = plan.operations[operation].face.axis;
+        if (axis < 0 || axis >= Dim)
+          throw std::invalid_argument(
+              "prepared physical boundary plan axis is outside the domain rank");
+      }
+    }
     validate_transforms_();
   }
 
@@ -304,12 +320,10 @@ void fill_physical_boundary(MultiFab<Dim, MemorySpace>& fields,
         "physical boundary component range must be non-empty and inside the target field");
 
   const auto& conditions = prepared.conditions();
-  std::array<PhysicalBoundaryFace, static_cast<std::size_t>(2 * Dim)> faces{};
+  std::array<physical_boundary_detail::AxisBoundaryFaces, Dim> faces{};
   for (int axis = 0; axis < Dim; ++axis) {
-    faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::lower}.ordinal())] =
-        conditions.at(Face<Dim>{axis, BoundarySide::lower});
-    faces[static_cast<std::size_t>(Face<Dim>{axis, BoundarySide::upper}.ordinal())] =
-        conditions.at(Face<Dim>{axis, BoundarySide::upper});
+    faces[static_cast<std::size_t>(axis)] = {conditions.at(Face<Dim>{axis, BoundarySide::lower}),
+                                             conditions.at(Face<Dim>{axis, BoundarySide::upper})};
   }
 
   for (std::size_t local = 0; local < fields.local_size(); ++local) {
