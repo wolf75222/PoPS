@@ -3161,7 +3161,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 2,
-          "estimated_seconds": 5100,
+          "estimated_seconds": 920,
           "ci_ranks": [
             1,
             2
@@ -4030,7 +4030,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 1940,
+          "estimated_seconds": 1860,
           "ci_ranks": [
             1,
             2
@@ -6745,7 +6745,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1240,
+    "estimated_count": 1241,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6964,6 +6964,7 @@
       "tests/python/integration/runtime/test_dsl_runtime_params.py",
       "tests/python/integration/runtime/test_dt_bound_capture_independent_runtime.py",
       "tests/python/integration/runtime/test_exact_analytic_initial.py",
+      "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py",
       "tests/python/integration/runtime/test_extension_closure_v14_native.py",
       "tests/python/integration/runtime/test_external_grid_frontier_runtime.py",
       "tests/python/integration/runtime/test_faceflux_pilot_n7a_native.py",
@@ -8188,7 +8189,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1307,
+    "total_files": 1308,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9851,6 +9852,576 @@
         "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": "057742116d5cc798364ea6b75bcb08545cdda8a89976e922de0b1f0f5fed735f",
         "tests/python/unit/surface/test_n15_cell_load.py": "315191ebf49597681d62bf0d4b39691a932ace16d5a69094208239447c52edbe"
       }
+    },
+    "b03_20261119_strict_shard_budget": {
+      "basis": "Maximum observed for the same native profile and exercised route, plus ten percent rounded up to the next ten seconds. Complete mixed-shard walls are conservative bounds. Diffusion retains historical node phase sums as lower bounds and records separately the cold receiver wall. Partitioned file weights sum the node allowances; the runner expands the files before packing. Earlier catalogue entries remain historical.",
+      "actions_base_receipts": [
+        43318819535,
+        43421613714,
+        43469038506
+      ],
+      "stock_m1_cold_job": 831143,
+      "stock_m1_cold_wall_seconds": 1684.83,
+      "stock_m1_largest_historical_final_node_phase_seconds": 2399.295,
+      "superseded_api_v02_estimated_seconds": {
+        "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
+      },
+      "observed_weights": {
+        "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": {
+          "weight_seconds": 730,
+          "selected_max_seconds": 657.0,
+          "observations": [
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 2,
+              "scope": "isolated",
+              "wall_seconds": 428
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 2,
+              "scope": "isolated",
+              "wall_seconds": 589
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 2,
+              "scope": "isolated",
+              "wall_seconds": 657
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[False]": {
+          "weight_seconds": 500,
+          "selected_max_seconds": 450.0,
+          "observations": [
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 3,
+              "scope": "isolated",
+              "wall_seconds": 336
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 3,
+              "scope": "isolated",
+              "wall_seconds": 450
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 3,
+              "scope": "isolated",
+              "wall_seconds": 271
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[True]": {
+          "weight_seconds": 420,
+          "selected_max_seconds": 374.0,
+          "observations": [
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 4,
+              "scope": "isolated",
+              "wall_seconds": 344
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 4,
+              "scope": "isolated",
+              "wall_seconds": 374
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 4,
+              "scope": "isolated",
+              "wall_seconds": 316
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": {
+          "weight_seconds": 1860,
+          "selected_max_seconds": 1684.0,
+          "observations": [
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 6,
+              "scope": "isolated",
+              "wall_seconds": 1585
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 6,
+              "scope": "upper bound from complete mixed shard",
+              "wall_seconds": 1684
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 6,
+              "scope": "upper bound from complete mixed shard",
+              "wall_seconds": 1458
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_m19_product_support_runtime.py": {
+          "weight_seconds": 1790,
+          "selected_max_seconds": 1623.0,
+          "observations": [
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 7,
+              "scope": "isolated",
+              "wall_seconds": 1363
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 7,
+              "scope": "upper bound from complete mixed shard",
+              "wall_seconds": 1623
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 7,
+              "scope": "upper bound from complete mixed shard",
+              "wall_seconds": 932
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_amr_physical_maps.py": {
+          "weight_seconds": 1390,
+          "selected_max_seconds": 1263.0,
+          "observations": [
+            {
+              "job": "831100",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 14,
+              "wall_seconds": 1194.41,
+              "pytest_phase_seconds": 1188.9777955684112,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "source": "current regions-only path, native Kokkos Serial Dim2 container, after_lot_3c2b_local",
+              "wall_seconds": 1263
+            }
+          ]
+        },
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_completes_typed_phase_pipeline": {
+          "weight_seconds": 190,
+          "selected_max_seconds": 164.63,
+          "observations": [
+            {
+              "job": "831165",
+              "source_commit": "509fba59319c47b9b137495e89df0dd42667777f",
+              "source_tree": "37493adc63c6b5812cf454c8c5855445f38f758e",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 164.63,
+              "pytest_phase_seconds": 157.15618028398603,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            }
+          ]
+        },
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart": {
+          "weight_seconds": 1070,
+          "selected_max_seconds": 972.66,
+          "observations": [
+            {
+              "job": "831166",
+              "source_commit": "509fba59319c47b9b137495e89df0dd42667777f",
+              "source_tree": "37493adc63c6b5812cf454c8c5855445f38f758e",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 972.66,
+              "pytest_phase_seconds": 967.8694652820705,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            }
+          ]
+        },
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_final_preset_matches_explicit_continuation": {
+          "weight_seconds": 1370,
+          "selected_max_seconds": 1239.19,
+          "observations": [
+            {
+              "job": "831167",
+              "source_commit": "509fba59319c47b9b137495e89df0dd42667777f",
+              "source_tree": "37493adc63c6b5812cf454c8c5855445f38f758e",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 1239.19,
+              "pytest_phase_seconds": 1234.3910079720663,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py": {
+          "weight_seconds": 340,
+          "selected_max_seconds": 301.26,
+          "observations": [
+            {
+              "job": "831185",
+              "source_commit": "ccaef9fc25c25978634e6500ffa7906fff87fa8b",
+              "source_tree": "6a48679b1bcbe96e3fcf118b1b31c5836cad31eb",
+              "serial_dimension": 1,
+              "passed": 4,
+              "wall_seconds": 301.26,
+              "pytest_phase_seconds": 300.12448333611246,
+              "native_extension_sha256": "2bd2685fb8e36797019367a0fe7852ff4e19a550b251f606b66d441fe13ae013"
+            },
+            {
+              "source": "831098; same four oracles on genuine Dim1 at 53a06f82",
+              "wall_seconds": 300.59
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_exact_analytic_initial.py": {
+          "weight_seconds": 1320,
+          "selected_max_seconds": 1195.0,
+          "observations": [
+            {
+              "job": "831186",
+              "source_commit": "ccaef9fc25c25978634e6500ffa7906fff87fa8b",
+              "source_tree": "6a48679b1bcbe96e3fcf118b1b31c5836cad31eb",
+              "serial_dimension": 2,
+              "passed": 9,
+              "wall_seconds": 1034.34,
+              "pytest_phase_seconds": 1028.9718345530564,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43469038506,
+              "source_commit": "c5fb26fa6819c42e528d9142fc95402f9990936a",
+              "shard": 5,
+              "scope": "isolated with dimension-specific skips",
+              "wall_seconds": 954
+            },
+            {
+              "actions_run": 43421613714,
+              "source_commit": "591a30ab409ef3de667f0a304795886010c95909",
+              "shard": 5,
+              "scope": "isolated with dimension-specific skips",
+              "wall_seconds": 1195
+            },
+            {
+              "actions_run": 43318819535,
+              "source_commit": "1261299b55683538bf6fcccfd170ffc323f883d0",
+              "shard": 5,
+              "scope": "isolated with dimension-specific skips",
+              "wall_seconds": 948
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_physical_diffusion_boundary_authority_is_not_optional": {
+          "weight_seconds": 10,
+          "selected_max_seconds": 5.27,
+          "observations": [
+            {
+              "job": "831175_6",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 5.27,
+              "pytest_phase_seconds": 0.008894501952454448,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 0.003
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 0.004
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 0.003
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[constant]": {
+          "weight_seconds": 150,
+          "selected_max_seconds": 132.782,
+          "observations": [
+            {
+              "job": "831175_0",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 115.16,
+              "pytest_phase_seconds": 109.69625993806403,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 76.237
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 132.782
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 103.476
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[diagonal_linear]": {
+          "weight_seconds": 1050,
+          "selected_max_seconds": 953.906,
+          "observations": [
+            {
+              "job": "831173",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 689.17,
+              "pytest_phase_seconds": 683.7908216828946,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 578.924
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 953.906
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 752.561
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[diagonal_smooth]": {
+          "weight_seconds": 1050,
+          "selected_max_seconds": 946.056,
+          "observations": [
+            {
+              "job": "831174",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 653.28,
+              "pytest_phase_seconds": 647.97972786217,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 574.271
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 946.056
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 752.435
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_nonlinear_gradient_variable": {
+          "weight_seconds": 130,
+          "selected_max_seconds": 111.93,
+          "observations": [
+            {
+              "job": "831175_2",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 103.93,
+              "pytest_phase_seconds": 98.46593197796028,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 66.04
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 111.93
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 84.111
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[euler]": {
+          "weight_seconds": 130,
+          "selected_max_seconds": 114.298,
+          "observations": [
+            {
+              "job": "831175_3",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 104.11,
+              "pytest_phase_seconds": 98.69070431194268,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 68.192
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 114.298
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 85.473
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[ssprk2]": {
+          "weight_seconds": 130,
+          "selected_max_seconds": 114.23,
+          "observations": [
+            {
+              "job": "831175_4",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 104.46,
+              "pytest_phase_seconds": 99.06395668000914,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 68.723
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 114.23
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 84.87
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_combined_stability_and_exact_two_dimensional_weights": {
+          "weight_seconds": 420,
+          "selected_max_seconds": 374.967,
+          "observations": [
+            {
+              "job": "831175_5",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 256.25,
+              "pytest_phase_seconds": 250.90266560285818,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 226.556
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 374.967
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 295.196
+            }
+          ]
+        },
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[variable]": {
+          "weight_seconds": 600,
+          "selected_max_seconds": 545.29,
+          "observations": [
+            {
+              "job": "831175_1",
+              "source_commit": "53a06f8236bd98181826c4970d13e175b08c64f9",
+              "source_tree": "5000efa6dc209102f3a94b77a8bcf646034d3673",
+              "serial_dimension": 2,
+              "passed": 1,
+              "wall_seconds": 405.3,
+              "pytest_phase_seconds": 399.9631038910011,
+              "native_extension_sha256": "6eeecbe18b48a58e71c923cb5a573f32e313864c6c49063eae10ac18135d369b",
+              "wheel_sha256": "6688ac2030eaa1d9e5972fb0d2dbf6aa8734cc004d0b3a7697e99bad30164243"
+            },
+            {
+              "actions_run": 43318819535,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 330.208
+            },
+            {
+              "actions_run": 43421613714,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 545.29
+            },
+            {
+              "actions_run": 43469038506,
+              "scope": "complete node phases, lower bound on wall",
+              "phase_seconds": 445.883
+            }
+          ]
+        }
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -9886,7 +10457,7 @@
   "tests/python/integration/amr/test_public_tag_selection_native.py": 600,
   "tests/python/integration/amr/test_symbolic_path_amr_runtime.py": 600,
   "tests/python/integration/bindings/test_amr_rectangular_array_orientation.py": 0.5,
-  "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 5400.0,
+  "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 2630,
   "tests/python/integration/bindings/test_name_binding_codegen.py": 5,
   "tests/python/integration/bindings/test_name_binding_runtime.py": 125.0,
   "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py": 160.0,
@@ -9936,7 +10507,7 @@
   "tests/python/integration/runtime/test_amr_implicit_diffusion.py": 1165,
   "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 5625,
   "tests/python/integration/runtime/test_amr_local_transform_post_sync.py": 195,
-  "tests/python/integration/runtime/test_amr_physical_maps.py": 1960,
+  "tests/python/integration/runtime/test_amr_physical_maps.py": 1390,
   "tests/python/integration/runtime/test_amr_tensor_diffusion.py": 875.0,
   "tests/python/integration/runtime/test_amr_transport_diffusion.py": 1500.0,
   "tests/python/integration/runtime/test_amr_transport_diffusion_qualification.py": 790,
@@ -9974,7 +10545,7 @@
   "tests/python/integration/runtime/test_api_v02_finite_kokkos_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_flux_correction_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_graph_functions_native.py": 900,
-  "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
+  "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 920,
   "tests/python/integration/runtime/test_api_v02_hall_mhd_ct.py": 650,
   "tests/python/integration/runtime/test_api_v02_history_transfer_native.py": 600,
   "tests/python/integration/runtime/test_api_v02_hyqmom_orders_native.py": 720,
@@ -10053,7 +10624,7 @@
   "tests/python/integration/runtime/test_distributed_derivatives_v14_native.py": 1200,
   "tests/python/integration/runtime/test_dsl_runtime_params.py": 415,
   "tests/python/integration/runtime/test_dt_bound_capture_independent_runtime.py": 600,
-  "tests/python/integration/runtime/test_exact_analytic_initial.py": 2400.0,
+  "tests/python/integration/runtime/test_exact_analytic_initial.py": 1320,
   "tests/python/integration/runtime/test_extension_closure_v14_native.py": 600,
   "tests/python/integration/runtime/test_external_grid_frontier_runtime.py": 600,
   "tests/python/integration/runtime/test_fan_li15_full_eight_step_public_runtime.py": 1470,
@@ -10067,7 +10638,7 @@
   "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 1200,
   "tests/python/integration/runtime/test_finite_m09_adversarial_runtime.py": 600,
   "tests/python/integration/runtime/test_finite_m09_runtime.py": 600,
-  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940,
+  "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1860,
   "tests/python/integration/runtime/test_generic_physical_maps.py": 600.0,
   "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py": 600,
   "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 1200,
@@ -10104,7 +10675,7 @@
   "tests/python/integration/runtime/test_m19_amr_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_bgk_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_freestreaming_runtime.py": 600,
-  "tests/python/integration/runtime/test_m19_product_support_runtime.py": 1900,
+  "tests/python/integration/runtime/test_m19_product_support_runtime.py": 1790,
   "tests/python/integration/runtime/test_m19_thermal_consumed_runtime.py": 600,
   "tests/python/integration/runtime/test_m19_vlasov_poisson_runtime.py": 600,
   "tests/python/integration/runtime/test_m23_hall_fourier_runtime.py": 600,
@@ -10140,8 +10711,8 @@
   "tests/python/integration/runtime/test_public_composite_field.py": 1850,
   "tests/python/integration/runtime/test_public_diffusion_field_late_refusal.py": 600,
   "tests/python/integration/runtime/test_public_diffusion_field_predictor.py": 600,
-  "tests/python/integration/runtime/test_public_diffusion_matrix.py": 3600.0,
-  "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": 3600.0,
+  "tests/python/integration/runtime/test_public_diffusion_matrix.py": 3670,
+  "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": 730,
   "tests/python/integration/runtime/test_public_evolved_original_stage.py": 1620,
   "tests/python/integration/runtime/test_public_evolved_stage_amr.py": 600,
   "tests/python/integration/runtime/test_public_evolved_stage_amr_spatial.py": 600,
@@ -11159,5 +11730,6 @@
   "tests/python/integration/runtime/test_surface_n15_sources_native.py": 300,
   "tests/python/unit/surface/test_n15_sources.py": 60,
   "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 300,
-  "tests/python/unit/surface/test_n15_cell_load.py": 30
+  "tests/python/unit/surface/test_n15_cell_load.py": 30,
+  "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py": 340
 }

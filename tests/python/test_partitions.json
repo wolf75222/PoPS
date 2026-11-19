@@ -266,15 +266,73 @@
       ]
     },
     "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": {
-      "basis": "CI38820819452 SHA47b2 timing artefacts. Completed phases x1.25+30 rounded15; incomplete nonlinear diffusion reserves900, nonlinear gyro2550. No test/assertion/watchdog changed. Exact collections checked.",
+      "basis": "Authenticated cold and historical native receipts in test_durations.json:_meta.b03_20261119_strict_shard_budget. These exact, independently schedulable nodeids are the selection inventory.",
       "nodes": [
         {
           "nodeid": "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[False]",
-          "seconds": 2550
+          "seconds": 500
         },
         {
           "nodeid": "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[True]",
-          "seconds": 2550
+          "seconds": 420
+        }
+      ]
+    },
+    "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": {
+      "basis": "Authenticated cold and historical native receipts in test_durations.json:_meta.b03_20261119_strict_shard_budget. These exact, independently schedulable nodeids are the selection inventory.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_completes_typed_phase_pipeline",
+          "seconds": 190
+        },
+        {
+          "nodeid": "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart",
+          "seconds": 1070
+        },
+        {
+          "nodeid": "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_final_preset_matches_explicit_continuation",
+          "seconds": 1370
+        }
+      ]
+    },
+    "tests/python/integration/runtime/test_public_diffusion_matrix.py": {
+      "basis": "Authenticated cold and historical native receipts in test_durations.json:_meta.b03_20261119_strict_shard_budget. These exact, independently schedulable nodeids are the selection inventory.",
+      "nodes": [
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_physical_diffusion_boundary_authority_is_not_optional",
+          "seconds": 10
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[constant]",
+          "seconds": 150
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[diagonal_linear]",
+          "seconds": 1050
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[diagonal_smooth]",
+          "seconds": 1050
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_nonlinear_gradient_variable",
+          "seconds": 130
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[euler]",
+          "seconds": 130
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_exchange_quadrature[ssprk2]",
+          "seconds": 130
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_combined_stability_and_exact_two_dimensional_weights",
+          "seconds": 420
+        },
+        {
+          "nodeid": "tests/python/integration/runtime/test_public_diffusion_matrix.py::test_full_explicit_spatial_matrix[variable]",
+          "seconds": 600
         }
       ]
     }

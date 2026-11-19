@@ -106,6 +106,8 @@
     "tests/python/integration/runtime/test_distributed_derivatives_v14_native.py": 2,
     "tests/python/integration/runtime/test_distributed_failure_v14_native.py": 2,
     "tests/python/integration/runtime/test_distributed_gc_v14_native.py": 2,
+    "tests/python/integration/runtime/test_exact_analytic_initial.py": 2,
+    "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py": 1,
     "tests/python/integration/runtime/test_extension_closure_v14_native.py": 2,
     "tests/python/integration/runtime/test_finite_bdf2_v14_native.py": 2,
     "tests/python/integration/runtime/test_finite_iteration_ad_v14_native.py": 2,
