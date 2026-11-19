@@ -89,7 +89,7 @@ def _inflow_outflow(parts, value=0.05):
     return inlet, outlet
 
 
-def _hand_case(laws, periodic_x=False, inlet=0.05, recon=None, face=None):
+def _hand_case(laws, periodic_x=False, inlet=0.05, recon=None, face=None, program_factory=None):
     """The case written for b6 and N8: ``laws(boundaries, state, inlet)`` gives the transport
     boundaries of the block, keyed by the boundaries of the frame; ``recon(u)`` the
     reconstruction of its face, first order if None; ``face(flux, u, recon)`` its face, the
@@ -121,8 +121,11 @@ def _hand_case(laws, periodic_x=False, inlet=0.05, recon=None, face=None):
     def transport(state):
         return selection(state)
 
-    elaborate(Advance(_n8_ssprk2(rate=transport)), case=case, state=block[u],
-              proposal=Proposal(0.001))
+    if program_factory is None:
+        elaborate(Advance(_n8_ssprk2(rate=transport)), case=case, state=block[u],
+                  proposal=Proposal(0.001))
+    else:
+        program_factory(case, block[u], transport)
     return case, Uniform(CartesianGrid(frame=frame, cells=(16, 8),
                                        periodic=PeriodicAxes((x,)) if periodic_x else None))
 
@@ -247,6 +250,69 @@ def test_generated_boundary_refuses_foreign_clock_before_native_compilation(monk
     monkeypatch.setattr(_orchestration_compile, "compile_install_models", forbidden)
     with pytest.raises(ValueError, match="SourceGhost.*exact consuming Program Clock"):
         pops.compile(resolved)
+
+
+@pytest.mark.parametrize(("reads_ghosts", "declares_child"), [
+    (True, False), (True, True), (False, False),
+], ids=["parent-clock-on-child", "child-clock-on-child", "local-child-primary-flux"])
+def test_generated_boundary_clock_follows_the_consumer_region(
+        monkeypatch, reads_ghosts, declares_child):
+    from pops.analytic import time
+    from pops import _native_selector
+    from pops.time import Clock, FixedDt, SampleAndHold, TimePoint
+
+    program = pops.Program("boundary-subcycle")
+    child = Clock("child", owner=program.owner_path)
+    clock = child if declares_child else program.clock
+
+    def laws(boundaries, state, value):
+        return {
+            boundaries.y_min: SourceGhost(
+                state=state, body=lambda inner, k: (value + time(clock),), depth=1),
+            boundaries.y_max: _copy(state),
+        }
+
+    def compose(case, subject, transport):
+        parent_state = program.state(subject)
+        child_state = program.state(subject, clock=child)
+        child_input = program.synchronize(
+            parent_state.n, at=TimePoint(child), relation=SampleAndHold())
+
+        def advance_child(builder, value):
+            update = (value + builder.dt * transport(value) if reads_ghosts
+                      else 0.75 * value)
+            return builder.value("child_state", update, at=child_state.next.point)
+
+        child_end = program.subcycle(
+            child_input, clock=child, within=program.clock, count=2, body_fn=advance_child)
+        accepted = program.synchronize(
+            child_end, at=parent_state.next.point, relation=SampleAndHold())
+        if not reads_ghosts:
+            accepted = program.value("root_flux", accepted + program.dt * transport(accepted),
+                                     at=parent_state.next.point)
+        program.commit(parent_state.next, accepted)
+        program.step_strategy(FixedDt(1 / 128))
+        case.program(program)
+
+    class ReachedNativeSelection(Exception):
+        pass
+
+    def stop_at_native_selection(*args, **kwargs):
+        raise ReachedNativeSelection
+
+    case, layout = _hand_case(laws, periodic_x=True, program_factory=compose)
+    resolved = _resolved(case, layout)
+    monkeypatch.setattr(_native_selector, "select_native_dimension", stop_at_native_selection)
+    if reads_ghosts:
+        with pytest.raises(NotImplementedError, match="SourceGhost.*child application"):
+            pops.compile(resolved)
+    else:
+        with pytest.raises(ReachedNativeSelection):
+            pops.compile(resolved)
+        source = _cpp(resolved)
+        call = "ctx.neg_div_flux_default_with_frequency_into("
+        assert source.count(call) == 1
+        assert source.index(".finish();") < source.index(call)
 
 
 def test_the_data_of_a_value_may_read_a_constant_of_the_model():
