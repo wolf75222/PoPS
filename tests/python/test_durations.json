@@ -9874,9 +9874,15 @@
       },
       "source_sha256": {
         "tests/python/integration/runtime/test_g03_moving_transport_native.py": "6e3289813c75de5d56f8f62170c9ac97f83ae69e9b0b6dccccfeb134ba77db2d",
-        "tests/python/unit/numerics/test_moving_total_rate.py": "73024aba80355aa8a0c0b889053d0190668f4fc42b67bce429a8772ca69ad029"
+        "tests/python/unit/numerics/test_moving_total_rate.py": "3a26b29c9215368bb4ae3ae6e9c53151f7fbb6c0a14ae02ec8ea2c3edce74581"
       },
       "source_receipts": {
+        "d21_16_cases": {
+          "platform": "macOS arm64",
+          "passed": 16,
+          "session_seconds": 16.26,
+          "scope": "includes the temporal update variants and independent static layout"
+        },
         "cold_earlier_11_cases": {
           "platform": "macOS arm64",
           "passed": 11,

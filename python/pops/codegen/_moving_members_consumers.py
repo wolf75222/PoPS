@@ -229,9 +229,13 @@ def _validate_balances(plan: Any, members: dict[str, Any]) -> None:
     from pops.codegen.program_lowerability import all_ops
     from pops.time._program.moving_total_rate import OPERATION
 
+    layout_by_block = {row.subject.local_id: row.layout for row in plan.layout_plan.assignments
+                       if row.subject_kind == "block"}
+    layouts = {layout_by_block[name] for name in members}
+    moving = {name for name, layout in layout_by_block.items() if layout in layouts}
     totals = {block.name for block in total_blocks(plan)}
     for block in plan.blocks:
-        if block.name in members or block.name in totals:
+        if block.name not in moving or block.name in members or block.name in totals:
             continue
         states = ", ".join(str(getattr(state, "name", state))
                            for state in getattr(block, "state_spaces", ()))
@@ -245,7 +249,7 @@ def _validate_balances(plan: Any, members: dict[str, Any]) -> None:
         if block is None or block in members:
             continue
         effect = EFFECTS.get(value.op)
-        if effect is not None and (effect.static_face or effect.cell_total == "density-rate"):
+        if block in moving and effect is not None and (effect.static_face or effect.cell_total == "density-rate"):
             raise MovingMembersNotYetElaborated(
                 "moving_static_face",
                 "the rate %r of block %r is a static face pass (%s), which reads the spacing of "
