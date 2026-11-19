@@ -7,7 +7,8 @@
 #define POPS_TEST_OWNED_HISTORY
 #endif
 
-#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING)
 #include <unordered_map>
 #endif
 
@@ -25,6 +26,10 @@ constexpr std::uint64_t flux_bound = 2;
 constexpr const char* primary_clock = "test.clock.macro";
 constexpr const char* program_name = "test-empty-amr-cadence";
 constexpr std::uint64_t flux_bound = 0;
+#elif defined(POPS_TEST_DECLARED_SUBCYCLING)
+constexpr const char* primary_clock = "clock.macro";
+constexpr const char* program_name = "test-declared-subcycling-amr";
+constexpr std::uint64_t flux_bound = 1;
 #elif defined(POPS_TEST_MIXED_CFL)
 constexpr const char* primary_clock = "clock.macro";
 constexpr const char* program_name = "test-mixed-cfl-amr";
@@ -199,13 +204,19 @@ extern "C" int pops_program_checkpoint_history_ghost_depth(int) {
 #endif
 }
 extern "C" int pops_program_checkpoint_logical_clock_count() {
-#if defined(POPS_TEST_EULER_FINE_CLOCK)
+#if defined(POPS_TEST_EULER_SECOND_FINE_CLOCK)
+  return 3;
+#elif defined(POPS_TEST_EULER_FINE_CLOCK)
   return 2;
 #else
   return 1;
 #endif
 }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int index) {
+#if defined(POPS_TEST_EULER_SECOND_FINE_CLOCK)
+  if (index == 2)
+    return POPS_TEST_EULER_SECOND_FINE_CLOCK;
+#endif
 #if defined(POPS_TEST_EULER_FINE_CLOCK)
   if (index == 1)
     return POPS_TEST_EULER_FINE_CLOCK;
@@ -264,7 +275,8 @@ extern "C" const char* pops_module_field_space_owner(int) {
   return "";
 }
 
-#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING)
 namespace pops::runtime::program::detail {
 template <int Dim>
 struct AmrInteractionHistorySnapshotTestAccess {
@@ -290,6 +302,9 @@ struct ContextControl {
   std::weak_ptr<ControlledContext> context;
   std::uint64_t generation;
   std::weak_ptr<int> invocations{};
+#if defined(POPS_TEST_DECLARED_SUBCYCLING)
+  std::weak_ptr<std::vector<std::tuple<int, double, double>>> visits{};
+#endif
 };
 std::unordered_map<ControlledSystem*, ContextControl> installed_contexts;
 
@@ -307,7 +322,16 @@ std::shared_ptr<ControlledContext> require_fixture_context(ControlledSystem* sys
 }
 }  // namespace
 
-#if defined(POPS_TEST_MIXED_CFL)
+#if defined(POPS_TEST_DECLARED_SUBCYCLING)
+extern "C" void pops_test_declared_subcycling_visits(
+    ControlledSystem* system, std::vector<std::tuple<int, double, double>>* result) {
+  const auto context = require_fixture_context(system);
+  const auto visits = installed_contexts.at(system).visits.lock();
+  if (!visits)
+    throw std::logic_error("subcycling fixture lost its installed visits");
+  *result = *visits;
+}
+#elif defined(POPS_TEST_MIXED_CFL)
 extern "C" int pops_test_mixed_cfl_invocations(ControlledSystem* system) {
   const auto context = require_fixture_context(system);
   const auto calls = installed_contexts.at(system).invocations.lock();
@@ -335,6 +359,26 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   pops::test::install_prepared_constitutive_step(context);
 #elif defined(POPS_TEST_EMPTY_AMR_CADENCE) || defined(POPS_TEST_MIXED_NORM)
   context->install([](double) {}, context);
+#elif defined(POPS_TEST_DECLARED_SUBCYCLING)
+  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
+  context->declare_clock_relation(POPS_TEST_EULER_FINE_CLOCK, POPS_TEST_EULER_SECOND_FINE_CLOCK, 2);
+  using Visit = std::tuple<int, double, double>;
+  const auto visits = std::make_shared<std::vector<Visit>>();
+  visits->reserve(504);
+  context->install(
+      [context, visits](double dt) {
+        context->advance_hierarchy(dt, [&](double local_dt) {
+          const auto point = context->boundary_evaluation_point(0);
+          visits->emplace_back(point.level, dt, local_dt);
+          auto& stage = context->state(0);
+          auto rhs = context->rhs_scratch_like(stage);
+          context->rhs_into(0, stage, rhs, 0);
+          context->axpy(stage, static_cast<pops::Real>(local_dt), rhs);
+        });
+      },
+      context);
+  installed_contexts.insert_or_assign(
+      system, ContextControl{context, ControlAccess::generation(*context), {}, visits});
 #elif defined(POPS_TEST_MIXED_CFL)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
   const auto calls = std::make_shared<int>(0);
@@ -363,7 +407,7 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
 #if defined(POPS_TEST_MIXED_NORM)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
 #elif defined(POPS_TEST_EULER_FINE_CLOCK) && !defined(POPS_TEST_OWNED_HISTORY) && \
-    !defined(POPS_TEST_MIXED_CFL)
+    !defined(POPS_TEST_MIXED_CFL) && !defined(POPS_TEST_DECLARED_SUBCYCLING)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
 #endif
 }
