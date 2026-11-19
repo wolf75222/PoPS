@@ -126,34 +126,91 @@ def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
     return guarded
 
 
+def moving_incidence_states(program: Any) -> frozenset[str]:
+    """Exact state owners whose coordinates serve the emitted moving transport."""
+    from pops.time._program.moving_total_rate import OPERATION
+    from pops.time._program.traversal import all_ops
+
+    return frozenset(value.attrs["members_state"].qualified_id for value in all_ops(program)
+                     if value.op == OPERATION) if program is not None else frozenset()
+
+
+def moving_geometry_incidence_failure(
+    array: Any, volume_component: int, *, bounds: tuple[float, float] | None = None,
+) -> str | None:
+    """Check cold geometry in its installed Real precision, including shared-node bits."""
+    import numpy as np
+    from pops.mesh.moving_configuration import MEMBER_COMPONENTS
+
+    if (array.ndim != 2 or array.size == 0 or array.shape[0] != len(MEMBER_COMPONENTS)
+            or array.dtype.kind != "f" or array.dtype.itemsize not in (4, 8)):
+        return "moving geometry incidence requires a complete rank-one Real image"
+    left, right = (array[MEMBER_COMPONENTS.index(name)] for name in ("x_left", "x_right"))
+    volume = array[volume_component]
+    bits = np.dtype(f"u{array.dtype.itemsize}")
+    for start in range(0, volume.size, 131072):
+        end = min(start + 131072, volume.size)
+        lo, hi, cell_volume = left[start:end], right[start:end], volume[start:end]
+        if (not np.isfinite(lo).all() or not np.isfinite(hi).all()
+                or not np.isfinite(cell_volume).all() or not np.all(lo < hi)
+                or not np.all(cell_volume > 0)):
+            return "moving geometry orientation and positive finite volume required"
+        incident = min(end, volume.size - 1)
+        same_node = (right[start:incident].view(bits) ==
+                     left[start + 1:incident + 1].view(bits))
+        if not same_node.all():
+            face = start + int(np.argmax(~same_node)) + 1
+            return "moving geometry incidence at face %d has unequal node bits" % face
+        if bounds is not None:
+            with np.errstate(over="ignore", invalid="ignore"):
+                if not np.array_equal(hi - lo, cell_volume):
+                    return "moving geometry initial volume differs from the cell width"
+    if bounds is not None and not np.array_equal(
+            np.asarray((left[0], right[-1])), np.asarray(bounds, dtype=array.dtype)):
+        return "moving geometry initial endpoints differ from the installed domain"
+    return None
+
+
 def moving_geometry_bind_failures(
-    blocks: Any, initial_values: Mapping[Any, Any], execution_context: Any,
+    plan: Any, initial_values: Mapping[Any, Any], execution_context: Any,
 ) -> list[str]:
     """Report invalid member arrays before native installation, collectively under MPI."""
     import numpy as np
 
-    component_by_id = {
-        identity: block.moving_volume_component
-        for block in blocks if block.moving_volume_component is not None
+    geometry_by_id = {
+        identity: block
+        for block in plan.blocks if block.moving_volume_component is not None
         for identity in block.state_identities
     }
-    if not component_by_id:
+    if not geometry_by_id:
         return []
     rejected = []
     for handle, array in initial_values.items():
         identity = handle.qualified_id
-        component = component_by_id.get(identity)
-        if (component is not None and isinstance(array, np.ndarray) and array.dtype.kind == "f"
-                and array.ndim >= 2 and array.shape[0] > component
-                and (not np.isfinite(array).all() or not (array[component] > 0).all())):
-            rejected.append(identity)
+        owner = geometry_by_id.get(identity)
+        if owner is None:
+            continue
+        component = owner.moving_volume_component
+        if owner.moving_incidence:
+            from pops.time.references import canonical_handle
+
+            layout = plan.layout_plan.layout_for(canonical_handle(handle.block_ref))
+            geometry = plan.layout_plan.normalized(layout).geometry
+            problem = moving_geometry_incidence_failure(
+                np.asarray(array), component, bounds=(geometry.lower[0], geometry.upper[0]))
+            if problem is not None:
+                rejected.append((identity, problem))
+        elif (isinstance(array, np.ndarray) and array.dtype.kind == "f"
+              and array.ndim >= 2 and array.shape[0] > component
+              and (not np.isfinite(array).all() or not (array[component] > 0).all())):
+            rejected.append((identity, "geometry must be finite and cell volumes positive"))
     if execution_context is not None and execution_context.communicator.identity != "serial":
         from pops._native_collectives import allgather_value
 
         rows = allgather_value(execution_context.communicator.handle, tuple(rejected))
-        rejected = [identity for row in rows for identity in row]
-    return ["%s failed: NotAdmissible (geometry must be finite and cell volumes positive)"
-            % identity for identity in sorted(set(rejected))]
+        rejected = [(identity, problem) for row in rows for identity, problem in row]
+    return ["%s failed: NotAdmissible (%s)" % (identity, problem)
+            for identity, problem in sorted(set(rejected))]
 
 
 def moving_geometry_values(plan: Any, values: Any) -> frozenset[int]:
@@ -285,6 +342,7 @@ def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -
             or plan.layout_plan.normalized(layout).geometry != declared.configuration.layout.normalized_geometry()):
         raise MovingMembersNotYetElaborated(
             "moving_layout", "the totals and moving members require their co-located layout without interfaces")
+    _validate_incidence_route(plan, resolved, declared.configuration, geometry, layout)
     handle = value.attrs["operator_handle"]
     rows = [row for row in resolved.numerics.rates
             if row.rate.registered_operator_name == handle.registered_operator_name]
@@ -303,6 +361,37 @@ def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -
             "the moving total rate %r is served with FirstOrder and Rusanov on one state of rank "
             "one (%s); other faces on moving cells read the members in their stencil and their "
             "speeds, a later G03 lot" % (value.name, error)) from error
+
+
+def _validate_incidence_route(
+    plan: Any, block: Any, configuration: Any, owner: Any, layout: Any,
+) -> None:
+    geometry = plan.layout_plan.normalized(layout)
+    if (configuration.form != "expression"
+            or geometry.options.get("embedded_boundary") is not None):
+        raise MovingMembersNotYetElaborated(
+            "moving_incidence_provider",
+            "moving transport needs one position-based node law on a conforming Uniform layout")
+    native = geometry.native_spatial_layout
+    if native is None or len(native.decomposition["boxes"]) != 1:
+        raise MovingMembersNotYetElaborated(
+            "moving_incidence_patches",
+            "moving transport needs a certified incidence across patches")
+    initial = plan.initial_condition_plan
+    routes = tuple(binding.source.options.to_data().get("native_route")
+                   for binding in (() if initial is None else initial.bindings)
+                   if binding.subject.qualified_id == owner.qualified_id)
+    if routes != ("bound_level_zero",):
+        raise MovingMembersNotYetElaborated(
+            "moving_incidence_initial",
+            "moving transport requires a BindArray for the exact geometry state")
+    closures = tuple(
+        (row["ordinal"], row["condition_type"], row["type"])
+        for boundary in block.numerics.boundaries
+        for row in boundary.compile_boundary_data()["faces"])
+    if closures != ((0, "outflow", "foextrap"), (1, "outflow", "foextrap")):
+        raise MovingMembersNotYetElaborated(
+            "moving_incidence_closure", "moving transport requires the two native Outflow faces")
 
 
 __all__ = ["MovingMembersNotYetElaborated", "lower_moving_member_guards", "member_blocks",
