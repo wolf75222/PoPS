@@ -1,6 +1,7 @@
 #include "installed_scalar_history_fixture.hpp"
 #include <gtest/gtest.h>
 
+#include "amr_fixture_tag_mask_oracle.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/mesh/execution/for_each.hpp>
@@ -240,6 +241,80 @@ struct Fixture {
     EXPECT_NO_THROW(Access::validate_collectively(*context));
   }
 };
+
+TEST(AmrDeclaredHistoryGhosts, CriterionEqualityKeepsFineHistoryWithoutExpandingCoverage) {
+  Fixture fixture;
+  fixture.fill_history();
+  fixture.regrid(false);
+  const auto before = fixture.system.patch_boxes();
+  const auto config = Fixture::config();
+  pops::Index<Dim> retained{}, outside{};
+  for (int axis = 0; axis < Dim; ++axis) {
+    retained[axis] = 8;
+    outside[axis] = axis % 2 == 0 ? 1 : 13;
+  }
+  const auto covered = [&](const auto& patches, pops::Index<Dim> parent) {
+    for (int axis = 0; axis < Dim; ++axis)
+      parent[axis] *= config.transition_ratios.front()[axis];
+    return std::any_of(patches.begin(), patches.end(), [&](const auto& patch) {
+      return patch.level == 1 && patch.box.contains(parent);
+    });
+  };
+  ASSERT_TRUE(covered(before, retained));
+  ASSERT_FALSE(covered(before, outside));
+  const auto offset = [&](const auto& cell) {
+    std::size_t index = 0, stride = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      index += cell[axis] * stride;
+      stride *= config.shape[axis];
+    }
+    return index;
+  };
+  std::vector<double> state(Fixture::cells(), .25);
+  state[offset(retained)] = .5;
+  state[offset(outside)] = .5;
+  const auto positive = offset(outside) + 1;
+  state[positive] = 1.;
+  fixture.system.set_conservative_state("tracer", state);
+  ASSERT_EQ(fixture.system.block_level_state_global("tracer", 0), state);
+  const auto check_candidates = [&](bool expanding) {
+    const auto tags = fixture.system.execute_prepared_tagging(0);
+    const auto& coarse = fixture.system.prepared_amr_block_state(0, 0);
+    const auto count = [&](std::size_t local) {
+      return coarse.distribution().replicated()
+                 ? local
+                 : pops::all_reduce_sum(static_cast<long>(local),
+                                        fixture.context->prepared_execution_lane());
+    };
+    EXPECT_EQ(
+        count(pops::test::expect_fixture_tag_mask(
+            tags.refine, config.shape, [&](std::size_t i) { return expanding && i == positive; })),
+        Fixture::cells());
+    EXPECT_EQ(count(pops::test::expect_fixture_tag_mask(
+                  tags.coarsen, config.shape, [&](std::size_t i) { return state[i] == .25; })),
+              Fixture::cells());
+  };
+  check_candidates(true);
+
+  // Remove the expansion control while retaining both equality cells. Compare the topology and
+  // history slots after the same tagging/regrid transaction used by the historical clients.
+  state[positive] = .25;
+  fixture.system.set_conservative_state("tracer", state);
+  check_candidates(false);
+  std::vector<std::vector<double>> slots;
+  for (int level = 0; level < 2; ++level)
+    for (int slot = 0; slot < 2; ++slot)
+      slots.push_back(fixture.system.history_global(kHistory, level, slot));
+  ASSERT_TRUE(fixture.system.regrid_from_prepared_tagging(0));
+  const auto after = fixture.system.patch_boxes();
+  EXPECT_TRUE(covered(after, retained));
+  EXPECT_FALSE(covered(after, outside));
+  EXPECT_EQ(after, before);
+  for (int level = 0; level < 2; ++level)
+    for (int slot = 0; slot < 2; ++slot)
+      EXPECT_EQ(fixture.system.history_global(kHistory, level, slot), slots[2 * level + slot]);
+  fixture.expect_declared_storage();
+}
 
 TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) {
   Fixture fixture;
