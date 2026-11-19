@@ -37,6 +37,7 @@ def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
     """Check physical geometry before evaluating its rate and before publishing the candidate."""
     from contextlib import nullcontext
 
+    from pops._ir.control_expr import Where
     from pops.mesh.moving_configuration import MEMBER_COMPONENTS, MOTION_SOURCE, members_of
     from pops.time._evaluation_point import evaluation_partition
     from pops.time._program.control import AdvanceControl
@@ -51,6 +52,9 @@ def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
     if not geometries or type(program._step_strategy) is not FixedDt:
         return program
     volume_component = MEMBER_COMPONENTS.index("volume")
+    left_component = MEMBER_COMPONENTS.index("x_left")
+    right_component = MEMBER_COMPONENTS.index("x_right")
+    incidence = moving_incidence_states(program)
     trial_sites: list[dict[str, Any]] = []
     guarded_rates: dict[int, tuple[int, Any]] = {}
 
@@ -67,7 +71,16 @@ def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
         volume = out._new("scalar", "reduce", (value,),
                           {"kind": "min", "comp": volume_component}, None, value.block)
         finite = out.isfinite(out.norm_inf_all(value))
-        return admit(out, value, finite & (volume > 0), name)
+        protected = admit(out, value, finite & (volume > 0), name)
+        if canonical_handle(value.state_ref).qualified_id not in incidence:
+            return protected
+        site = name + " orientation"
+        status = out.value(
+            site + " status",
+            (Where(protected[left_component] < protected[right_component], 1, 0), 0, 0),
+            at=protected.point,
+        )
+        return admit(out, protected, out.min(status) > 0, site)
 
     def guard_rate_domain(out: Any, node: Any, value: Any, members: Any) -> Any:
         reads_motion = ((node.op == "source" and node.attrs["source"] == MOTION_SOURCE)
