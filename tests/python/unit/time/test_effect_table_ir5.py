@@ -74,6 +74,18 @@ def test_every_operation_of_the_dispatch_catalogs_has_a_row():
     assert not any(region_safe(op) for op in GLOBAL_OPS)
 
 
+def test_cell_total_routes_are_facts_without_new_region_effects():
+    accesses = {op: row.cell_total for op, row in EFFECTS.items() if row.cell_total is not None}
+    assert accesses == {"state": "storage", "linear_combine": "storage",
+                        "rhs": "density-rate", "diffusive_rhs": "density-rate",
+                        "source": "density-rate"}
+    assert CELL_TOTAL_PROGRAM_OPS == set(accesses)
+    assert all(not has_graph_contract(op) and not region_safe(op)
+               for op in ("rhs", "diffusive_rhs", "source"))
+    with pytest.raises(ValueError, match="conflicting cell-total access"):
+        _row("total-storage total-density-rate")
+
+
 def test_retired_field_and_topology_ports_have_no_effect_rows():
     assert {"field_storage_allocate", "field_bundle_import", "field_bundle_export",
             "continuation_source_topology", "continuation_target_topology"}.isdisjoint(EFFECTS)
