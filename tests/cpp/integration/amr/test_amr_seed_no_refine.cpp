@@ -385,6 +385,8 @@ TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDu
   const auto& criterion = pops::test::empty_cadence;
   auto system =
       make_system(config, corner_bump(config.shape, false), {}, criterion.state_for("tracer"));
+  // Admit the same macro interval on both levels; the empty body does not subcycle.
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
   criterion.install<Dim>(system);
   EXPECT_FALSE(system.uses_runtime_engine());
   system.install_program(POPS_TEST_EMPTY_CADENCE_PROGRAM_SO);
