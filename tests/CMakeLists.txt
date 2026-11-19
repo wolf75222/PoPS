@@ -1089,7 +1089,7 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 set(_euler_dir "${CMAKE_CURRENT_BINARY_DIR}/euler-amr-fixtures")
 set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
   "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp"
-  "${_euler_dir}/gravity.cpp")
+  "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp")
 if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
   set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
     "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
@@ -1111,7 +1111,7 @@ target_compile_definitions(pops_build_euler_amr_fixture_program PRIVATE ${_euler
 add_dependencies(pops_build_euler_amr_fixture_program pops_euler_amr_criteria)
 target_include_directories(pops_build_euler_amr_fixture_program PRIVATE "${_euler_dir}")
 set(_fixture_support "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support")
-set(_euler_variants gravity)
+set(_euler_variants gravity riemann)
 if(POPS_HAS_MPI)
   list(APPEND _euler_variants compiled_parity regrid_parity)
 endif()
@@ -1138,6 +1138,8 @@ function(pops_use_euler_amr_fixture target variant program_macro)
   set_target_properties(${target} PROPERTIES ENABLE_EXPORTS ON)
 endfunction()
 pops_use_euler_amr_fixture(test_amr_distribute_coarse_serial gravity POPS_TEST_GRAVITY_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_riemann_native riemann POPS_TEST_RIEMANN_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_riemann_native gravity POPS_TEST_RIEMANN_WRONG_PROGRAM_SO)
 
 if(POPS_HAS_MPI)
   pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
