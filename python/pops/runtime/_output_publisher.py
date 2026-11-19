@@ -18,6 +18,10 @@ from pops.output._consumer_contracts import ParallelMode
 from pops.output.data import OutputRequest, OutputSnapshot
 from pops.output.provider import consumer_format_data
 from pops.output._writers.common import (
+    FileSeriesPublication,
+    OutputPublicationReceipt,
+    OutputWriterSession,
+    _validated_file_proof,
     authenticate_series_catalog,
     authenticate_series_publication,
     authenticate_writer_session,
@@ -387,7 +391,7 @@ class PreparedConsumerOutput(PreparedPublication):
         ):
             raise TypeError(
                 "output receipt file_evidence must be exact regular-file evidence or None")
-        return {
+        data = {
             "output_identity": output_identity.token,
             "selection_identity": selection_identity.token,
             "path": resolved_path,
@@ -395,6 +399,9 @@ class PreparedConsumerOutput(PreparedPublication):
             "file_evidence": (
                 None if file_evidence is None else list(file_evidence)),
         }
+        if type(value) is OutputPublicationReceipt and value._file_proof is not None:
+            data["file_proof"] = list(value._file_proof)
+        return data
 
     @staticmethod
     def _failure(operation: str, rows: tuple[dict[str, Any], ...]) -> None:
@@ -435,9 +442,11 @@ class PreparedConsumerOutput(PreparedPublication):
             if local is None:
                 signatures.append(None)
                 continue
-            if not isinstance(local, Mapping) or set(local) != {
+            public_keys = {
                 "output_identity", "selection_identity", "path", "format", "file_evidence",
-            }:
+            }
+            if not isinstance(local, Mapping) or set(local) not in (
+                    public_keys, public_keys | {"file_proof"}):
                 raise TypeError("rank %d output receipt has an invalid schema" % rank)
             output_identity = Identity.from_token(local["output_identity"])
             selection_identity = Identity.from_token(local["selection_identity"])
@@ -461,12 +470,19 @@ class PreparedConsumerOutput(PreparedPublication):
                     "series-enabled output receipt must carry exact regular-file evidence")
             file_evidence = (
                 None if evidence_data is None else tuple(evidence_data))
+            proof_data = local.get("file_proof")
+            file_proof = None if proof_data is None else _validated_file_proof(proof_data)
+            if type(self._series_publication) is FileSeriesPublication and file_proof is None:
+                raise TypeError("exact series indexing requires the current writer's byte proof")
+            if file_proof is not None and (file_evidence is None or file_proof[2] != file_evidence[2]):
+                raise ValueError("output receipt byte proof differs from its file size")
             signatures.append((
                 output_identity.token,
                 selection_identity.token,
                 path.as_posix(),
                 format_name,
                 file_evidence,
+                file_proof,
             ))
         if mode is ParallelMode.COLLECTIVE:
             if not signatures or any(value != signatures[0] for value in signatures):
@@ -544,7 +560,13 @@ class PreparedConsumerOutput(PreparedPublication):
                     if self._artifact_authority is None:
                         raise RuntimeError(
                             "scientific output series has no published artifact authority")
-                    result = series_publication.publish(self._artifact_authority)
+                    artifact = dict(self._artifact_authority)
+                    proof_data = artifact.pop("file_proof", None)
+                    if type(series_publication) is FileSeriesPublication:
+                        proof = None if proof_data is None else _validated_file_proof(proof_data)
+                        result = series_publication._publish(artifact, proof)
+                    else:
+                        result = series_publication.publish(artifact)
                     if result is not None:
                         raise TypeError(
                             "scientific output series publication publish() must return None")
@@ -721,6 +743,10 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                 communicator=preparation.communicator,
             )
             authority = authenticate_writer_session(session)
+            if type(series_publication) is FileSeriesPublication:
+                if type(session) is not OutputWriterSession:
+                    raise TypeError("exact file series requires a writer session with byte evidence")
+                session._require_file_proof()
             expected_target = Path(preparation.target).expanduser().resolve().as_posix()
             expected = {
                 "format": target_format["format_name"],

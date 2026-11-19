@@ -136,9 +136,11 @@ def _accepted_output_effect(request, target):
     )
 
 
-def _stage_writer(writer, snapshot, request, target, *, communicator=None):
+def _stage_writer(writer, snapshot, request, target, *, communicator=None, seal=False):
     session = writer.prepare_session(
         snapshot, request, target, communicator=communicator)
+    if seal:
+        session._require_file_proof()
     session.stage()
     return session
 
@@ -146,13 +148,13 @@ def _stage_writer(writer, snapshot, request, target, *, communicator=None):
 def _publish_series(catalog, target, snapshot, request, receipt):
     assert receipt.file_evidence is not None
     publication = catalog.prepare(target, snapshot, request)
-    publication.publish({
+    publication._publish({
         "output_identity": receipt.output_identity.token,
         "selection_identity": receipt.selection_identity.token,
         "path": receipt.path.as_posix(),
         "format": receipt.format,
         "file_evidence": list(receipt.file_evidence),
-    })
+    }, receipt._file_proof)
     return publication
 
 
@@ -1977,6 +1979,9 @@ def test_consumer_publisher_series_retry_releases_writer_authority(tmp_path):
             return {"publication": "series-finalizer"}
 
         def publish(self, artifact):
+            assert set(artifact) == {
+                "output_identity", "selection_identity", "path", "format", "file_evidence",
+            }
             assert Path(artifact["path"]) == target
             assert artifact["format"] == "npz"
             self.calls += 1
@@ -2318,7 +2323,7 @@ def test_format_provider_publishes_and_reopens_one_authenticated_series(tmp_path
         format_data=format_data,
         format_name=format.format_name,
     )
-    first = _stage_writer(format.writer(), snapshot, request, first_target)
+    first = _stage_writer(format.writer(), snapshot, request, first_target, seal=True)
     first_receipt = first.publish()
     _publish_series(catalog, first_target, snapshot, request, first_receipt)
     first.finalize()
@@ -2336,7 +2341,7 @@ def test_format_provider_publishes_and_reopens_one_authenticated_series(tmp_path
         format_data=format_data,
         format_name=format.format_name,
     )
-    second = _stage_writer(format.writer(), second_snapshot, request, second_target)
+    second = _stage_writer(format.writer(), second_snapshot, request, second_target, seal=True)
     second_receipt = second.publish()
     _publish_series(catalog, second_target, second_snapshot, request, second_receipt)
     second.finalize()
@@ -2382,7 +2387,7 @@ def test_series_scopes_distinct_runs_and_requires_an_exact_index_when_ambiguous(
             format_data=format_data,
             format_name=format.format_name,
         )
-        session = _stage_writer(format.writer(), current, request, target)
+        session = _stage_writer(format.writer(), current, request, target, seal=True)
         receipt = session.publish()
         _publish_series(catalog, target, current, request, receipt)
         session.finalize()
@@ -2422,7 +2427,7 @@ def test_series_accepts_distinct_substeps_at_the_same_macro_time(tmp_path):
             format_data=format_data,
             format_name=format.format_name,
         )
-        session = _stage_writer(format.writer(), current, request, target)
+        session = _stage_writer(format.writer(), current, request, target, seal=True)
         receipt = session.publish()
         _publish_series(catalog, target, current, request, receipt)
         session.finalize()
@@ -2462,7 +2467,7 @@ def test_series_recovery_orders_large_multirate_fractions_exactly(tmp_path):
             format_data=format_data,
             format_name=format.format_name,
         )
-        session = _stage_writer(format.writer(), current, request, target)
+        session = _stage_writer(format.writer(), current, request, target, seal=label == "lower")
         targets[label] = target
         receipts[label] = (session, current, session.publish())
 
@@ -2494,7 +2499,7 @@ def test_series_supports_a_multi_suffix_extension(tmp_path):
         format_data=format_data,
         format_name=format.format_name,
     )
-    session = _stage_writer(format.writer(), snapshot, request, target)
+    session = _stage_writer(format.writer(), snapshot, request, target, seal=True)
     receipt = session.publish()
     _publish_series(catalog, target, snapshot, request, receipt)
     session.finalize()
@@ -2521,7 +2526,7 @@ def test_series_reopens_an_unbounded_macro_step(tmp_path):
         format_data=format.consumer_data(),
         format_name=format.format_name,
     )
-    session = _stage_writer(format.writer(), snapshot, request, target)
+    session = _stage_writer(format.writer(), snapshot, request, target, seal=True)
     receipt = session.publish()
     _publish_series(format.series_catalog(), target, snapshot, request, receipt)
     session.finalize()
@@ -2542,7 +2547,7 @@ def test_series_refuses_symlinked_index_and_members(tmp_path):
         format_data=format.consumer_data(),
         format_name=format.format_name,
     )
-    session = _stage_writer(format.writer(), snapshot, request, target)
+    session = _stage_writer(format.writer(), snapshot, request, target, seal=True)
     receipt = session.publish()
     _publish_series(format.series_catalog(), target, snapshot, request, receipt)
     session.finalize()
@@ -2575,7 +2580,7 @@ def test_series_rejects_a_changed_artifact_before_indexing(tmp_path):
         format_data=format.consumer_data(),
         format_name=format.format_name,
     )
-    session = _stage_writer(format.writer(), snapshot, request, target)
+    session = _stage_writer(format.writer(), snapshot, request, target, seal=True)
     receipt = session.publish()
     original = target.read_bytes()
     target.write_bytes(b"x" * len(original))
@@ -2583,6 +2588,23 @@ def test_series_rejects_a_changed_artifact_before_indexing(tmp_path):
 
     with pytest.raises(RuntimeError, match="changed before series indexing"):
         _publish_series(format.series_catalog(), target, snapshot, request, receipt)
+    session.finalize()
+
+
+def test_new_exact_series_index_requires_a_current_byte_proof(tmp_path):
+    snapshot, request, _ = _snapshot()
+    format = NPZ()
+    target = deterministic_target(
+        tmp_path, "state", request, snapshot, format.extension,
+        format_data=format.consumer_data(), format_name=format.format_name,
+    )
+    session = _stage_writer(format.writer(), snapshot, request, target)
+    receipt = session.publish()
+    assert receipt._file_proof is None
+    assert format.reopen(target).output_identity == receipt.output_identity
+    with pytest.raises(TypeError, match="requires the current writer's byte proof"):
+        _publish_series(format.series_catalog(), target, snapshot, request, receipt)
+    assert not list(tmp_path.glob("*.series"))
     session.finalize()
 
 
@@ -2623,7 +2645,7 @@ def test_series_fast_path_does_not_reread_the_just_committed_arrays(tmp_path):
             format_data=format_data,
             format_name=format.format_name,
         )
-        session = _stage_writer(format.writer(), current, request, target)
+        session = _stage_writer(format.writer(), current, request, target, seal=True)
         receipt = session.publish()
         _publish_series(catalog, target, current, request, receipt)
         session.finalize()
@@ -2649,7 +2671,7 @@ def test_series_lock_contention_fails_explicitly_and_is_retryable(tmp_path, monk
         format_data=format_data,
         format_name=format.format_name,
     )
-    session = _stage_writer(format.writer(), snapshot, request, target)
+    session = _stage_writer(format.writer(), snapshot, request, target, seal=True)
     receipt = session.publish()
     real_flock = fcntl.flock
     busy = True

@@ -57,6 +57,50 @@ def _path_file_evidence(path: Path) -> tuple[int, int, int, int, int]:
     return _file_evidence(path.lstat())
 
 
+_FileProof = tuple[int, str, int, str]
+
+
+def _validated_file_proof(value: Any) -> _FileProof:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise TypeError("series file proof must carry a version, algorithm, size and digest")
+    version, algorithm, size, digest = value
+    if (type(version) is not int or version != 1 or algorithm != "sha256"
+            or type(size) is not int or size < 0
+            or not isinstance(digest, str) or re.fullmatch("[0-9a-f]{64}", digest) is None):
+        raise ValueError("series file proof is not canonical SHA-256 evidence")
+    return version, algorithm, size, digest
+
+
+def _descriptor_file_proof(
+    descriptor: int, evidence: tuple[int, int, int, int, int],
+) -> _FileProof:
+    if _file_evidence(os.fstat(descriptor)) != evidence:
+        raise RuntimeError("scientific output file changed before byte verification")
+    size = evidence[2]
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < size:
+        chunk = os.pread(descriptor, min(size - offset, 1024 * 1024), offset)
+        if not chunk:
+            raise RuntimeError("scientific output file ended during byte verification")
+        digest.update(chunk)
+        offset += len(chunk)
+    if _file_evidence(os.fstat(descriptor)) != evidence:
+        raise RuntimeError("scientific output file changed during byte verification")
+    return 1, "sha256", size, digest.hexdigest()
+
+
+def _entry_file_proof(
+    directory_fd: int | None, name: str, evidence: tuple[int, int, int, int, int],
+) -> _FileProof:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK
+    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    try:
+        return _descriptor_file_proof(descriptor, evidence)
+    finally:
+        os.close(descriptor)
+
+
 def _exception_text(error: BaseException) -> str:
     text = "%s: %s" % (type(error).__name__, error)
     notes = tuple(
@@ -443,11 +487,17 @@ class OutputPublicationReceipt:
     output_identity: Identity
     selection_identity: Identity
     file_evidence: tuple[int, int, int, int, int] | None = None
+    _file_proof: _FileProof | None = None
 
     def __post_init__(self) -> None:
         if self.file_evidence is not None:
             object.__setattr__(self, "file_evidence", _validated_file_evidence(
                 self.file_evidence, where="output publication file_evidence"))
+        if self._file_proof is not None:
+            proof = _validated_file_proof(self._file_proof)
+            if self.file_evidence is None or self.file_evidence[2] != proof[2]:
+                raise ValueError("output receipt byte proof differs from its file size")
+            object.__setattr__(self, "_file_proof", proof)
 
 
 class WriterSession(Protocol):
@@ -770,6 +820,7 @@ class _StagedOutputFile:
         "temporary", "target", "format", "output_identity", "selection_identity",
         "_verify", "_published", "_discarded", "_created_target", "_target_owner",
         "_target_evidence", "_staging", "_temporary_owner", "_communicator", "_recoveries",
+        "_file_proof",
     )
 
     def __init__(
@@ -794,6 +845,7 @@ class _StagedOutputFile:
         self._created_target = False
         self._target_owner: tuple[int, int] | None = None
         self._target_evidence: tuple[int, int, int, int, int] | None = None
+        self._file_proof: _FileProof | None = None
         self._temporary_owner = temporary.owner
         self._recoveries: list[Any] = []
         if communicator is None and not temporary.is_open:
@@ -995,19 +1047,35 @@ class _StagedOutputFile:
             self._recoveries.append(error.recovery)
             raise
 
-    def publish(self) -> OutputPublicationReceipt:
+    def publish(self, *, seal: bool = False) -> OutputPublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded output cannot be published")
         if self._published:
             return OutputPublicationReceipt(
                 self.target, self.format, self.output_identity, self.selection_identity,
-                self._target_evidence)
+                self._target_evidence, self._file_proof)
         self._barrier()
         failure = None
-        target_evidence = None
+        publication = None
         if self._rank() == 0:
             try:
-                self._verify(self.temporary)
+                before = None
+                if seal:
+                    self._staging.authenticate_path()
+                    before = _file_evidence(os.fstat(self._staging.fileno()))
+                verified = self._verify(self.temporary)
+                proof = None
+                if before is not None:
+                    if (type(verified) is not ReopenedOutput
+                            or verified.output_identity != self.output_identity
+                            or make_identity("output-publication-selection",
+                                             verified.manifest["snapshot"]["selection"])
+                            != self.selection_identity):
+                        raise RuntimeError("staged output differs from its scientific receipt")
+                del verified
+                if before is not None:
+                    self._staging.authenticate_path()
+                    proof = _descriptor_file_proof(self._staging.fileno(), before)
                 self.target.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     staged = self.temporary.lstat()
@@ -1024,14 +1092,20 @@ class _StagedOutputFile:
                         raise RuntimeError(
                             "scientific output staging inode changed during publication")
                 except FileExistsError:
-                    if hashlib.sha256(self.temporary.read_bytes()).digest() != hashlib.sha256(
-                            self.target.read_bytes()).digest():
+                    if proof is None:
+                        same = hashlib.sha256(self.temporary.read_bytes()).digest() == hashlib.sha256(
+                            self.target.read_bytes()).digest()
+                    else:
+                        same = (proof == _entry_file_proof(
+                            None, str(self.target), _path_file_evidence(self.target)))
+                    if not same:
                         raise FileExistsError(
                             "scientific output collision at deterministic target %s" % self.target
                         ) from None
                 self._remove_temporary_owned()
                 target_evidence = _path_file_evidence(self.target)
                 self._target_owner = target_evidence[:2]
+                publication = target_evidence, proof
             except BaseException as exc:
                 failure = _exception_text(exc)
         if self._communicator is not None:
@@ -1041,15 +1115,18 @@ class _StagedOutputFile:
                 raise FileExistsError(failure.split(": ", 1)[1])
             raise RuntimeError("collective output publication failed: %s" % failure)
         if self._communicator is not None:
-            target_evidence = broadcast_value(
-                self._communicator, target_evidence, root=0)
+            publication = broadcast_value(self._communicator, publication, root=0)
+        if publication is None:
+            raise RuntimeError("scientific output publication has no file evidence")
+        target_evidence, proof = publication
         self._target_evidence = _validated_file_evidence(
             target_evidence, where="published scientific output")
+        self._file_proof = None if proof is None else _validated_file_proof(proof)
         self._barrier()
         self._published = True
         return OutputPublicationReceipt(
             self.target, self.format, self.output_identity, self.selection_identity,
-            self._target_evidence)
+            self._target_evidence, self._file_proof)
 
     def discard(self) -> None:
         if self._published or self._discarded:
@@ -1119,6 +1196,7 @@ class OutputWriterSession:
 
     __slots__ = (
         "_authority", "_identity", "_stage_file", "_staged", "_aborted", "_finalized",
+        "_seal",
     )
 
     def __init__(
@@ -1136,7 +1214,13 @@ class OutputWriterSession:
         self._staged: _StagedOutputFile | None = None
         self._aborted = False
         self._finalized = False
+        self._seal = False
         authenticate_writer_session(self)
+
+    def _require_file_proof(self) -> None:
+        if self._staged is not None or self._aborted or self._finalized:
+            raise RuntimeError("series file proof must be requested before staging")
+        self._seal = True
 
     @property
     def authority(self) -> dict[str, Any]:
@@ -1184,7 +1268,7 @@ class OutputWriterSession:
             return None
         if self._staged is None:
             raise RuntimeError("writer session must be staged before publication")
-        return self._staged.publish()
+        return self._staged.publish(seal=self._seal)
 
     def rollback(self) -> None:
         if self._finalized:
@@ -1633,6 +1717,7 @@ def publish_output_series(
     selection_identity: Identity,
     artifact: Mapping[str, Any],
     reopen: Callable[[Any], ReopenedOutput],
+    file_proof: _FileProof | None,
 ) -> None:
     """Atomically refresh one family-scoped catalogue after accepted publication."""
     extension = _validate_series_extension(extension)
@@ -1661,6 +1746,9 @@ def publish_output_series(
         artifact["output_identity"], "scientific-output", "series artifact output")
     expected_target_evidence = _validated_file_evidence(
         artifact["file_evidence"], where="series artifact file_evidence")
+    if file_proof is None:
+        raise TypeError("exact series indexing requires the current writer's byte proof")
+    expected_proof = _validated_file_proof(file_proof)
     physical_time, current_order = _series_clock_data({"clock": dict(clock_data)})
     series_path = output_series_path(target.parent, extension, family)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1692,6 +1780,14 @@ def publish_output_series(
             raise RuntimeError("another runtime is updating this scientific output series") from exc
         if _regular_entry_at(directory_fd, lock_name) != lock_owner:
             raise RuntimeError("scientific output series lock inode was replaced")
+        try:
+            actual_proof = _entry_file_proof(directory_fd, target.name, expected_target_evidence)
+        except (FileNotFoundError, ValueError, RuntimeError) as error:
+            raise RuntimeError(
+                "accepted scientific output artifact changed before series indexing") from error
+        if actual_proof != expected_proof:
+            raise RuntimeError(
+                "accepted scientific output artifact changed before series indexing")
 
         try:
             rows, previous_evidence = _read_series_at(
@@ -1747,6 +1843,9 @@ def publish_output_series(
         document = {"file-series-version": "1.0", "files": ordered_rows}
         if _regular_entry_at(directory_fd, lock_name) != lock_owner:
             raise RuntimeError("scientific output series lock inode changed before commit")
+        if _entry_evidence_at(directory_fd, target.name) != expected_target_evidence:
+            raise RuntimeError(
+                "accepted scientific output artifact changed before series indexing")
         _write_series_at(directory_fd, series_path.name, document, previous_evidence)
         visible_directory = target.parent.lstat()
         if (int(visible_directory.st_dev), int(visible_directory.st_ino)) != (
@@ -1845,6 +1944,9 @@ class FileSeriesPublication:
         return thaw_data(self._authority)
 
     def publish(self, artifact: Mapping[str, Any]) -> None:
+        self._publish(artifact, None)
+
+    def _publish(self, artifact: Mapping[str, Any], proof: _FileProof | None) -> None:
         publish_output_series(
             self._target,
             extension=self._extension,
@@ -1855,6 +1957,7 @@ class FileSeriesPublication:
             selection_identity=self._selection_identity,
             artifact=artifact,
             reopen=self._reopen,
+            file_proof=proof,
         )
 
 
