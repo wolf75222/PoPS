@@ -30,7 +30,7 @@ class _PreparedUniformRestart:
     program_diagnostic_checkpoint: bytes
     state_carriers: bytes | None
     finite_continuation: bytes | None
-    advance_segment: tuple[float, float, int, float, int] | None
+    advance_segment: tuple[float, float, int, float, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
