@@ -152,6 +152,7 @@
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
     "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
     "tests/python/unit/runtime/test_step_strategy.py": 2,
-    "tests/python/integration/runtime/test_surface_n15_sources_native.py": 1
+    "tests/python/integration/runtime/test_surface_n15_sources_native.py": 1,
+    "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 1
   }
 }

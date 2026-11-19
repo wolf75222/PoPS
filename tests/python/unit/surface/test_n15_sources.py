@@ -289,18 +289,13 @@ def _decay_with(scheme):
     return u, decay
 
 
-def test_a_coordinate_read_by_a_cell_rate_waits_for_fc_2():
+def test_a_coordinate_and_a_load_are_read_by_a_cell_rate():
+    """``pops.Numerics`` runs both schemes: FC-2 types and elaborates a coordinate read at the
+    centre of the cell and a load (``test_n15_cell_load.py``)."""
     u, decay = _decay_with(reads_x)
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Numerics(represent={u: CellAverage()}, schemes={decay: reads_x()})  # <- x
-    assert "FC-2" in str(caught.value)
-
-
-def test_a_load_waits_for_fc_2():
+    surface.Numerics(represent={u: CellAverage()}, schemes={decay: reads_x()})
     u, decay = _decay_with(loads)
-    with pytest.raises(surface.NotYetElaborated) as caught:
-        surface.Numerics(represent={u: CellAverage()}, schemes={decay: loads()})  # <- load
-    assert "FC-2" in str(caught.value)
+    surface.Numerics(represent={u: CellAverage()}, schemes={decay: loads()})
 
 
 def test_an_integral_waits_for_n16_lot_2():

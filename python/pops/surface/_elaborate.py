@@ -63,7 +63,7 @@ from ._scheme import FaceFlux, StencilRealization, UserScheme
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
-_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
+_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs", "where")
 # The words of a node function of pops.Graded and of a chart (``MAP_WORDS``): those of the analytic
 # programs that generate the static geometry arrays at bind, without erf and erfc.
 _NODE_WORDS = MAP_WORDS
@@ -216,7 +216,36 @@ def _sampled(value: Any) -> Any:
         return Arith(value.op, tuple(_sampled(arg) for arg in value.args))
     if isinstance(value, Call):
         return Call(value.word, tuple(_sampled(arg) for arg in value.args))
+    if isinstance(value, Predicate):
+        return Predicate(value.op, *(_sampled(arg) for arg in value.args))
     return value
+
+
+def _coordinates(value: Any) -> list:
+    """The coordinates that ``value`` reads outside its loads, one per axis, by axis."""
+    found: dict = {}
+    for node in walk(value, descend=lambda part: getattr(part, "key", None) != ("load",)):
+        if isinstance(node, Coordinate):
+            found.setdefault(node.index, node)
+    return [found[index] for index in sorted(found)]
+
+
+def _lower_predicate(value: Predicate, lower: Any, *, where: str) -> Any:
+    """Lower the surface predicate through the comparison algebra of its consumer."""
+    # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
+    # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
+    if value.op in ("all_of", "any_of", "none_of"):
+        items = [lower(arg) for arg in value.args]
+        result = items[0]
+        for item in items[1:]:
+            result = result & item if value.op == "all_of" else result | item
+        return ~result if value.op == "none_of" else result
+    if value.op not in ("<", "<=", ">", ">=", "equal"):
+        raise NotYetElaborated("%s in %s" % (text(value), where), _LATER)
+    left, right = (lower(arg) for arg in value.args)
+    return {"<": lambda: left < right, "<=": lambda: left <= right,
+            ">": lambda: left > right, ">=": lambda: left >= right,
+            "equal": lambda: left == right}[value.op]()
 
 
 def _is_cell_total(definition: Any) -> bool:
@@ -381,6 +410,8 @@ class _Elaboration:
         self.linear: dict = {}
         self.layout_facts: dict = {}
         self.params: dict = {}
+        self.coordinate_auxiliaries: dict = {}
+        self.auxiliaries: list = []
         self.lowered_outputs: tuple = ()
         # N3 lot 3 (P4): the b6 expression of each node of the body of a scheme, by identity, for
         # the inputs of the body lowered last; a shared node is lowered once, as b6 built it.
@@ -464,6 +495,10 @@ class _Elaboration:
 
     def _lower(self, value: Any, inputs: dict | None) -> Any:
         if inputs is not None:
+            if isinstance(value, Coordinate) and ("coordinate", value.name) in inputs:
+                return inputs[("coordinate", value.name)]
+            if ("load", id(value)) in inputs:
+                return inputs[("load", id(value))]
             scheme = self._scheme_value(value, inputs)
             if scheme is not None:
                 return scheme
@@ -522,20 +557,8 @@ class _Elaboration:
         if pair is not None:
             return inputs[("speeds", pair)]
         if isinstance(value, Predicate):
-            # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
-            # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
-            if value.op in ("all_of", "any_of", "none_of"):
-                items = [self.lower(arg, inputs) for arg in value.args]
-                result = items[0]
-                for item in items[1:]:
-                    result = result & item if value.op == "all_of" else result | item
-                return ~result if value.op == "none_of" else result
-            if value.op not in ("<", "<=", ">", ">=", "equal"):
-                raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
-            left, right = (self.lower(arg, inputs) for arg in value.args)
-            return {"<": lambda: left < right, "<=": lambda: left <= right,
-                    ">": lambda: left > right, ">=": lambda: left >= right,
-                    "equal": lambda: left == right}[value.op]()
+            return _lower_predicate(value, lambda arg: self.lower(arg, inputs),
+                                    where="the body of a scheme")
         if isinstance(value, Call) and value.word == "where":
             predicate, then, otherwise = value.args
             then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
@@ -550,17 +573,31 @@ class _Elaboration:
             return result
         return None
 
-    def code(self, value: Any) -> str:
-        """The b6 spelling of a value, for the report."""
+    def code(self, value: Any, spelled: dict | None = None) -> str:
+        """The b6 spelling of a value, for the report; ``spelled`` gives the spelling of a load
+        (by identity) and of a coordinate (by name) read through an auxiliary input."""
+        if spelled:
+            if id(value) in spelled:
+                return spelled[id(value)]
+            if isinstance(value, Coordinate) and ("coordinate", value.name) in spelled:
+                return spelled[("coordinate", value.name)]
         if isinstance(value, Quantity):
             return "%s[0]" % value.name
+        if isinstance(value, Predicate):
+            args = [self.code(arg, spelled) for arg in value.args]
+            if value.op in ("all_of", "any_of", "none_of"):
+                fold = (" & " if value.op == "all_of" else " | ").join(args)
+                return ("~" if value.op == "none_of" else "") + "(%s)" % fold
+            op = "==" if value.op == "equal" else value.op
+            return "(%s %s %s)" % (args[0], op, args[1])
         if isinstance(value, Call):
             word = value.word if value.word == "abs" else "pm." + value.word
-            return "%s(%s)" % (word, ", ".join(self.code(arg) for arg in value.args))
+            return "%s(%s)" % (word, ", ".join(self.code(arg, spelled) for arg in value.args))
         if isinstance(value, Arith):
             if value.op == "neg":
-                return "-(%s)" % self.code(value.args[0])
-            return "(%s %s %s)" % (self.code(value.args[0]), value.op, self.code(value.args[1]))
+                return "-(%s)" % self.code(value.args[0], spelled)
+            return "(%s %s %s)" % (self.code(value.args[0], spelled), value.op,
+                                   self.code(value.args[1], spelled))
         if isinstance(value, MathConstant):
             return repr(value.value)
         return text(value)
@@ -630,37 +667,86 @@ class _Elaboration:
             if isinstance(term, DiffusiveFlux):
                 elaborated[term] = self.diffusive(b6, term, name, origin, state)
             elif isinstance(term, Source):
-                elaborated[term] = self.source(b6, term, name, origin, state)
+                elaborated[term] = self.source(b6, frame, term, name, origin, state)
             else:
                 elaborated[term] = self.flux(b6, frame, term, name, origin, state)
         return elaborated
 
-    def source(self, b6: Any, term: Source, name: str, origin: str, state: Any) -> Any:
+    def source(self, b6: Any, frame: Any, term: Source, name: str, origin: str,
+               state: Any) -> Any:
         """The b6 named source of a source, whose value is the value of the ``CellRate`` that its
         scheme gives, read at the cell (N15 FaceFlux/CellRate FC-1, note §3.4, Q3): for
-        ``pointwise()`` it is the law of the source at the cell value."""
-        from ._builder_value import classify
+        ``pointwise()`` it is the law of the source at the cell value. A coordinate of the support
+        is read at the centre of the cell, and a load ``cell.load(e)`` is the mean of e under the
+        rule of the representation; each is an analytic auxiliary input of b6 (FC-2, §3.6)."""
+        from ._builder_value import BuilderValue, classify
 
         scheme = self.numerics.scheme_of(term)
         builder = scheme.traced(term).builder
-        typed = classify(builder.value, word="CellRate",
-                         definition=self.numerics.definition_of(term.quantity),
-                         site=getattr(scheme, "site", None))
-        value = self.lower(typed.value, {("sample", 0): self.values[term.quantity]})
-        handle = b6.source(name, on=state, value=(value,))
+        definition = self.numerics.definition_of(term.quantity)
         representation = self.numerics.representation_of(term.quantity)
+        typed = classify(builder.value, word="CellRate", definition=definition,
+                         site=getattr(scheme, "site", None))
+        inputs: dict = {("sample", 0): self.values[term.quantity]}
+        spelled: dict = {}
+        choices = [Choice("name", name, origin), Choice("scheme", scheme, "stated"),
+                   Choice("kind of value", typed.kind, "derived")]
+        for index, load in enumerate(typed.loads, start=1):
+            aux = "%s_load_%d" % (name, index)
+            mean = self.rule_mean(load.value, frame, (definition.pairing,) * len(frame.axes))
+            inputs[("load", id(load))] = self.auxiliary(b6, frame, aux, mean)
+            spelled[id(load)] = "Var(%r, 'aux')" % aux
+            choices.append(Choice(aux, "the mean of %s on the cell under the rule of %r, an "
+                                       "analytic auxiliary input" % (text(load.value),
+                                                                     representation),
+                                  "derived"))
+        for coordinate in _coordinates(typed.value):
+            aux = "coordinate_%s" % coordinate.name
+            if aux not in self.coordinate_auxiliaries:
+                from pops.analytic import coordinate as analytic_coordinate
+
+                self.coordinate_auxiliaries[aux] = self.auxiliary(
+                    b6, frame, aux, analytic_coordinate(frame, frame.axes[coordinate.index]))
+            inputs[("coordinate", coordinate.name)] = self.coordinate_auxiliaries[aux]
+            spelled[("coordinate", coordinate.name)] = "Var(%r, 'aux')" % aux
+            choices.append(Choice(coordinate.name, "the coordinate %s at the centre of the "
+                                                   "cell, an analytic auxiliary input (2.6.4)"
+                                  % coordinate.name, "derived"))
+        value = self.lower(typed.value, inputs)
+        handle = b6.source(name, on=state, value=(value,))
+        delivered = ("μ(K) times the value read at the cell, the rate of a total (N16 5.1, A1)"
+                     if _is_cell_total(definition) else "the value read at the cell")
+        if typed.kind == BuilderValue.LOAD:
+            delivered = "the mean of the load on the cell, the load over μ(K)"
+        choices.append(Choice("delivered", "the rate of %r: %s" % (representation, delivered),
+                              "derived"))
         self.rows.append(Row(
             "model.source(of=%s, value=%s)" % (term.quantity, text(term.value)), "model",
             "%s = model.source(%r, on=%s, value=(%s,))"
-            % (name, name, term.quantity.name, self.code(_sampled(typed.value))),
-            [Choice("name", name, origin),
-             Choice("scheme", scheme, "stated"),
-             Choice("kind of value", typed.kind, "derived"),
-             Choice("delivered", "the rate of %r: %s" % (
-                 representation, "μ(K) times the value read at the cell, the rate of a total "
-                 "(N16 5.1, A1)" if _is_cell_total(self.numerics.definition_of(term.quantity))
-                 else "the value read at the cell"), "derived")]))
+            % (name, name, term.quantity.name, self.code(_sampled(typed.value), spelled)),
+            choices))
         return handle
+
+    def auxiliary(self, b6: Any, frame: Any, name: str, expression: Any) -> Any:
+        """An imposed auxiliary input of b6 named ``name``, fixed on a static layout: its value at
+        each cell is ``expression`` (``pops.analytic``), and the b6 expression it returns,
+        ``Var(name, 'aux')``, reads it (N15 FaceFlux/CellRate lot FC-2, note §3.6). Its producer
+        ``AnalyticAux`` is registered on the final module of the model (``providers``)."""
+        self.auxiliaries.append((name, expression, frame))
+        return b6.auxiliary(name, frame=frame.canonical_id)
+
+    def providers(self, b6: Any) -> None:
+        """Register the producer of each auxiliary input on the final module of the model."""
+        from pops.fields import AnalyticAux, AuxiliaryBoundary
+
+        if not self.auxiliaries:
+            return
+        module = b6.module
+        declared = module.aux()
+        for name, expression, frame in self.auxiliaries:
+            module.aux_provider(AnalyticAux(module.aux_handle(declared[name]), expression,
+                                            frame=frame,
+                                            boundary=AuxiliaryBoundary(width=0)))
 
     def declare_flux_coordinates(self, b6: Any, frame: Any, term: Flux) -> None:
         coordinates = tuple(dict.fromkeys(node for node in walk(term.value)
@@ -1227,31 +1313,9 @@ class _Elaboration:
             integral = self.analytic(result, frame, (), bounds)
             spelling, rule = text(result), Choice("integral", text(result), "stated")
         else:
-            rules = value.rules(len(axes))
-            mapped = []
-            for axis, rule in zip(axes, rules, strict=True):
-                low, high = (float(end) for end in rule.interval)
-                lower, upper = bounds.lower(axis), bounds.upper(axis)
-                width = upper - lower
-                nodes = []
-                for node, weight in zip(rule.nodes, rule.weights, strict=True):
-                    fraction = (node - low) / (high - low)
-                    where = lower if fraction == 0.0 else upper if fraction == 1.0 \
-                        else lower + width * fraction
-                    nodes.append((where, weight / (high - low)))
-                mapped.append(nodes)
-            terms = []
-            for choice in _tensor(mapped):
-                weight = 1.0
-                for _, factor in choice:
-                    weight *= factor
-                sample = self.analytic(value.expression, frame,
-                                       tuple(where for where, _ in choice))
-                terms.append(sample if weight == 1.0 else weight * sample)
-            average = terms[0]
-            for term in terms[1:]:
-                average = average + term
-            integral = bounds.measure * average
+            rules = tuple((rule.nodes, rule.weights, rule.interval)
+                          for rule in value.rules(len(axes)))
+            integral = bounds.measure * self.rule_mean(value.expression, frame, rules)
             spelling = "the cell measure x the rule of %r" % (value.quadrature,)
             rule = Choice("quadrature", value.quadrature, "stated")
         provider = Analytic(frame=frame, components=(component,), cell_integrals=(integral,))
@@ -1261,6 +1325,39 @@ class _Elaboration:
                 [Choice("value", text(value.expression), "stated"), rule,
                  Choice("cell average", "the cell integral divided by the cell measure, "
                                         "native", "derived")])
+
+    def rule_mean(self, value: Any, frame: Any, rules: tuple) -> Any:
+        """The mean of ``value`` on the cell under a rule per axis, ``(nodes, weights, interval)``:
+        the sum over the tensor nodes of the weights (each divided by the length of its interval)
+        times the value at the nodes mapped onto the cell, an analytic expression over the bounds
+        of the cell. ``projection`` multiplies it by the measure; the rate of ``cell.load(e)``
+        under one constant mode is the mean itself (N15 FaceFlux/CellRate lot FC-2, note §3.6)."""
+        from pops.analytic import CellBounds
+
+        bounds = CellBounds(frame)
+        mapped = []
+        for axis, (rule_nodes, rule_weights, interval) in zip(frame.axes, rules, strict=True):
+            low, high = (float(end) for end in interval)
+            lower, upper = bounds.lower(axis), bounds.upper(axis)
+            width = upper - lower
+            nodes = []
+            for node, weight in zip(rule_nodes, rule_weights, strict=True):
+                fraction = (node - low) / (high - low)
+                where = lower if fraction == 0.0 else upper if fraction == 1.0 \
+                    else lower + width * fraction
+                nodes.append((where, weight / (high - low)))
+            mapped.append(nodes)
+        terms = []
+        for choice in _tensor(mapped):
+            weight = 1.0
+            for _, factor in choice:
+                weight *= factor
+            sample = self.analytic(value, frame, tuple(where for where, _ in choice))
+            terms.append(sample if weight == 1.0 else weight * sample)
+        average = terms[0]
+        for term in terms[1:]:
+            average = average + term
+        return average
 
     def analytic(self, value: Any, frame: Any, point: tuple, bounds: Any = None) -> Any:
         """The analytic expression of b6 (``pops.analytic``) of a value of an initial value: the
@@ -1300,6 +1397,9 @@ class _Elaboration:
                 return left ** float(_number(exponent))
             return {"+": lambda: left + right, "-": lambda: left - right,
                     "*": lambda: left * right, "/": lambda: left / right}[value.op]()
+        if isinstance(value, Predicate):
+            return _lower_predicate(value, lambda arg: self.analytic(arg, frame, point, bounds),
+                                    where="an analytic expression")
         if isinstance(value, Call) and value.word in _ANALYTIC_WORDS:
             args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
             return getattr(an, value.word)(*args)
@@ -1751,6 +1851,7 @@ class _Elaboration:
         self.initial(case6, block, states, frame)
         advance = self.advance(case6, block, states, selections)
         layout = self.layout(support, frame)
+        self.providers(b6)
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,
                           states=states, names=self.names, advance=advance,
                           rows=tuple(self.rows), params=dict(self.params),
