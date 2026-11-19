@@ -41,7 +41,7 @@ def _matrices(permutation):
     return tuple(a[np.ix_(permutation, permutation)] for a in (x, y))
 
 
-def _case(permutation, *, guarded=False, primitive=False, mixed=False):
+def _case(permutation, *, guarded=False, primitive=False, mixed=False, primitive_probe=False):
     frame = Rectangle("joint_user_native", (0., 0.), (1., 1.)).frame(Cartesian2D())
     model = pops.Model("joint_user_native_model", frame=frame)
     states = (model.species("first", state=tuple("q%d" % k for k in permutation[:2])),
@@ -76,6 +76,8 @@ def _case(permutation, *, guarded=False, primitive=False, mixed=False):
 
     def first(sample):
         calls.append("first")
+        if primitive_probe:
+            return (where(alpha < 0., lambda: sample(-1)[0], lambda: Const(2.)), Const(2.))
         own, other = sample(0), sample(3, states[1])
         first_value = own[0] + alpha * (other[2] - sample(-1, states[1])[2])
         if guarded:
@@ -90,11 +92,15 @@ def _case(permutation, *, guarded=False, primitive=False, mixed=False):
                 own[1] + beta * (sample(1)[2] - sample(-1)[2]),
                 own[2] + beta * (sample(2, states[0])[0] - sample(-1, states[0])[0]))
 
+    def primitive_scalar(sample):
+        return where(beta < 0., lambda: Const(2.), lambda: 0.5 * sample(1))
+
     case = pops.Case("joint_user_native_case")
     # Registration order differs from the physical declaration/packed component order.
     blocks = {row: case.block("block%d" % row, model, states=(states[row],)) for row in (1, 0)}
     for row, body in enumerate((first, second)):
         policy = (reconstruction.User(
+            primitive_scalar if primitive_probe else
             lambda sample: sample(0) + .1 * (sample(1) - sample(-1)), formal_order=1)
             if mixed and row == 1 else
             reconstruction.User(body, state=states[row], sampling=(states[1-row],),
@@ -239,3 +245,45 @@ def test_joint_invalid_active_branch_refuses_all_rows_and_clock(
     after = _gather(bad, world)
     _root_check(world, lambda: np.testing.assert_array_equal(after, before))
     assert tuple(calls) == authoring_calls, "Python body ran during native evaluation"
+
+
+def test_joint_primitive_conversion_only_reads_the_selected_neighbour(
+        isolated_native_cache, native_cxx, kokkos_root, tmp_path, record_property):
+    from pops.output import Checkpoint, ConsumerGraph
+    from pops.time import every
+
+    permutation = tuple(range(5))
+    case, layout, subjects, handles, _, calls = _case(
+        permutation, primitive=True, mixed=True, primitive_probe=True)
+    case.consumers(ConsumerGraph.from_consumers((Checkpoint(
+        schedule=every(1, clock=case._time.clock), target="accepted", bit_identical=True,
+    ),)))
+    artifact, world = _compile(case, layout, "joint-user-primitive-branch")
+    authoring_calls = tuple(calls)
+    initial = _initial(permutation)
+    initial[0, 2, 3] = -.25  # Finite storage, invalid when recovered as a primitive sample.
+    for selected, beta in (("inactive", -.02), ("active", .02)):
+        runtime = _bind(artifact, subjects, handles, initial, .03, beta)
+        before = _gather(runtime, world)
+        output = tmp_path / selected
+        _root_check(world, lambda: output.mkdir(exist_ok=True))
+        if selected == "inactive":
+            pops.run(runtime, t_end=DT, max_steps=1, console=False, output_dir=output)
+            assert (runtime.time(), runtime.macro_step()) == (DT, 1)
+            def check_publication():
+                np.testing.assert_array_equal(before, initial)
+                assert any(path.is_file() for path in output.glob("accepted*"))
+            _root_check(world, check_publication)
+        else:
+            with pytest.raises(RuntimeError, match="face evaluation") as refused:
+                pops.run(runtime, t_end=DT, max_steps=1, console=False, output_dir=output)
+            record_property("primitive_refusal", str(refused.value))
+            assert (runtime.time(), runtime.macro_step()) == (0., 0)
+            def check_no_publication():
+                assert not any(path.is_file() for path in output.rglob("*"))
+            _root_check(world, check_no_publication)
+        after = _gather(runtime, world)
+        # Inactive branches construct constant traces, so every flux difference is exactly zero.
+        _root_check(world, lambda: np.testing.assert_array_equal(
+            after.view(np.uint64), before.view(np.uint64)))
+        assert tuple(calls) == authoring_calls

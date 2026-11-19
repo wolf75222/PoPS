@@ -201,6 +201,8 @@ def test_bounded_product_keeps_the_order_and_bits_of_the_checked_scalar_policy(
             assert observed[0] == observed[1], (label, values, observed)
             if label in ("typed", "overflow", "masked", "sum"):
                 assert observed[1][0] is None
+            if label == "masked":
+                assert observed[1][1] == (0, 2 if values[0] == -inf else 1)
             if label == "branches":
                 assert observed[1][1] == ((0, 1) if values[0] > 0 else (0, 2))
             if label in ("and_then", "or_else"):
