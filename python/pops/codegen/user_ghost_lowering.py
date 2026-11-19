@@ -86,6 +86,8 @@ def _policy_clock(ghosts: Any) -> str | None:
 
 def require_clocked_ghost_program(program: Any, blocks: Any, target: str) -> None:
     """Authenticate temporal boundary uses before compiling any native package."""
+    from pops.numerics.stencil_flux import StencilFlux
+    from pops.time._program.traversal import all_ops_with_ancestry
     from pops.time.references import block_name
 
     clocks = {}
@@ -101,24 +103,24 @@ def require_clocked_ghost_program(program: Any, blocks: Any, target: str) -> Non
     if program is None or target != "system":
         raise NotImplementedError("SourceGhost time requires an exact Uniform Program Clock")
 
-    def check(nodes: Any, child: bool = False) -> None:
-        for node in nodes:
-            if node.block is not None and block_name(node.block) in clocks:
-                reads_ghosts = (
-                    (node.op == "rhs" and node.attrs.get("flux", True))
-                    or node.op in {"diffusive_rhs", "stencil_flux_divergence", "condensed_rhs"}
-                    or "cell_field_projection" in node.attrs
-                )
-                if reads_ghosts and (child or node.clock != program.clock):
-                    raise NotImplementedError(
-                        "SourceGhost time has no exact Clock for child application %s" % node.name)
-            for key in ("cond_block", "body_block", "true_block", "false_block",
-                        "apply_block", "residual_block"):
-                nested = node.attrs.get(key)
-                if nested:
-                    check(nested, child or node.op == "subcycle")
-
-    check(program._values)
+    subcycles = set()
+    for node, ancestry in all_ops_with_ancestry(program):
+        if node.op == "subcycle":
+            subcycles.add(node.id)
+        if node.block is None or block_name(node.block) not in clocks:
+            continue
+        # A source-owned stencil declaration consumes state extension even when
+        # its selected footprint is narrow. The emitter prepares that input first.
+        reads_ghosts = (
+            (node.op == "rhs" and node.attrs.get("flux", True))
+            or node.op in {"diffusive_rhs", "condensed_rhs"}
+            or type(node.attrs.get("stencil_flux")) is StencilFlux
+            or "cell_field_projection" in node.attrs
+        )
+        child = any(owner in subcycles for owner, _ in ancestry)
+        if reads_ghosts and (child or node.clock != program.clock):
+            raise NotImplementedError(
+                "SourceGhost time has no exact Clock for child application %s" % node.name)
     for name, clock in clocks.items():
         if clock != program.clock.qualified_id:
             raise ValueError("SourceGhost for %s requires its exact consuming Program Clock" % name)
