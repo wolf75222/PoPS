@@ -556,10 +556,11 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
   runtime::program::collective_boundary_provider_phase(
       *lane, "System shared-interface core session allocation",
       [&] { sessions.reserve(owner->sp.size()); });
-  const auto topology = BoundaryTopology<Dim>::axis_periodic(owner->periodicity);
+  const auto& topology = owner->domain_.topology;
   for (std::size_t block = 0; block < owner->sp.size(); ++block)
     sessions.push_back(Session::prepare_block(owner->geom, topology, owner->sp[block].U, *lane,
-                                              static_cast<std::uint64_t>(block) + 1));
+                                              static_cast<std::uint64_t>(block) + 1,
+                                              &owner->sp[block].cons_vars));
   auto core = [owner, lane, sessions = std::move(sessions)](
                   const runtime::multiblock::BoundaryEvaluationPoint& point,
                   const std::vector<MultiFab<Dim>*>& states,

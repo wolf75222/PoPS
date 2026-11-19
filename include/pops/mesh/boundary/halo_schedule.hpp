@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <pops/core/state/variables.hpp>
+#include <pops/mesh/boundary/identified_halo_images.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -13,12 +15,79 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace pops {
+
+template <int Dim>
+struct HaloComponentRoles {
+  std::array<int, Dim> momentum;
+  std::array<int, Dim> velocity;
+
+  HaloComponentRoles() {
+    momentum.fill(-1);
+    velocity.fill(-1);
+  }
+
+  explicit HaloComponentRoles(const VariableSet& variables) : HaloComponentRoles() {
+    if (variables.roles.size() != static_cast<std::size_t>(variables.size))
+      throw std::invalid_argument("identified halo requires the exact declared field roles");
+    for (int i = 0; i < variables.size; ++i) {
+      const auto role = variables.roles[i];
+      role.template validate_for_dimension<Dim>();
+      if (role.kind == VariableRoleKind::Custom || role.kind == VariableRoleKind::Axial)
+        throw std::invalid_argument("identified halo has an unserved field component role");
+      if (!role.is_vector())
+        continue;
+      auto& slots = role.kind == VariableRoleKind::Momentum ? momentum : velocity;
+      if (slots[role.axis] != -1)
+        throw std::invalid_argument("identified halo repeats a vector component axis");
+      slots[role.axis] = i;
+    }
+    for (const auto& slots : {momentum, velocity}) {
+      const auto absent = std::count(slots.begin(), slots.end(), -1);
+      if (absent != 0 && absent != Dim)
+        throw std::invalid_argument("identified halo requires every axis of its polar vector");
+    }
+  }
+
+  bool operator==(const HaloComponentRoles&) const = default;
+};
+
+template <int Dim>
+struct OrientedHaloGather {
+  std::array<int, Dim> source_axis{};
+  std::array<int, Dim> signs{};
+  std::array<std::int64_t, Dim> source_offsets{};
+  HaloComponentRoles<Dim> roles;
+
+  POPS_HD Index<Dim> index(const Index<Dim>& destination) const {
+    Index<Dim> source{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int image_axis = source_axis[axis];
+      source[image_axis] = static_cast<int>(
+          signs[axis] * static_cast<std::int64_t>(destination[axis]) + source_offsets[image_axis]);
+    }
+    return source;
+  }
+
+  POPS_HD Real value(const FieldView<const Real, Dim>& source, const Index<Dim>& image,
+                     int component) const {
+    for (int axis = 0; axis < Dim; ++axis) {
+      if (component == roles.momentum[axis])
+        return signs[axis] * source(image, roles.momentum[source_axis[axis]]);
+      if (component == roles.velocity[axis])
+        return signs[axis] * source(image, roles.velocity[source_axis[axis]]);
+    }
+    return source(image, component);
+  }
+
+  bool operator==(const OrientedHaloGather&) const = default;
+};
 
 /// Finite preparation budget.  Halo construction is quadratic in the patch count and also visits
 /// every periodic image that can intersect the requested ghost depth.
@@ -48,6 +117,7 @@ struct HaloJob {
   Index<Dim> source_from_destination{};
   std::size_t offset = 0;
   std::size_t elements = 0;
+  std::optional<OrientedHaloGather<Dim>> oriented{};
 
   bool operator==(const HaloJob&) const = default;
 };
@@ -219,7 +289,7 @@ class HaloSchedule {
   HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
                BoundaryTopology<Dim> topology, int ncomp, HaloLayoutCoverage coverage,
-               HaloScheduleBudget budget)
+               HaloScheduleBudget budget, const VariableSet* field_roles = nullptr)
       : layout_(layout),
         distribution_(distribution),
         local_rank_(local_rank),
@@ -245,43 +315,8 @@ class HaloSchedule {
     if (ncomp_ < 1)
       throw std::invalid_argument("pops::HaloSchedule component count must be positive");
 
-    std::size_t image_count = 0;
-    const std::array<std::size_t, Dim> image_count_by_axis =
-        halo_schedule_detail::image_counts(domain_, ghosts_, topology_, image_count);
-    if (image_count > budget.periodic_images)
-      throw std::length_error("pops::HaloSchedule periodic image budget exceeded");
-    const std::size_t pair_count = halo_schedule_detail::checked_product(
-        layout_.size(), layout_.size(), "pops::HaloSchedule patch pair count exceeds size_t");
-    const std::size_t work = halo_schedule_detail::checked_product(
-        pair_count, image_count, "pops::HaloSchedule box-image work exceeds size_t");
-    if (work > budget.box_image_pairs)
-      throw std::length_error("pops::HaloSchedule box-image pair budget exceeded");
-
-    std::vector<job_type> jobs;
-    for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
-      const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
-      for (std::size_t image = 0; image < image_count; ++image) {
-        const Index<Dim> source_from_destination =
-            halo_schedule_detail::image_shift<Dim>(image, image_count_by_axis, domain_);
-        const Index<Dim> image_from_source = halo_schedule_detail::negate(source_from_destination);
-        for (std::size_t source = 0; source < layout_.size(); ++source) {
-          const Box<Dim> candidate = grown.intersect(layout_[source].shift(image_from_source));
-          if (candidate.empty())
-            continue;
-          for (const Box<Dim>& region :
-               halo_schedule_detail::subtract(candidate, layout_[destination])) {
-            if (jobs.size() >= budget.jobs)
-              throw std::length_error("pops::HaloSchedule job budget exceeded");
-            const Box<Dim> source_region = region.shift(source_from_destination);
-            if (!layout_[source].contains(source_region))
-              throw std::logic_error("pops::HaloSchedule generated an invalid source region");
-            jobs.push_back(job_type{source, destination, region, source_from_destination, 0,
-                                    checked_elements_(region)});
-          }
-        }
-      }
-    }
-
+    const auto jobs = topology_.has_identifications() ? identified_jobs_(field_roles, budget)
+                                                      : translation_jobs_(budget);
     canonical_jobs_ = jobs;
     for (const job_type& job : jobs)
       classify_(job, budget);
@@ -323,6 +358,95 @@ class HaloSchedule {
   }
 
  private:
+  std::vector<job_type> translation_jobs_(const HaloScheduleBudget& budget) const {
+    std::size_t image_count = 0;
+    const std::array<std::size_t, Dim> image_count_by_axis =
+        halo_schedule_detail::image_counts(domain_, ghosts_, topology_, image_count);
+    if (image_count > budget.periodic_images)
+      throw std::length_error("pops::HaloSchedule periodic image budget exceeded");
+    const std::size_t pair_count = halo_schedule_detail::checked_product(
+        layout_.size(), layout_.size(), "pops::HaloSchedule patch pair count exceeds size_t");
+    const std::size_t work = halo_schedule_detail::checked_product(
+        pair_count, image_count, "pops::HaloSchedule box-image work exceeds size_t");
+    if (work > budget.box_image_pairs)
+      throw std::length_error("pops::HaloSchedule box-image pair budget exceeded");
+
+    std::vector<job_type> jobs;
+    for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
+      const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
+      for (std::size_t image = 0; image < image_count; ++image) {
+        const Index<Dim> source_from_destination =
+            halo_schedule_detail::image_shift<Dim>(image, image_count_by_axis, domain_);
+        const Index<Dim> image_from_source = halo_schedule_detail::negate(source_from_destination);
+        for (std::size_t source = 0; source < layout_.size(); ++source) {
+          const Box<Dim> candidate = grown.intersect(layout_[source].shift(image_from_source));
+          if (candidate.empty())
+            continue;
+          for (const Box<Dim>& region :
+               halo_schedule_detail::subtract(candidate, layout_[destination])) {
+            if (jobs.size() >= budget.jobs)
+              throw std::length_error("pops::HaloSchedule job budget exceeded");
+            const Box<Dim> source_region = region.shift(source_from_destination);
+            if (!layout_[source].contains(source_region))
+              throw std::logic_error("pops::HaloSchedule generated an invalid source region");
+            jobs.push_back(job_type{source, destination, region, source_from_destination, 0,
+                                    checked_elements_(region)});
+          }
+        }
+      }
+    }
+    return jobs;
+  }
+
+  std::vector<job_type> identified_jobs_(const VariableSet* field_roles,
+                                         const HaloScheduleBudget& budget) const {
+    if (coverage_ != HaloLayoutCoverage::full_domain)
+      throw std::invalid_argument("identified halo requires full Cartesian Uniform coverage");
+    if (field_roles == nullptr || field_roles->size != ncomp_)
+      throw std::invalid_argument("identified halo requires exact roles on its field allocation");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (ghosts_[axis] < 0 || ghosts_[axis] > domain_.length(axis))
+        throw std::invalid_argument("identified halo depth exceeds image extent on axis " +
+                                    std::to_string(axis));
+    const HaloComponentRoles<Dim> roles{*field_roles};
+    const auto crossings = identified_halo_detail::prepare_crossings(topology_, domain_);
+    std::size_t intersections = 0;
+    std::vector<job_type> jobs;
+    for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
+      auto work = budget.periodic_images;
+      const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
+      for (const auto& region : halo_schedule_detail::subtract(grown, layout_[destination])) {
+        for (const auto& image :
+             identified_halo_detail::resolve<Dim>(region, domain_, crossings, {}, 0, work)) {
+          const auto& gather = image.read_from_destination;
+          const auto inverse = gather.inverse();
+          const auto source_image = gather.apply(image.destination);
+          const auto& permutation = gather.signed_permutation();
+          const OrientedHaloGather<Dim> oriented{permutation.target_axes(), permutation.signs(),
+                                                 gather.target_offsets(), roles};
+          halo_schedule_detail::checked_add(intersections, layout_.size(), budget.box_image_pairs,
+                                            "identified halo box-image work budget exceeded");
+          for (std::size_t source = 0; source < layout_.size(); ++source) {
+            const Box<Dim> owned = source_image.intersect(layout_[source]);
+            if (owned.empty())
+              continue;
+            if (jobs.size() >= budget.jobs)
+              throw std::length_error("identified halo job budget exceeded");
+            const auto destination_region = inverse.apply(owned);
+            jobs.push_back({source,
+                            destination,
+                            destination_region,
+                            {},
+                            0,
+                            checked_elements_(destination_region),
+                            oriented});
+          }
+        }
+      }
+    }
+    return jobs;
+  }
+
   std::size_t checked_elements_(const Box<Dim>& region) const {
     const std::int64_t cells = region.numPts();
     if (cells <= 0 || static_cast<std::uint64_t>(cells) > std::numeric_limits<std::size_t>::max() /
@@ -404,7 +528,8 @@ template <int Dim, class MemorySpace>
 HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields,
                                         const Box<Dim>& domain,
                                         const BoundaryTopology<Dim>& topology,
-                                        HaloLayoutCoverage coverage, HaloScheduleBudget budget) {
+                                        HaloLayoutCoverage coverage, HaloScheduleBudget budget,
+                                        const VariableSet* roles = nullptr) {
   return HaloSchedule<Dim>{fields.layout(),
                            fields.distribution(),
                            fields.local_rank(),
@@ -413,7 +538,8 @@ HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields
                            topology,
                            fields.ncomp(),
                            coverage,
-                           budget};
+                           budget,
+                           roles};
 }
 
 /// Uniform compatibility overload with an explicit final meaning: the layout covers the domain.

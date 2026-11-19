@@ -32,10 +32,29 @@ struct CopyShiftedKernel {
   }
 };
 
+template <int Dim>
+struct CopyOrientedKernel {
+  FieldView<Real, Dim> destination{};
+  FieldView<const Real, Dim> source{};
+  OrientedHaloGather<Dim> gather{};
+  int component_count = 0;
+
+  POPS_HD void operator()(const Index<Dim>& destination_index) const {
+    const auto image = gather.index(destination_index);
+    for (int component = 0; component < component_count; ++component)
+      destination(destination_index, component) = gather.value(source, image, component);
+  }
+};
+
 template <int Dim, class MemorySpace>
 void replay_local_job(MultiFab<Dim, MemorySpace>& fields, const HaloJob<Dim>& job) {
   auto& destination = fields.fab_global(job.destination_box);
   const auto& source = fields.fab_global(job.source_box);
+  if (job.oriented) {
+    for_each_cell(job.destination_region, CopyOrientedKernel<Dim>{destination.view(), source.view(),
+                                                                  *job.oriented, fields.ncomp()});
+    return;
+  }
   for_each_cell(job.destination_region,
                 CopyShiftedKernel<Dim>{destination.view(), source.view(),
                                        job.source_from_destination, fields.ncomp()});

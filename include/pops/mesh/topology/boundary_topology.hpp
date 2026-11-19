@@ -3,8 +3,11 @@
 
 #pragma once
 
+#include <pops/mesh/boundary/periodicity.hpp>
+
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -45,7 +48,7 @@ constexpr bool face_less(Face<Dim> left, Face<Dim> right) noexcept {
   return left.ordinal() < right.ordinal();
 }
 
-enum class BoundaryFaceKind : unsigned char { physical, periodic };
+enum class BoundaryFaceKind : unsigned char { physical, periodic, identified };
 
 /// One ordinary axis-translation periodic pairing.  Mapped/signed identifications deliberately
 /// remain outside this value: a translation schedule must never silently approximate one.
@@ -72,6 +75,7 @@ struct BoundaryFaceRecord {
   Face<Dim> face{};
   BoundaryFaceKind kind = BoundaryFaceKind::physical;
   Face<Dim> partner{};
+  std::optional<PeriodicIdentification<Dim>> identification{};
 
   bool operator==(const BoundaryFaceRecord&) const = default;
 };
@@ -112,6 +116,33 @@ class BoundaryTopology {
   static BoundaryTopology axis_periodic(const std::array<bool, Dim>& periodic_axes) {
     return BoundaryTopology{periodic_axes};
   }
+
+  static BoundaryTopology uniform_identifications(
+      const std::array<bool, Dim>& periodic_axes,
+      const std::vector<PeriodicIdentification<Dim>>& identifications) {
+    BoundaryTopology result{periodic_axes};
+    for (const auto& identification : identifications) {
+      identification.validate(true);
+      const int source = identification.source_face;
+      const int target = identification.target_face;
+      if (result.faces_[source].kind != BoundaryFaceKind::physical ||
+          result.faces_[target].kind != BoundaryFaceKind::physical)
+        throw std::invalid_argument(
+            "Cartesian identification overlaps an existing face assignment");
+      const auto a = result.faces_[source].face;
+      const auto b = result.faces_[target].face;
+      result.faces_[source] = {a, BoundaryFaceKind::identified, b, identification};
+      result.faces_[target] = {b, BoundaryFaceKind::identified, a, identification};
+    }
+    result.has_identifications_ = !identifications.empty();
+    if (result.has_identifications_)
+      for (const auto& face : result.faces_)
+        if (face.kind == BoundaryFaceKind::physical)
+          throw std::invalid_argument("G09 I1 cannot compose identified and physical corners");
+    return result;
+  }
+
+  bool has_identifications() const noexcept { return has_identifications_; }
 
   const std::array<BoundaryFaceRecord<Dim>, face_count>& faces() const noexcept { return faces_; }
 
@@ -166,6 +197,7 @@ class BoundaryTopology {
 
   std::array<BoundaryFaceRecord<Dim>, face_count> faces_{};
   std::size_t periodic_pair_count_ = 0;
+  bool has_identifications_ = false;
 };
 
 static_assert(std::is_trivially_copyable_v<Face<1>>);

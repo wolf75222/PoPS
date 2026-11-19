@@ -3220,7 +3220,7 @@ class ProgramContext {
   }
 
   BoundaryTopology<Dim> scalar_boundary_topology_() const {
-    return BoundaryTopology<Dim>::axis_periodic(system_->prepared_block_periodicity());
+    return system_->prepared_block_topology();
   }
 
   std::uint64_t next_scalar_boundary_generation_() const {

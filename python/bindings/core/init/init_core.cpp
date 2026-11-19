@@ -875,6 +875,38 @@ void init_core(py::module_& m) {
                 ranked_periodicity_from_python<kNativeDimension>(value, "SystemConfig");
           })
       .def_property(
+          "identifications",
+          [](const NativeSystemConfig& config) {
+            std::vector<std::vector<int>> rows;
+            for (const auto& identification : config.identifications) {
+              std::vector<int> row{identification.source_face, identification.target_face};
+              row.insert(row.end(), identification.permutation.begin(),
+                         identification.permutation.end());
+              row.insert(row.end(), identification.signs.begin(), identification.signs.end());
+              row.insert(row.end(), identification.target_offsets.begin(),
+                         identification.target_offsets.end());
+              rows.push_back(std::move(row));
+            }
+            return rows;
+          },
+          [](NativeSystemConfig& config,
+             const std::vector<std::array<int, 2 + 3 * kNativeDimension>>& rows) {
+            std::vector<PeriodicIdentification<kNativeDimension>> identifications;
+            for (const auto& row : rows) {
+              PeriodicIdentification<kNativeDimension> identification;
+              identification.source_face = row[0];
+              identification.target_face = row[1];
+              for (int axis = 0; axis < kNativeDimension; ++axis) {
+                identification.permutation[axis] = row[2 + axis];
+                identification.signs[axis] = row[2 + kNativeDimension + axis];
+                identification.target_offsets[axis] = row[2 + 2 * kNativeDimension + axis];
+              }
+              identification.validate(true);
+              identifications.push_back(identification);
+            }
+            config.identifications = std::move(identifications);
+          })
+      .def_property(
           "boxes",
           [](const NativeSystemConfig& config) { return ranked_boxes_to_python(config.boxes); },
           [](NativeSystemConfig& config, const py::handle& value) {

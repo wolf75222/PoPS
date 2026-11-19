@@ -195,6 +195,7 @@ struct SystemConfig : RuntimeSpatialDomain<Dim> {
   /// authenticated cardinality. This is not a global bound on arbitrarily many
   /// retained snapshots; copies share their original incarnation.
   std::optional<std::uint64_t> runtime_parameter_byte_capacity;
+  std::vector<PeriodicIdentification<Dim>> identifications;
 
   std::string load_balance_route = "round_robin";
   std::string load_balance_identity = "pops.system.default.round-robin@1";
@@ -426,6 +427,7 @@ class System {
   /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
   /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
   POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
+  POPS_EXPORT BoundaryTopology<Dim> prepared_block_topology() const;
   /// Exact static scalar boundary of an installed field slot owned by this runtime block.
   /// An omitted slot is admitted only for a single installed plan. Dynamic laws are refused;
   /// callers must retain the returned value outside their stencil/Krylov hot loop.
