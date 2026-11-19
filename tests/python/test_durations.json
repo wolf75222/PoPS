@@ -6745,7 +6745,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1241,
+    "estimated_count": 1243,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6984,6 +6984,7 @@
       "tests/python/integration/runtime/test_finite_structural_depth_native.py",
       "tests/python/integration/runtime/test_g03_cell_totals_native.py",
       "tests/python/integration/runtime/test_g03_moving_members_native.py",
+      "tests/python/integration/runtime/test_g03_moving_transport_native.py",
       "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py",
       "tests/python/integration/runtime/test_generic_physical_maps.py",
       "tests/python/integration/runtime/test_guarded_field_diffusion_publication.py",
@@ -7112,6 +7113,8 @@
       "tests/python/integration/runtime/test_surface_lot_d_step_rule_native.py",
       "tests/python/integration/runtime/test_surface_lot_e_project_native.py",
       "tests/python/integration/runtime/test_surface_lot_g_run_native.py",
+      "tests/python/integration/runtime/test_surface_n15_cell_load_native.py",
+      "tests/python/integration/runtime/test_surface_n15_sources_native.py",
       "tests/python/integration/runtime/test_surface_n16_three_words_native.py",
       "tests/python/integration/runtime/test_surface_n3_lot2_muscl_native.py",
       "tests/python/integration/runtime/test_surface_n3_lot3_weno5_native.py",
@@ -7571,6 +7574,7 @@
       "tests/python/unit/numerics/test_m23_ledger_stage_oracle.py",
       "tests/python/unit/numerics/test_m26_measured_independent_review.py",
       "tests/python/unit/numerics/test_moving_configuration_members.py",
+      "tests/python/unit/numerics/test_moving_total_rate.py",
       "tests/python/unit/numerics/test_n16_three_words_rows.py",
       "tests/python/unit/numerics/test_nonlinear_accumulation_recovery.py",
       "tests/python/unit/numerics/test_nonnegative_diagonal_diffusion.py",
@@ -7790,7 +7794,9 @@
       "tests/python/unit/surface/test_lot_d_step_rule.py",
       "tests/python/unit/surface/test_lot_e_project.py",
       "tests/python/unit/surface/test_lot_g_run.py",
+      "tests/python/unit/surface/test_n15_cell_load.py",
       "tests/python/unit/surface/test_n15_face_coordinates.py",
+      "tests/python/unit/surface/test_n15_sources.py",
       "tests/python/unit/surface/test_n17_chart.py",
       "tests/python/unit/surface/test_n17_graded.py",
       "tests/python/unit/surface/test_n3_lot1_library_words.py",
@@ -7983,11 +7989,7 @@
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
       "tests/python/unit/time/test_variant_temporal_envelope.py",
-      "tests/python/unit/time/test_variant_types_v09.py",
-      "tests/python/integration/runtime/test_surface_n15_sources_native.py",
-      "tests/python/unit/surface/test_n15_sources.py",
-      "tests/python/integration/runtime/test_surface_n15_cell_load_native.py",
-      "tests/python/unit/surface/test_n15_cell_load.py"
+      "tests/python/unit/time/test_variant_types_v09.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -8189,7 +8191,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1309,
+    "total_files": 1311,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -10428,6 +10430,44 @@
       "weights_seconds": {
         "tests/python/integration/runtime/test_g09_oriented_identification_native.py": 190
       }
+    },
+    "g03_20261119_moving_transport": {
+      "basis": "Conservative CI scheduling estimates for ROM-21 M1b. Native rank-one cold compiles and runs three unchanged scientific trajectories, measured at 156.56 s on the author stock. The 760 s tier preserves the conservative cold-compile margin of the G03 moving-members receiver. The source-only 60 s tier covers exact owner and stage refusals plus graph resolution.",
+      "analogues": {
+        "tests/python/integration/runtime/test_g03_moving_transport_native.py": "tests/python/integration/runtime/test_g03_moving_members_native.py",
+        "tests/python/unit/numerics/test_moving_total_rate.py": "tests/python/unit/numerics/test_moving_configuration_members.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_g03_moving_transport_native.py": 760,
+        "tests/python/unit/numerics/test_moving_total_rate.py": 60
+      },
+      "stock_native_receipt": {
+        "source_commit": "5dbc961a69634af74abcbaf0f82d3acea8e865f7",
+        "job_id": 830949,
+        "host": "romeo-c039",
+        "native_dimension": 1,
+        "passed": 3,
+        "session_seconds": 156.56
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_g03_moving_transport_native.py": "9e5fe17505d195e755ef9bc41d0f5b7a9e238857f11d1deed5ddec68b41abfce",
+        "tests/python/unit/numerics/test_moving_total_rate.py": "e0352f2f073a1bd71dae63d7b5ea50cb567a06230600a0610bf70ec2ffa9b6ee"
+      },
+      "source_receipts": {
+        "d21_16_cases": {
+          "platform": "macOS arm64",
+          "passed": 16,
+          "session_seconds": 16.26,
+          "scope": "includes the temporal update variants and independent static layout"
+        },
+        "cold_earlier_11_cases": {
+          "platform": "macOS arm64",
+          "passed": 11,
+          "reported_phase_seconds": 285.3451390846167,
+          "session_seconds": 304.68590166582726,
+          "scope": "pre-layout test and concurrent native, architecture and desktop load; not a CI per-file time"
+        }
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -11738,5 +11778,7 @@
   "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 300,
   "tests/python/unit/surface/test_n15_cell_load.py": 30,
   "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py": 340,
-  "tests/python/integration/runtime/test_g09_oriented_identification_native.py": 190
+  "tests/python/integration/runtime/test_g09_oriented_identification_native.py": 190,
+  "tests/python/integration/runtime/test_g03_moving_transport_native.py": 760,
+  "tests/python/unit/numerics/test_moving_total_rate.py": 60
 }

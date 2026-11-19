@@ -2566,6 +2566,22 @@ class RuntimeInstance:
         outer_snapshot: dict[str, Any] = {}
 
         def prepare_outer_state() -> Any:
+            artifact = self._install_plan.artifact
+            incidence = tuple(block for block in artifact.plan.blocks if block.moving_incidence)
+            if incidence:
+                import numpy as np
+                from pops.codegen._moving_members_consumers import moving_geometry_incidence_failure
+                from pops.runtime._bind_validation import _precision_dtype_names
+
+                dtype, = _precision_dtype_names(artifact.manifest().precision)
+                for block in incidence:
+                    array = np.asarray(stored["state_" + block.name], dtype=dtype)
+                    component = block.moving_volume_component
+                    assert component is not None
+                    problem = moving_geometry_incidence_failure(
+                        array.reshape(3, -1), component)
+                    if problem is not None:
+                        raise ValueError("restart %s: %s" % (block.name, problem))
             source_run_identity = checkpoint_run_identity(stored)
             restore_run_identity = getattr(self._executor, "_restore_checkpoint_run_identity", None)
             if not callable(restore_run_identity):
