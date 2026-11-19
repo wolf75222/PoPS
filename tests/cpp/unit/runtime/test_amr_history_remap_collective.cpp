@@ -1,7 +1,6 @@
 #include "installed_scalar_history_fixture.hpp"
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/mesh/execution/for_each.hpp>
@@ -183,39 +182,17 @@ struct Fixture {
       total *= 16;
     return total;
   }
-  explicit Fixture(bool installed = false) : system(config()) {
+  Fixture() : system(config()) {
     pops::test::install_amr_runtime_authority(system, "tests.amr.history-declared-ghost/runtime");
     system.set_temporal_relations({1}, {1}, {"integral_only"});
-    system.install_block_state_route(
-        "tracer", installed ? pops::test::scalar_history.state_for("tracer") : "state/tracer");
+    system.install_block_state_route("tracer", pops::test::scalar_history.state_for("tracer"));
     pops::add_compiled_model<Dim>(
         system, "tracer", ScalarModel{}, "minmod", "rusanov", "conservative", "explicit",
         static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
         static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.history-declared-ghost/flux");
     system.set_conservative_state("tracer", std::vector<double>(cells(), 1.));
-    if (installed) {
-      context = pops::test::install_scalar_history_fixture(
-          system, POPS_TEST_SCALAR_HISTORY_GHOST_PROGRAM_SO);
-      return;
-    }
-    pops::test::install_prepared_refine_coarsen_threshold(
-        system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
-        {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Below},
-        "tests.amr.history-declared-ghost/tagging");
-    context = pops::runtime::program::make_program_execution_provider(&system);
-    context->configure_primary_clock("clock.macro");
-    context->declare_clock_relation("clock.macro", "clock.level.1", 1);
-    context->install([owner = context](double dt) { owner->advance_hierarchy(dt, [](double) {}); },
-                     context);
-    system.set_program_block_map({0});
-    using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-    system.install_prepared_amr_program_flux_expression_budget(
-        "tests.amr.history-declared-ghost/flux-budget", std::vector<Budget>(1, Budget{2, 1}), 0, 0);
-    context->for_each_program_resource_level([&](int) {
-      context->register_history(kHistory, 1, 1, 0, "scalar-history:" + std::string(kHistory),
-                                std::string(pops::runtime::program::kScalarOutputHistorySpace),
-                                "clock.macro", "none", 1);
-    });
+    context = pops::test::install_scalar_history_fixture(system,
+                                                         POPS_TEST_SCALAR_HISTORY_GHOST_PROGRAM_SO);
   }
   void fill_history(pops::Real scale = pops::Real(10)) {
     int sample = 0;
@@ -265,7 +242,7 @@ struct Fixture {
 };
 
 TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) {
-  Fixture fixture(true);
+  Fixture fixture;
   fixture.fill_history();
   fixture.expect_declared_storage();
   fixture.regrid(false);
@@ -279,7 +256,7 @@ TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) 
   EXPECT_EQ(pops::runtime::program::serialize_amr_program_accepted_state(wire), bytes);
 
   // A fresh actual runtime follows the same topology/clock trajectory with different data.
-  Fixture restored(true);
+  Fixture restored;
   restored.fill_history(pops::Real(80));
   restored.regrid(false);
   restored.regrid(true);

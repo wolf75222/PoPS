@@ -29,7 +29,9 @@ constexpr const char* history_name = "tracer.potential";
 constexpr const char* history_state = "scalar-history:tracer.potential";
 constexpr const char* history_clock = "clock.macro";
 constexpr const char* history_interpolation = "none";
-constexpr auto history_space = pops::runtime::program::kScalarOutputHistorySpace;
+constexpr std::string_view history_space = POPS_TEST_SCALAR_HISTORY_DENSE
+                                               ? "scalar-field"
+                                               : pops::runtime::program::kScalarOutputHistorySpace;
 #else
 constexpr const char* primary_clock = "test.clock.macro";
 constexpr const char* program_name = "test-forward-euler-amr";
@@ -289,7 +291,8 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
 #elif defined(POPS_TEST_EMPTY_AMR_CADENCE)
   context->install([](double) {}, context);
 #elif defined(POPS_TEST_SCALAR_HISTORY)
-  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
+  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK,
+                                  POPS_TEST_SCALAR_HISTORY_RATIO);
   context->for_each_program_resource_level([&](int) {
     context->register_history(history_name, 1, 1, 0, history_state, std::string(history_space),
                               history_clock, history_interpolation, POPS_TEST_SCALAR_HISTORY);

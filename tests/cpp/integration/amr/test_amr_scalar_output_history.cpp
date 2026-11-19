@@ -1,7 +1,6 @@
 #include "installed_scalar_history_fixture.hpp"
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/mesh/execution/for_each.hpp>
@@ -153,41 +152,17 @@ TEST_P(AmrScalarOutputHistory, ExpansionPreservesOnlyAuthenticatedOutputOverlap)
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.scalar-output-history/runtime");
   system.set_temporal_relations({temporal_ratio}, {1}, {"integral_only"});
-  const bool installed = GetParam() == 1;
-  system.install_block_state_route(
-      "tracer", installed ? pops::test::scalar_history.state_for("tracer") : "state/tracer");
+  system.install_block_state_route("tracer", pops::test::scalar_history.state_for("tracer"));
   pops::add_compiled_model<Dim>(
       system, "tracer", ScalarModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
       static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
       static_cast<double>(pops::kWenoEpsilon), false, "tests.scalar-output-history/flux");
   system.set_conservative_state("tracer", std::vector<double>(cells, 1.));
-  std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>> context;
-  if (installed) {
-    context =
-        pops::test::install_scalar_history_fixture(system, POPS_TEST_SCALAR_HISTORY_PROGRAM_SO);
-  } else {
-    pops::test::install_prepared_refine_coarsen_threshold(
-        system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
-        {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Below},
-        "tests.scalar-output-history/tagging");
-    context = pops::runtime::program::make_program_execution_provider(&system);
-    context->configure_primary_clock("clock.macro");
-    context->declare_clock_relation("clock.macro", "clock.level.1", temporal_ratio);
-    context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
-                     context);
-    system.set_program_block_map({0});
-    using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-    system.install_prepared_amr_program_flux_expression_budget(
-        "tests.scalar-output-history/flux-budget", std::vector<FluxBudget>(1, FluxBudget{2, 1}), 0,
-        0);
-    context->for_each_program_resource_level([&](int) {
-      context->register_history("tracer.potential", 1, 1, 0, "scalar-history:tracer.potential",
-                                output_only
-                                    ? std::string(pops::runtime::program::kScalarOutputHistorySpace)
-                                    : "scalar-field",
-                                "clock.macro", "none");
-    });
-  }
+  constexpr std::array<const char*, 4> programs{
+      POPS_TEST_SCALAR_HISTORY_DENSE_1_PROGRAM_SO, POPS_TEST_SCALAR_HISTORY_PROGRAM_SO,
+      POPS_TEST_SCALAR_HISTORY_OUTPUT_2_PROGRAM_SO, POPS_TEST_SCALAR_HISTORY_DENSE_2_PROGRAM_SO};
+  auto context = pops::test::install_scalar_history_fixture(
+      system, programs.at(static_cast<std::size_t>(GetParam())));
   int step = 0;
   for (double dt : {.1, .2}) {
     ++step;
