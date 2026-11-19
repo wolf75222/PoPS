@@ -18,7 +18,8 @@ namespace pops::nd {
 /// through `for_each_face<Axis>`.  This function only lifts that patch operation over the local
 /// patches of one ranked `MultiFab`; it does not provide a two-dimensional storage adapter.
 template <int Dim, class Model, class Metric, class Reconstruction, class NumericalFlux,
-          ReconstructionVariables Variables, class MemorySpace>
+          ReconstructionVariables Variables,
+          cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
 void compute_face_fluxes(const PreparedCartesianOperator<Dim, Model, Metric, Reconstruction,
                                                          NumericalFlux, Variables>& prepared,
                          const MultiFab<Dim, MemorySpace>& state,

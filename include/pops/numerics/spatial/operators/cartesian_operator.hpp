@@ -115,6 +115,11 @@ class PreparedCartesianPathFaceScratch {
 
 namespace cartesian_operator_detail {
 
+// Cartesian loops and reductions launch on the default execution space.
+template <class MemorySpace>
+concept AccessibleMemorySpace = static_cast<bool>(
+    Kokkos::SpaceAccessibility<Kokkos::DefaultExecutionSpace, MemorySpace>::accessible);
+
 /// Validate the same model-qualified slots sampled by bind_flux_providers_at in face kernels.
 template <class Model, int Dim, int Count>
 void require_provider_face_storage(const Box<Dim>& cells,
@@ -656,7 +661,7 @@ class PreparedCartesianOperator {
 
   /// Publish one indivisible path tuple. F is a conservative face integral;
   /// L/R are separate integrated side residuals (-P/2), and speed is not integrated.
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void materialize_path_face_contributions(
       const Fab<Dim, MemorySpace>& state, FaceField<Dim, MemorySpace>& flux,
       FaceField<Dim, MemorySpace>& left_ncp, FaceField<Dim, MemorySpace>& right_ncp,
@@ -669,7 +674,7 @@ class PreparedCartesianOperator {
                             left_ncp, right_ncp, speed, scratch, omitted_faces);
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void materialize_path_face_contributions(
       const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
       FaceField<Dim, MemorySpace>& flux, FaceField<Dim, MemorySpace>& left_ncp,
@@ -683,7 +688,7 @@ class PreparedCartesianOperator {
                             omitted_faces);
   }
 
-  template <class MemorySpace, int Count>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace, int Count>
   void materialize_path_face_contributions(
       const Fab<Dim, MemorySpace>& state, const ProviderStorageView<Dim, Count>& providers,
       FaceField<Dim, MemorySpace>& flux, FaceField<Dim, MemorySpace>& left_ncp,
@@ -699,7 +704,7 @@ class PreparedCartesianOperator {
 
   /// The lower face contributes its right-cell residual; the upper face its
   /// left-cell residual. Only F belongs to the conservative flux register.
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual_from_path_faces(const FaceField<Dim, MemorySpace>& flux,
                                          const FaceField<Dim, MemorySpace>& left_ncp,
                                          const FaceField<Dim, MemorySpace>& right_ncp,
@@ -744,7 +749,8 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                FaceField<Dim, MemorySpace>& output,
                                const std::array<bool, 2 * Dim>& omitted_faces = {},
@@ -761,7 +767,8 @@ class PreparedCartesianOperator {
                             static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                FaceField<Dim, MemorySpace>& output,
                                FaceField<Dim, MemorySpace>& candidate,
@@ -793,7 +800,8 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const Fab<Dim, MemorySpace>& providers,
                                FaceField<Dim, MemorySpace>& output,
@@ -810,7 +818,8 @@ class PreparedCartesianOperator {
                             static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace, class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace,
+            class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const Fab<Dim, MemorySpace>& providers,
                                FaceField<Dim, MemorySpace>& output,
@@ -844,7 +853,7 @@ class PreparedCartesianOperator {
   /// Plan-mapped provider route.  The host has already validated the immutable
   /// consumer plan and gathered its storage-component map; this operator sees
   /// only dense local slots.
-  template <class MemorySpace, int Count,
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace, int Count,
             class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const ProviderStorageView<Dim, Count>& providers,
@@ -864,7 +873,7 @@ class PreparedCartesianOperator {
                             static_cast<FaceField<Dim, MemorySpace>*>(nullptr), trace_transform);
   }
 
-  template <class MemorySpace, int Count,
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace, int Count,
             class TraceTransform = cartesian_operator_detail::IdentityFaceTrace>
   void materialize_face_fluxes(const Fab<Dim, MemorySpace>& state,
                                const ProviderStorageView<Dim, Count>& providers,
@@ -901,7 +910,7 @@ class PreparedCartesianOperator {
   /// Assemble a conservative residual from one already integrated axis-indexed face field.  This
   /// explicit seam lets boundary topology apply post-Riemann conditions (notably NoFlux) without
   /// introducing a boundary type or a two-dimensional adapter into the numerical operator.
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual_from_face_fluxes(const FaceField<Dim, MemorySpace>& integrated_fluxes,
                                           Fab<Dim, MemorySpace>& residual) const {
     require_ordinary_route_();
@@ -917,7 +926,7 @@ class PreparedCartesianOperator {
     assemble_residual_from_face_fluxes(integrated_fluxes, residual, candidate, cell_statuses);
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual_from_face_fluxes(const FaceField<Dim, MemorySpace>& integrated_fluxes,
                                           Fab<Dim, MemorySpace>& residual,
                                           Fab<Dim, MemorySpace>& candidate,
@@ -950,7 +959,7 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual(const Fab<Dim, MemorySpace>& state, Fab<Dim, MemorySpace>& residual) const
     requires(flux_provider_count<Model> == 0)
   {
@@ -971,7 +980,7 @@ class PreparedCartesianOperator {
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual(const Fab<Dim, MemorySpace>& state, const Fab<Dim, MemorySpace>& providers,
                          Fab<Dim, MemorySpace>& residual) const {
     require_ordinary_route_();
@@ -984,7 +993,7 @@ class PreparedCartesianOperator {
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);
   }
 
-  template <class MemorySpace, int Count>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace, int Count>
   void assemble_residual(const Fab<Dim, MemorySpace>& state,
                          const ProviderStorageView<Dim, Count>& providers,
                          Fab<Dim, MemorySpace>& residual) const
@@ -998,7 +1007,7 @@ class PreparedCartesianOperator {
     assemble_residual_from_face_fluxes(integrated_fluxes, residual);
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
                          MultiFab<Dim, MemorySpace>& residual) const
     requires(flux_provider_count<Model> == 0)
@@ -1023,7 +1032,7 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual(const MultiFab<Dim, MemorySpace>& state,
                          const MultiFab<Dim, MemorySpace>& providers,
                          MultiFab<Dim, MemorySpace>& residual) const {
@@ -1047,7 +1056,7 @@ class PreparedCartesianOperator {
     device_fence();
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual_from_face_fluxes(
       const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
       MultiFab<Dim, MemorySpace>& residual) const {
@@ -1071,7 +1080,7 @@ class PreparedCartesianOperator {
     assemble_residual_from_face_fluxes(integrated_fluxes, residual, candidate, statuses);
   }
 
-  template <class MemorySpace>
+  template <cartesian_operator_detail::AccessibleMemorySpace MemorySpace>
   void assemble_residual_from_face_fluxes(
       const std::vector<FaceField<Dim, MemorySpace>>& integrated_fluxes,
       MultiFab<Dim, MemorySpace>& residual, MultiFab<Dim, MemorySpace>& candidate,
