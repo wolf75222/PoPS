@@ -22,6 +22,13 @@
       "previous_weight_seconds": 195,
       "weight_seconds": 310
     },
+      "rom114_uniform_trial_carrier_cold": {
+        "scope": "Complete cold Linux x64 Dim2 Serial module runs for the Uniform continuation carrier (ROM-114).",
+        "basis": "ROMEO job 831467 on 53e3eedd measured 700 s, job 831468 on its first integration with N11 measured 728 s, and job 831475 on 53c9a5a8 measured 811 s. The final module was 10/10 without skips. The weight uses the longest cold observation plus ten percent, rounded up to the next ten seconds. Refresh from a complete CI artifact.",
+        "file": "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py",
+        "previous_weight_seconds": 600,
+        "weight_seconds": 900
+      },
     "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time.",
     "adc": "ADC-623",
     "api040_full_catalog_completion_20261008": {
@@ -10648,7 +10655,7 @@
   "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py": 600,
   "tests/python/integration/runtime/test_imex_nonautonomous_field.py": 600,
   "tests/python/integration/runtime/test_implicit_arrays_v14_native.py": 1200,
-  "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py": 600.0,
+  "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py": 900.0,
   "tests/python/integration/runtime/test_implicit_domain_v14_native.py": 600,
   "tests/python/integration/runtime/test_install_requirement_validation.py": 85,
   "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": 600,
