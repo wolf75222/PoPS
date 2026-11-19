@@ -98,7 +98,8 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
         sample_bindings["pops_recon_sample_%s" % spelling] = "sample(%d)" % offset
     expression_lines, rendered = _cse_emit(
         [descriptor.expression], "pops::Real", "    ",
-        materialize_all=True, scalar_bindings=sample_bindings, finite_accumulator=_FINITE_ACCUMULATOR)
+        materialize_all=True, scalar_bindings=sample_bindings, finite_accumulator=_FINITE_ACCUMULATOR,
+        omit_checked_contraction=True)
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",

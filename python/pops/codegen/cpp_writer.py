@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from pops.identity.scalar import ScalarLiteral
+
 from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Exp, UnaryMath, Abs, Sign, Pow, Div, Mul, Minimum, Maximum, BooleanAnd, BooleanOr, BooleanNot
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _dag_key_ids, _key, _children
@@ -127,6 +129,15 @@ def _cpp_cse(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None) ->
     return _cpp_expand(e, cse_map, key_memo, guarded)
 
 
+def _bounded_binary64_factor(expression: Any) -> bool:
+    if type(expression) is not Const or expression.handle is not None:
+        return False
+    literal = expression.literal
+    return (type(literal) is ScalarLiteral and literal.kind == "binary64"
+            and literal.unit is None and literal.target is None and literal.cpp is None
+            and 0 < abs(float.fromhex(literal.payload)) <= 1)
+
+
 def _cse_emit(
     roots: Any,
     real: Any,
@@ -139,6 +150,7 @@ def _cse_emit(
     scalar_bindings: Any = None,
     observe: Any = None,
     finite_accumulator: str | None = None,
+    omit_checked_contraction: bool = False,
 ) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
@@ -150,6 +162,8 @@ def _cse_emit(
     With ``finite_accumulator`` the caller checks the final values and the accumulator.
     Each observed declaration contributes in its own scope. Only the accumulator
     is shared across guarded branches, and its value never gates their evaluation.
+    Scalar reconstruction can omit a product observation when a binary64
+    contraction acts on a local already observed in the same scope.
 
     With a ``literal_renderer``, scalar literals also acquire the local numeric type
     before any operation and share the scope of their use.
@@ -240,6 +254,7 @@ def _cse_emit(
             key=lambda k: size[k],
         )
         cse_map, lines = dict(inherited), []
+        checked_here = set()
 
         def native_prerequisite(expression):
             if not return_native_statuses:
@@ -297,7 +312,17 @@ def _cse_emit(
                     if finite_accumulator is None:
                         observed_names.append(name)
                     else:
-                        lines.append("%s%s &= std::isfinite(%s);" % (indent, finite_accumulator, name))
+                        contraction = (omit_checked_contraction and real == "pops::Real"
+                                       and literal_renderer is None and type(expression) is Mul
+                                       and any(_bounded_binary64_factor(factor)
+                                               and _key(operand, key_memo) in checked_here
+                                               for factor, operand in ((expression.a, expression.b),
+                                                                       (expression.b, expression.a))))
+                        if not contraction:
+                            lines.append("%s%s &= std::isfinite(%s);" %
+                                         (indent, finite_accumulator, name))
+                            if omit_checked_contraction:
+                                checked_here.add(k)
             cse_map[k] = name
         rendered = [_cpp_cse(r, cse_map, key_memo, guarded) for r in scope_roots]
         return lines, rendered
