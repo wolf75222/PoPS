@@ -18,6 +18,10 @@ class CopyCurrent:
     It is the conventional default and carries no parameters.
     """
 
+    # Stateless and immutable: a frozen Program keeps its canonical form only when every object
+    # it reaches is immutable (time/_program/canonical_form.py).
+    __slots__ = ()
+
     kind = "copy_current"
 
     def __repr__(self) -> str:

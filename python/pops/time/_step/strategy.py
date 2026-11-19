@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar
 
+from pops._projection_authority import _closed_projection_value
 from pops.identity.scalar import scalar_data
 
 
@@ -169,6 +170,7 @@ def validate_step_strategy_manifest(value: Any) -> dict[str, Any]:
 
 
 @register_step_strategy_type
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class FixedDt(StepStrategy):
     """Advance with one authored fixed step, clipped only by the declared final time."""
@@ -190,6 +192,7 @@ class FixedDt(StepStrategy):
         return cls(_binary64(payload["dt"], where="FixedDt.dt"))
 
 @register_step_strategy_type
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class ComputedDt(StepStrategy):
     """Request ``dt``; the Program must return its effective Scalar duration.
@@ -297,6 +300,7 @@ FACE_STEP_FREQUENCY_SCHEMA = "pops.face-step-frequency@1"
 
 
 @register_step_strategy_type
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class AdaptiveCFL(StepStrategy):
     """Use the native stability reduction with explicit optional runtime clamps."""
@@ -345,6 +349,7 @@ class AdaptiveCFL(StepStrategy):
             raise ValueError("AdaptiveCFL runtime dt_min must be <= dt_max")
 
 @register_step_strategy_type
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class ErrorControlledDt(StepStrategy):
     """Retry rejected error-guarded attempts and adapt the next proposal explicitly.
@@ -396,6 +401,7 @@ class ErrorControlledDt(StepStrategy):
             max_rejections=payload["max_rejections"])
 
 @register_step_strategy_type
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class ExternalTimeGrid(StepStrategy):
     """Follow the strictly increasing grid supplied under ``grid_id`` at run time."""
