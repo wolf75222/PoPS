@@ -1,4 +1,7 @@
 #include "explicit_amr_program.hpp"
+#if defined(POPS_TEST_PREPARED_CONSTITUTIVE_AMR)
+#include "prepared_constitutive_amr_program.hpp"
+#endif
 
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
@@ -6,6 +9,15 @@
 namespace {
 constexpr const char* blocks[] = POPS_TEST_EULER_BLOCKS;
 constexpr int block_count = int(std::size(blocks));
+#if defined(POPS_TEST_PREPARED_CONSTITUTIVE_AMR)
+constexpr const char* primary_clock = pops::test::kPreparedConstitutiveAmrClock;
+constexpr const char* program_name = "test-prepared-constitutive-amr";
+constexpr std::uint64_t flux_bound = 2;
+#else
+constexpr const char* primary_clock = "test.clock.macro";
+constexpr const char* program_name = "test-forward-euler-amr";
+constexpr std::uint64_t flux_bound = 1;
+#endif
 constexpr bool block_index(int index) {
   return index >= 0 && index < block_count;
 }
@@ -18,7 +30,7 @@ extern "C" const char* pops_program_route_manifest() {
   return pops::kRouteRegistrySignature;
 }
 extern "C" const char* pops_program_name() {
-  return "test-forward-euler-amr";
+  return program_name;
 }
 extern "C" const char* pops_program_hash() {
   return POPS_TEST_EULER_HASH;
@@ -51,10 +63,10 @@ extern "C" int pops_program_flux_expression_budget_count() {
   return block_count;
 }
 extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
-  return block_index(block) ? 1 : 0;
+  return block_index(block) ? flux_bound : 0;
 }
 extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
-  return block_index(block) ? 1 : 0;
+  return block_index(block) ? flux_bound : 0;
 }
 extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
   return 0;
@@ -110,10 +122,10 @@ extern "C" const char* pops_program_checkpoint_logical_clock_identity(int index)
   if (index == 1)
     return POPS_TEST_EULER_FINE_CLOCK;
 #endif
-  return index == 0 ? "test.clock.macro" : "";
+  return index == 0 ? primary_clock : "";
 }
 extern "C" const char* pops_program_checkpoint_primary_clock_identity() {
-  return "test.clock.macro";
+  return primary_clock;
 }
 extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {
   return "pops.program.owned-clock-manifest@1";
@@ -166,9 +178,13 @@ extern "C" const char* pops_module_field_space_owner(int) {
 
 extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
   const auto context = pops::runtime::program::make_program_execution_provider(system);
-  context->configure_primary_clock("test.clock.macro");
+  context->configure_primary_clock(primary_clock);
+#if defined(POPS_TEST_PREPARED_CONSTITUTIVE_AMR)
+  pops::test::install_prepared_constitutive_step(context);
+#else
   pops::test::install_forward_euler_step(context, POPS_TEST_EULER_SOLVE_DEFAULT);
+#endif
 #if defined(POPS_TEST_EULER_FINE_CLOCK)
-  context->declare_clock_relation("test.clock.macro", POPS_TEST_EULER_FINE_CLOCK, 2);
+  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
 #endif
 }

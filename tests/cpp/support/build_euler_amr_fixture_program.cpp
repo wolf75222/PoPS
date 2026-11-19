@@ -6,11 +6,12 @@
 
 namespace {
 template <std::size_t Size>
-void write_definitions(std::ostream& output, const pops::test::FixtureCriterionGroup<Size>& group) {
+void write_definitions(std::ostream& output, const pops::test::FixtureCriterionGroup<Size>& group,
+                       std::string_view program = "test-forward-euler-amr") {
   output << "#define POPS_TEST_EULER_BLOCKS {";
   for (const auto& field : group.fields)
     output << '"' << field.block << "\",";
-  output << "}\n#define POPS_TEST_EULER_HASH \"test-forward-euler-amr/" << group.identity << "\"\n";
+  output << "}\n#define POPS_TEST_EULER_HASH \"" << program << '/' << group.identity << "\"\n";
 }
 
 void append(std::ostream& output, const char* path) {
@@ -38,7 +39,16 @@ int main(int argc, char** argv) {
         write_definitions(source, pops::test::gravity);
       else if (variant == "riemann")
         write_definitions(source, pops::test::riemann);
-      else
+      else if (variant == "magnetic")
+        write_definitions(source, pops::test::magnetic);
+      else if (variant == "magnetic_union")
+        write_definitions(source, pops::test::magnetic_union);
+      else if (variant == "fickian")
+        write_definitions(source, pops::test::fickian);
+      else if (variant == "prepared_constitutive") {
+        write_definitions(source, pops::test::fickian, "test-prepared-constitutive-amr");
+        source << "#define POPS_TEST_PREPARED_CONSTITUTIVE_AMR\n";
+      } else
         throw std::invalid_argument("unknown Forward Euler Program fixture");
       source << "#define POPS_TEST_EULER_SOLVE_DEFAULT "
              << (variant == "gravity" || variant == "riemann") << '\n';

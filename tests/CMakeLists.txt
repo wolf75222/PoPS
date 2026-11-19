@@ -1089,7 +1089,8 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 set(_euler_dir "${CMAKE_CURRENT_BINARY_DIR}/euler-amr-fixtures")
 set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
   "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp"
-  "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp")
+  "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp"
+  "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp")
 if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
   set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
     "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
@@ -1111,19 +1112,30 @@ target_compile_definitions(pops_build_euler_amr_fixture_program PRIVATE ${_euler
 add_dependencies(pops_build_euler_amr_fixture_program pops_euler_amr_criteria)
 target_include_directories(pops_build_euler_amr_fixture_program PRIVATE "${_euler_dir}")
 set(_fixture_support "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support")
-set(_euler_variants gravity riemann)
+set(_euler_variants gravity riemann fickian)
+if(POPS_NATIVE_DIM LESS_EQUAL 2)
+  list(APPEND _euler_variants magnetic prepared_constitutive)
+endif()
+if(POPS_NATIVE_DIM EQUAL 2)
+  list(APPEND _euler_variants magnetic_union)
+endif()
 if(POPS_HAS_MPI)
   list(APPEND _euler_variants compiled_parity regrid_parity)
 endif()
 foreach(_variant IN LISTS _euler_variants)
   set(_stem "${_euler_dir}/${_variant}-program")
   set(_fragment "${_euler_dir}/${_variant}.cpp")
+  set(_step_headers cpp/support/explicit_amr_program.hpp)
+  if(_variant STREQUAL "prepared_constitutive")
+    set(_fragment "${_euler_dir}/fickian.cpp")
+    list(APPEND _step_headers cpp/support/prepared_constitutive_amr_program.hpp)
+  endif()
   add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
     COMMAND $<TARGET_FILE:pops_build_euler_amr_fixture_program> "${_variant}"
       "${_fixture_support}/euler_amr_fixture_program.cpp.in" "${_fragment}"
       "${_fixture_support}" "${_stem}.cpp" "${_stem}.so"
     DEPENDS pops_build_euler_amr_fixture_program "${_fragment}"
-      cpp/support/euler_amr_fixture_program.cpp.in cpp/support/explicit_amr_program.hpp
+      cpp/support/euler_amr_fixture_program.cpp.in ${_step_headers}
       cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
     JOB_POOL pops_heavy_test_tu
     VERBATIM)
@@ -1140,6 +1152,15 @@ endfunction()
 pops_use_euler_amr_fixture(test_amr_distribute_coarse_serial gravity POPS_TEST_GRAVITY_PROGRAM_SO)
 pops_use_euler_amr_fixture(test_amr_riemann_native riemann POPS_TEST_RIEMANN_PROGRAM_SO)
 pops_use_euler_amr_fixture(test_amr_riemann_native gravity POPS_TEST_RIEMANN_WRONG_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_program_diffusion fickian POPS_TEST_FICKIAN_PROGRAM_SO)
+if(POPS_NATIVE_DIM LESS_EQUAL 2)
+  pops_use_euler_amr_fixture(test_amr_system_contract magnetic POPS_TEST_MAGNETIC_PROGRAM_SO)
+  pops_use_euler_amr_fixture(test_amr_program_diffusion prepared_constitutive
+    POPS_TEST_CONSTITUTIVE_PROGRAM_SO)
+endif()
+if(POPS_NATIVE_DIM EQUAL 2)
+  pops_use_euler_amr_fixture(test_amr_system_contract magnetic_union POPS_TEST_MAGNETIC_UNION_PROGRAM_SO)
+endif()
 
 if(POPS_HAS_MPI)
   pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
