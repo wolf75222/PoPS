@@ -6,9 +6,11 @@ from typing import Any
 
 from pops import math as _math
 from pops._ir.expr import Const, Expr, Partial, _wrap
+from pops._projection_authority import _closed_projection_reference, _closed_projection_value
 from pops.model import Handle, Signature, FieldSpace
 
 
+@_closed_projection_value
 @dataclass(frozen=True, slots=True, eq=False)
 class NonconservativeProductLaw:
     """One square state-space matrix for each physical coordinate derivative.
@@ -69,6 +71,7 @@ class NonconservativeProductLaw:
         }
 
 
+@_closed_projection_reference
 class NonconservativeProductHandle(Handle):
     """Owned identity usable as B grad(U) in a signed physical balance."""
 
