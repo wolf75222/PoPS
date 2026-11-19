@@ -376,6 +376,7 @@ sdk-support pops/runtime/program/program_context_continuation_fields.inc
 sdk-support pops/runtime/program/history_sample_identity_codec.hpp
 sdk-support pops/runtime/program/cell_temporal_partition.hpp
 sdk-support pops/runtime/program/cell_temporal_partition_executor.hpp
+sdk-support pops/runtime/program/boundary_ghost_evaluation.hpp
 sdk-support pops/runtime/program/clock_schedule.hpp
 sdk-root pops/runtime/program/component_package.hpp
 sdk-root pops/runtime/program/external_brick.hpp

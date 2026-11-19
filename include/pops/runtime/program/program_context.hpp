@@ -309,7 +309,9 @@ class ProgramContext {
           prior_phase_span_(owner.logical_phase_span_),
           prior_physical_time_offset_(owner.logical_physical_time_offset_),
           prior_activation_(owner.active_logical_evaluation_),
-          subcycle_activation_(owner.clock_schedule_.active_subcycle_activation()),
+          prior_subcycle_frame_(owner.logical_evaluation_subcycle_),
+          subcycle_frame_(owner.clock_schedule_.subcycle_evaluation_frame(iteration, count,
+                                                                          prior_subcycle_frame_)),
           iteration_(iteration),
           count_(count) {
       if (count < 1 || iteration < 0 || iteration >= count || !std::isfinite(prior_dt_) ||
@@ -333,6 +335,7 @@ class ProgramContext {
       owner_->logical_physical_time_offset_ = child_offset;
       activation_ = ++owner_->next_logical_evaluation_;
       owner_->active_logical_evaluation_ = activation_;
+      owner_->logical_evaluation_subcycle_ = subcycle_frame_;
       owner_->active_operator_snapshot_.reset();
     }
     LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
@@ -345,7 +348,8 @@ class ProgramContext {
           prior_phase_span_(other.prior_phase_span_),
           prior_physical_time_offset_(other.prior_physical_time_offset_),
           prior_activation_(other.prior_activation_),
-          subcycle_activation_(other.subcycle_activation_),
+          prior_subcycle_frame_(other.prior_subcycle_frame_),
+          subcycle_frame_(other.subcycle_frame_),
           activation_(other.activation_),
           iteration_(other.iteration_),
           count_(other.count_) {}
@@ -365,9 +369,13 @@ class ProgramContext {
         const ProgramContext& owner, const ClockScheduleState::SubcycleScope& subcycle) const {
       if (owner_ != &owner || owner.active_logical_evaluation_ != activation_)
         throw std::invalid_argument("physical ghost evaluation requires its active child scope");
+      if (!subcycle_frame_)
+        throw std::invalid_argument(
+            "physical ghost evaluation requires one logical scope per active subcycle frame");
       (void)owner.resource_attempt();
-      const auto [clock, tick] = subcycle.active_position(
-          owner.clock_schedule_, subcycle_activation_, iteration_, count_, owner.macro_step());
+      const auto [clock, tick] =
+          subcycle.active_position(owner.clock_schedule_, subcycle_frame_->activation, iteration_,
+                                   count_, owner.macro_step());
       return {clock, tick};
     }
 
@@ -380,6 +388,7 @@ class ProgramContext {
       owner_->logical_phase_span_ = prior_phase_span_;
       owner_->logical_physical_time_offset_ = prior_physical_time_offset_;
       owner_->active_logical_evaluation_ = prior_activation_;
+      owner_->logical_evaluation_subcycle_ = prior_subcycle_frame_;
       owner_->active_operator_snapshot_.reset();
       owner_ = nullptr;
     }
@@ -391,7 +400,8 @@ class ProgramContext {
     ::pops::amr::Rational prior_phase_span_{1, 1};
     double prior_physical_time_offset_ = 0.0;
     std::uint64_t prior_activation_ = 0;
-    std::uint64_t subcycle_activation_ = 0;
+    std::optional<ClockScheduleState::EvaluationFrame> prior_subcycle_frame_;
+    std::optional<ClockScheduleState::EvaluationFrame> subcycle_frame_;
     std::uint64_t activation_ = 0;
     int iteration_ = 0;
     int count_ = 0;
@@ -463,6 +473,7 @@ class ProgramContext {
     logical_phase_span_ = ::pops::amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
     active_logical_evaluation_ = 0;
+    logical_evaluation_subcycle_ = ClockScheduleState::EvaluationFrame{};
     active_operator_snapshot_.reset();
     auxiliary_evaluation_sequence_ = 0;
   }
@@ -3529,6 +3540,9 @@ class ProgramContext {
   mutable double logical_physical_time_offset_ = 0.0;
   mutable std::uint64_t next_logical_evaluation_ = 0;
   mutable std::uint64_t active_logical_evaluation_ = 0;
+  // Zero marks the macro position. An unbound logical window cannot authorize a child ghost.
+  mutable std::optional<ClockScheduleState::EvaluationFrame> logical_evaluation_subcycle_ =
+      ClockScheduleState::EvaluationFrame{};
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;

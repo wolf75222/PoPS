@@ -2040,15 +2040,32 @@ TEST(ProgramContextContract, PhysicalGhostRefusesForeignOrClosedChildScopes) {
   ticks.iteration(0);
   auto child = ctx.logical_evaluation_scope(0, 2);
   {
+    auto duplicate = ctx.logical_evaluation_scope(0, 2);
+    refuse(ticks, duplicate, "one logical scope");
     auto micro_ticks = ctx.subcycle_scope("clock.fast", "clock.micro", 1);
     micro_ticks.iteration(0);
     auto micro = ctx.logical_evaluation_scope(0, 1);
+    refuse(micro_ticks, micro, "one logical scope");
+  }
+  {
+    auto micro_ticks = ctx.subcycle_scope("clock.fast", "clock.micro", 1);
+    micro_ticks.iteration(0);
+    auto micro = ctx.logical_evaluation_scope(0, 1);
+    EXPECT_EQ(micro.dt(), Real(0.2));
+    refuse(micro_ticks, micro, "prepared Uniform flux");
     refuse(ticks, child, "active child scope");
     refuse(ticks, micro, "stack order");
     micro_ticks.finish();
     refuse(micro_ticks, micro, "no longer active");
   }
   EXPECT_EQ(child.dt(), Real(0.2));
+  {
+    ticks.iteration(1);
+    auto micro_ticks = ctx.subcycle_scope("clock.fast", "clock.micro", 1);
+    micro_ticks.iteration(0);
+    auto micro = ctx.logical_evaluation_scope(0, 1);
+    refuse(micro_ticks, micro, "one logical scope");
+  }
   EXPECT_EQ(ctx.boundary_evaluation_point(1).clock, "clock.macro");
   EXPECT_EQ(frequency, Real(0));
 }

@@ -46,6 +46,12 @@ class ClockScheduleState {
     std::uint64_t activation = 0;
   };
 
+  struct EvaluationFrame {
+    std::uint64_t activation = 0;
+    int iteration = 0;
+    friend bool operator==(const EvaluationFrame&, const EvaluationFrame&) = default;
+  };
+
   class SubcycleScope {
    public:
     SubcycleScope(ClockScheduleState& owner, std::string parent, std::string child, int count)
@@ -102,8 +108,19 @@ class ClockScheduleState {
     return SubcycleScope(*this, std::move(parent), std::move(child), count);
   }
 
-  std::uint64_t active_subcycle_activation() const noexcept {
-    return frames_.empty() ? 0 : frames_.back().activation;
+  std::optional<EvaluationFrame> subcycle_evaluation_frame(
+      int iteration, int count, std::optional<EvaluationFrame> evaluated_parent) const noexcept {
+    if (!evaluated_parent || frames_.empty() || iteration < 0 || iteration >= count)
+      return std::nullopt;
+    EvaluationFrame schedule_parent;
+    if (frames_.size() > 1) {
+      const auto& frame = frames_[frames_.size() - 2];
+      schedule_parent = {frame.activation, frame.next - 1};
+    }
+    const auto& frame = frames_.back();
+    if (*evaluated_parent != schedule_parent || frame.count != count || frame.next != iteration + 1)
+      return std::nullopt;
+    return EvaluationFrame{frame.activation, iteration};
   }
 
   void configure_primary_clock(std::string clock) {
