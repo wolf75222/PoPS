@@ -398,9 +398,9 @@ void cold_contrast() {
   upper[0] = 21;
   for (int axis = 1; axis < Dim; ++axis)
     upper[axis] = 63;
-  ASSERT_EQ(first, (std::vector<pops::AmrPatch<Dim>>{{1, {lower, upper}}}));
-  ASSERT_EQ(fine.distribution().owners(), (std::vector<pops::Index<Dim>>{owner}));
-  ASSERT_EQ(fine.local_size(), fine.local_rank() == owner ? 1u : 0u);
+  EXPECT_EQ(first, (std::vector<pops::AmrPatch<Dim>>{{1, {lower, upper}}}));
+  EXPECT_EQ(fine.distribution().owners(), (std::vector<pops::Index<Dim>>{owner}));
+  EXPECT_EQ(fine.local_size(), fine.local_rank() == owner ? 1u : 0u);
   if (fine.local_size() != 0)
     EXPECT_EQ(fine.box(0), (pops::Box<Dim>{lower, upper}));
   const auto covered = [&](int x) {
