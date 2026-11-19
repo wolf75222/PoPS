@@ -51,6 +51,11 @@ int main(int argc, char** argv) {
       } else if (variant == "empty_cadence") {
         write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
         source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
+      } else if (variant == "scalar_history" || variant == "scalar_history_ghost") {
+        write_definitions(source, pops::test::scalar_history, std::string("test-") + argv[1]);
+        source << "#define POPS_TEST_SCALAR_HISTORY "
+               << (variant == "scalar_history_ghost" ? 1 : -1) << '\n'
+               << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n";
       } else
         throw std::invalid_argument("unknown AMR Program fixture");
       source << "#define POPS_TEST_EULER_SOLVE_DEFAULT "

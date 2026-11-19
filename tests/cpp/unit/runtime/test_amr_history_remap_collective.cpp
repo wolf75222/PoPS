@@ -1,3 +1,4 @@
+#include "installed_scalar_history_fixture.hpp"
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
@@ -182,15 +183,21 @@ struct Fixture {
       total *= 16;
     return total;
   }
-  Fixture() : system(config()) {
+  explicit Fixture(bool installed = false) : system(config()) {
     pops::test::install_amr_runtime_authority(system, "tests.amr.history-declared-ghost/runtime");
     system.set_temporal_relations({1}, {1}, {"integral_only"});
-    system.install_block_state_route("tracer", "state/tracer");
+    system.install_block_state_route(
+        "tracer", installed ? pops::test::scalar_history.state_for("tracer") : "state/tracer");
     pops::add_compiled_model<Dim>(
         system, "tracer", ScalarModel{}, "minmod", "rusanov", "conservative", "explicit",
         static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
         static_cast<double>(pops::kWenoEpsilon), false, "tests.amr.history-declared-ghost/flux");
     system.set_conservative_state("tracer", std::vector<double>(cells(), 1.));
+    if (installed) {
+      context = pops::test::install_scalar_history_fixture(
+          system, POPS_TEST_SCALAR_HISTORY_GHOST_PROGRAM_SO);
+      return;
+    }
     pops::test::install_prepared_refine_coarsen_threshold(
         system, {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above},
         {"tracer", "u", .5, pops::test::PreparedThresholdRelation::Below},
@@ -258,7 +265,7 @@ struct Fixture {
 };
 
 TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) {
-  Fixture fixture;
+  Fixture fixture(true);
   fixture.fill_history();
   fixture.expect_declared_storage();
   fixture.regrid(false);
