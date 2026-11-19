@@ -307,6 +307,7 @@ def _emit_cpp_program_impl(
                                          instance_contracts=graph_instance_contracts(authority))
     from pops.codegen.program_value_authority import prepare_program_value_authority
     value_authority = prepare_program_value_authority(program, authority, field_plans or {}, target=target)
+    exchange_metadata: list[str] = []
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -316,6 +317,7 @@ def _emit_cpp_program_impl(
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
         value_authority=value_authority,
+        exchange_metadata=exchange_metadata,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -407,7 +409,7 @@ def _emit_cpp_program_impl(
             'extern "C" std::uint64_t pops_relayout_byte_count() {\n'
             "  return pops::runtime::program::relayout_bytes().load(std::memory_order_relaxed);\n"
             "}\n")
-    return _PROGRAM_CPP_TEMPLATE.format(**parts)
+    return _PROGRAM_CPP_TEMPLATE.format(**parts) + "".join(exchange_metadata)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:

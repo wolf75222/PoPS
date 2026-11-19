@@ -768,3 +768,34 @@ paths = [
   "python/pops/codegen/program_owned_guard_fold.py",
   "src/runtime/system/system_embedded_boundary.cpp",
 ]
+
+[[mechanism]]
+id = "uniform-mounted-exchange-incidence"
+issue = "ROM-93"
+rule = "CF15"
+pre_freeze = true
+what = """
+Proposed cold installation proof of external-trace production and ordered consumption, bound to
+the installed Uniform Program and its block routes. The exact same lowering decisions supply both
+the executable calls and the descriptor. An installed Program without sufficient evidence cannot
+provide this proof. No change to exchange archives, named restart, or the accepted ledger."""
+structures = [
+  { case = "M14", builder = "build_m14", structure = "Transport and Poisson coupling with two distinct charge destinations" },
+  { case = "M06", builder = "build_m06", structure = "SSPRK2 constitutive diffusion with stage-ordered heat accumulation" },
+]
+measurement = """
+Four public native mounts at def68439 with the qualified Dim2 serial SDK. M14 reassigns the four
+authored trace reads to the opposite declared recipients, preserving the face selectors; Stefan
+permutes the two stage pairs, preserving the four selectors and destination. Generated calls and
+loaded DSO identities distinguish both alterations. Neither original nor altered installed Program
+exposes a consumption proof. The acquired M14 archive's four keys also allow a false reassignment
+with different binary64 amounts; reversing the Stefan window's four reads leaves its binary64
+amount identical. Source evidence: ROM-93 incidence/causal-comparison.log and independent-replay.log.
+"""
+refusal_set = "Preserve existing named restart and projection refusals; the proposed proof refuses missing or unsupported consumption authority."
+paths = [
+  "python/pops/codegen/program_integral_transfers.py",
+  "python/pops/codegen/program_emit_control.py",
+  "include/pops/runtime/program/module_metadata.hpp",
+  "src/runtime/system/system_io.cpp",
+]

@@ -537,7 +537,8 @@ def _chunk_step_body(lines, boundaries):
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
-               provider_plans: Any = None, value_authority: Any = None) -> tuple:
+               provider_plans: Any = None, value_authority: Any = None,
+               exchange_metadata: list[str] | None = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
@@ -838,8 +839,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines.extend(emit_accepted_stencil_exchanges(program, var, block_idx, target=target))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
-    from .program_integral_transfers import emit_integral_transfers
-    integral_transfers = emit_integral_transfers(program, var, model_authority=model)
+    from .program_integral_transfers import integral_transfers
+    transfer_rows = integral_transfers(program, var, model_authority=model)
+    integral_transfers = [row.cpp(program) for row in transfer_rows]
     if target == "system":
         lines.extend(integral_transfers)
     # Continuation mode publishes its complete native image and generated carrier projections.
@@ -884,7 +886,15 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
+    # A root table cannot describe repeated or deferred consumption in a nested region.
+    if (exchange_metadata is not None and target == "system" and transfer_rows
+            and not continuation_closers and not legacy_path_prefix
+            and len(transfer_rows) == len(program._integral_transfers)
+            and not any(value.op == "subcycle" for value in all_ops(program))):
+        from .program_integral_transfers import emit_uniform_exchange_incidence
+        exchange_metadata.append(emit_uniform_exchange_incidence(program, transfer_rows))
     return prelude_src, body_src, post_sync_src, authorities
+
 
 def _emit_post_synchronization_phase(
     program: Any,

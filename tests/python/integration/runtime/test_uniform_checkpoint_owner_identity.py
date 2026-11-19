@@ -14,6 +14,7 @@ from pops.codegen.provider_instances import require_instance_contract, runtime_k
 from pops.model.provider_pack import ProviderPack
 from pops.runtime._checkpoint_manifest import IDENTITY_KEY, MANIFEST_KEY, seal_checkpoint_payload
 from pops.runtime._uniform_checkpoint_projection import inspect_uniform_checkpoint
+from pops.time._program.integrals import integral_identity
 from tests.python.support.native_execution_context import artifact_execution_context
 from tests.python.support.presentation_case import FIRST, resolve_named_case
 
@@ -129,6 +130,8 @@ def test_transport_checkpoint_follows_logical_block_order(
             columns.append(locations)
             archive = path.read_bytes()
             before = resumed.observe_accepted_state_storage().complete
+            with pytest.raises(RuntimeError, match="no complete exchange incidence authority"):
+                resumed._executor._s._mounted_exchange_incidence()
             with patch.object(resumed._executor, "_begin_checkpoint_restart",
                               side_effect=AssertionError("O3 opened a restart transaction")):
                 inventory = inspect_uniform_checkpoint(resumed, archive)
@@ -234,20 +237,47 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
 
     sealed_before_program = []
 
-    def install_and_witness(engine, path):
+    install_program = System._install_uniform_program
+
+    def install_and_witness(engine, path, component, authored, install_plan):
         capture = engine._s.capture_auxiliary_checkpoint_accepted_state
         before = _auxiliary_contract(capture())
-        engine._s.install_program(path)
+        install_program(engine, path, component, authored, install_plan)
         after = _auxiliary_contract(capture())
         assert before != after
         sealed_before_program.append(before)
 
-    monkeypatch.setattr(System, "install_program", install_and_witness, raising=False)
+    monkeypatch.setattr(System, "_install_uniform_program", install_and_witness)
 
-    def verify_inner_and_legacy(continuous, resumed, checkpoint):
+    def verify_inner_and_legacy(continuous, resumed, checkpoint, expected_incidence):
+        native = resumed._executor._s
+        accepted = resumed.observe_accepted_state_storage().complete
+        clock = resumed.time(), resumed.macro_step()
+        incidence = native._mounted_exchange_incidence()
+        assert continuous._executor._s._mounted_exchange_incidence() == incidence
+        assert len(incidence) == len(expected_incidence)
+        actual = []
+        for index, row in enumerate(incidence):
+            (ordinal, block, native_block, destination, operation, occurrence, point, evaluation,
+             axis, side, component, scale, units, initial) = row
+            assert ordinal == index and block == native_block == 0
+            assert operation and occurrence and point and evaluation
+            assert units == '{"kind":"physical_dimension","powers":[]}'
+            actual.append((destination, axis, side, component, scale, initial))
+        assert actual == expected_incidence
+        assert resumed.observe_accepted_state_storage().complete == accepted
+        assert (resumed.time(), resumed.macro_step()) == clock
         # The owner can read this CP9, but the still-named exchange declaration has no O3 role.
-        with pytest.raises(ValueError, match="program_exchange_state"):
-            inspect_uniform_checkpoint(resumed, checkpoint.read_bytes())
+        def unexpected_projection_begin():
+            pytest.fail("O3 opened a restart transaction")
+
+        with monkeypatch.context() as projection_guard:
+            projection_guard.setattr(resumed._executor, "_begin_checkpoint_restart",
+                                     unexpected_projection_begin)
+            with pytest.raises(ValueError, match="program_exchange_state"):
+                inspect_uniform_checkpoint(resumed, checkpoint.read_bytes())
+        assert resumed.observe_accepted_state_storage().complete == accepted
+        assert (resumed.time(), resumed.macro_step()) == clock
         # The historical readers use the same live registry and preserve its accepted payload.
         native = continuous._executor._s
         legacy_carrier = native.checkpoint_state_carriers()
@@ -280,8 +310,8 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
         def unexpected_begin():
             pytest.fail("the invalid inner image reached the restart transaction")
 
-        with monkeypatch.context() as patch:
-            patch.setattr(resumed._executor, "_begin_checkpoint_restart", unexpected_begin)
+        with monkeypatch.context() as guard:
+            guard.setattr(resumed._executor, "_begin_checkpoint_restart", unexpected_begin)
             with pytest.raises(ValueError, match="differs from the sealed provider registry"):
                 resumed.restart(rehashed)
             with pytest.raises(ValueError, match="carrier and auxiliary checkpoint authority differ"):
@@ -302,10 +332,19 @@ def test_m14_checkpoint_preserves_field_and_integral_authority(
             return (np.asarray(runtime.history_global("source_state", 1)).tobytes(),
                     runtime.integral_state(wall), runtime.integral_state(reservoir))
 
+        wall_identity = integral_identity(artifact.program.program, wall.name)
+        reservoir_identity = integral_identity(artifact.program.program, reservoir.name)
+        expected = [
+            (wall_identity, 0, 1, 0, -1.0, models_M14.INITIAL_WALL_CHARGE),
+            (reservoir_identity, 0, 0, 0, 1.0, 0.0),
+            (wall_identity, 0, 1, 2, 1.0, models_M14.INITIAL_WALL_CHARGE),
+            (reservoir_identity, 0, 0, 2, -1.0, 0.0),
+        ]
         programs.append(artifact.program_id)
         images.append(_replay(artifact, ("fluid",), spec.initial_values, spec.dt,
                               tmp_path / ("sheath-%d" % index), continuation=continuation,
-                              oracle=spec.invariants, preflight_check=verify_inner_and_legacy))
+                              oracle=spec.invariants,
+                              preflight_check=lambda *args: verify_inner_and_legacy(*args, expected)))
     assert programs[0] == programs[1]
     assert images[0][1:] == images[1][1:]
     assert images[0][0][1] == images[1][0][1], "nested field authority depends on the Case name"

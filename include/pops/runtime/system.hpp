@@ -1,4 +1,5 @@
 #pragma once
+#include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/system/analytic_mapped_input.hpp>
 
 #include <pops/runtime/system/prepared_field_rhs_inputs.hpp>
@@ -1369,7 +1370,17 @@ class System {
   /// closure. The .so resolves the seam accessors above from the globally promoted host, while the
   /// package itself stays local so independent semantic artifacts cannot interpose. Mirrors
   /// add_native_block; the .so stays loaded for the process lifetime.
+ private:
+  void install_program_image_(const std::string& so_path, const std::string& binary_identity,
+                              std::size_t authored_count);
+
+ public:
   POPS_EXPORT void install_program(const std::string& so_path);
+  POPS_EXPORT void install_program_with_exchange_incidence(const std::string& so_path,
+                                                           const std::string& binary_identity,
+                                                           std::size_t authored_count);
+  POPS_EXPORT std::vector<runtime::program::MountedExchangeIncidenceRow>
+  mounted_exchange_incidence() const;
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
