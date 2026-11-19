@@ -10,8 +10,8 @@ A form is kept only when nothing it depends on can change in contract after it w
 - the Program is frozen and is an authoring Program, not a detached compile clone;
 - every Case registry that ``canonical_handle`` consulted is frozen;
 - both projections are closed builtin JSON with finite floats, so the decode is exact;
-- every object reachable from the Program's attributes and nodes is of an immutable kind
-  (``_immutable_closure``).
+- the reachable projections are issued by stock implementations with a closed observer, and
+  all the values they read are authenticated by the closure (``_immutable_closure``).
 
 The witness holds the model-definition fingerprints the projection observed, the registries it
 consulted, and every reachable object with the objects bound to its attributes, compared by
@@ -20,7 +20,9 @@ Program, a node or a leaf, makes the witness fail.
 """
 from __future__ import annotations
 
+import gc
 import json
+import sys
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -38,7 +40,8 @@ _ENABLED = True
 _LOCK = threading.Lock()
 _FORM_SLOT = "_sealed_canonical_form"
 
-_SCALARS = frozenset({type(None), bool, int, float, complex, str, bytes, Fraction, Decimal})
+_SCALARS = {id(kind): kind for kind in (
+    type(None), bool, int, float, complex, str, bytes, Fraction, Decimal)}
 _IMMUTABLE_CLASSES: dict[type, bool] = {}
 _SLOT_NAMES: dict[type, tuple[str, ...]] = {}
 _PROBE = "_pops_canonical_form_probe"
@@ -47,10 +50,17 @@ _PROBE = "_pops_canonical_form_probe"
 # calls again; the projection reads the traced ``apply_block`` nodes instead. The witness still
 # holds the attribute itself, so rebinding it drops the form, but its functions are not walked.
 _AUTHORING_ONLY = frozenset({"_operator_apply_bodies"})
+# Instance and field registries are observed by canonical_handle; the Handle witness only
+# traverses the values that the stock handle projections themselves can read.
+_HANDLE_INPUTS = frozenset({
+    "owner_path", "local_id", "kind", "schema_version", "_declaration_ref", "_block_ref",
+    "param_kind", "signature", "category", "_registered_operator_name", "model_owner_path",
+})
 _UNSET = object()
 
 
 _ObjectWitness = tuple[Any, type, tuple[str, ...], tuple[Any, ...]]
+_MappingWitness = tuple[dict[Any, Any], tuple[tuple[Any, Any], ...]]
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -61,6 +71,7 @@ class _Form:
     registries: tuple[Any, ...]
     objects: tuple[_ObjectWitness, ...]
     registry_guards: tuple[tuple[Any, MethodType], ...]
+    mappings: tuple[_MappingWitness, ...]
 
 
 class _RecordingObserved(dict):
@@ -135,9 +146,8 @@ def _current_form(program: Any) -> _Form | None:
     scope = _IR_IDENTITY_REUSE.get()
     if scope is not None and not scope.applies():
         scope = None
-    if scope is not None and form in scope.checked_forms:
-        return form
-    if not _witness_holds(program, form):
+    checked = scope is not None and form in scope.checked_forms
+    if not (_mappings_hold(form.mappings) if checked else _witness_holds(program, form)):
         with _LOCK:
             if _attached_form(program) is form:
                 object.__delattr__(program, _FORM_SLOT)
@@ -148,6 +158,10 @@ def _current_form(program: Any) -> _Form | None:
 
 
 def _witness_holds(program: Any, form: _Form) -> bool:
+    return _mappings_hold(form.mappings) and _owners_hold(program, form)
+
+
+def _owners_hold(program: Any, form: _Form) -> bool:
     if form.objects[0][0] is not program or getattr(program, "_frozen", False) is not True:
         return False
     return (
@@ -170,6 +184,36 @@ def _objects_hold(program: Any, form: _Form) -> bool:
                 return False
     return all(_sealed_registry_guard(registry, guard)
                for registry, guard in form.registry_guards)
+
+
+def _mapping_witness(proxy: MappingProxyType) -> _MappingWitness | None:
+    """Observe the exact backing dict without dispatching into a provider Mapping."""
+    if sys.implementation.name != "cpython":
+        return None
+    try:
+        # CPython's mappingproxy tp_traverse visits exactly its backing mapping. The audit
+        # event can be refused by the application, in which case we project normally.
+        references = gc.get_referents(proxy)
+        if len(references) == 1 and type(references[0]) is dict:
+            backing = references[0]
+            return backing, tuple(backing.items())
+    except Exception:
+        return None
+    return None
+
+
+def _mappings_hold(records: tuple[_MappingWitness, ...]) -> bool:
+    try:
+        for backing, entries in records:
+            if len(backing) != len(entries):
+                return False
+            for actual, recorded in zip(backing.items(), entries, strict=True):
+                if actual[0] is not recorded[0] or actual[1] is not recorded[1]:
+                    return False
+    except (RuntimeError, ValueError):
+        # A size or key change during iteration cannot authenticate an earlier projection.
+        return False
+    return True
 
 
 def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
@@ -198,7 +242,7 @@ def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
         with_provenance = _closed_text(by_variant[True])
     except (ValueError, RecursionError):
         return None, data
-    objects, registry_guards = closure
+    objects, registry_guards, mappings = closure
     form = _Form(
         (without_provenance, with_provenance),
         canonical_json_sha256(by_variant[False]),
@@ -206,6 +250,7 @@ def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
         tuple(registries.values()),
         objects,
         registry_guards,
+        mappings,
     )
     # An inherited definition memo cannot authenticate publication. Re-read each definition at
     # the boundary, including authorities that only one of the two variants reached.
@@ -219,6 +264,8 @@ def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
         ownership._FINGERPRINT_SCOPE.reset(token)
     if not _objects_hold(program, form) or not _keepable_registries(form.registries):
         raise RuntimeError("Program IR identity changed during canonical projection")
+    if not _mappings_hold(form.mappings):
+        return None, program._canonical_projection(include_provenance=first)
 
     with _LOCK:
         if _attached_form(program) is None:
@@ -390,29 +437,35 @@ def _sealed_registry_guard(registry: Any, guard: MethodType) -> bool:
 
 def _immutable_closure(
     program: Any,
-) -> tuple[tuple[_ObjectWitness, ...], tuple[tuple[Any, MethodType], ...]] | None:
+) -> tuple[tuple[_ObjectWitness, ...], tuple[tuple[Any, MethodType], ...],
+           tuple[_MappingWitness, ...]] | None:
     """Every object reachable from ``program``, with its attribute bindings, or None.
 
-    None when anything reachable is of a kind outside the allowlist below: a mutable container,
-    a NumPy array, a nested Program, a callable, or any unknown type. The walk stops at Handles
-    (their fields are set once and canonicalized through the frozen Case registries that the
-    witness holds), at ``_AuthoringAuthority`` (read only through its serial and its fingerprint,
-    which the witness holds) and at the ``prog`` back reference of a node.
+    None when a source cannot authenticate its projection. Case registries and
+    ``_AuthoringAuthority`` are observed by canonical_handle and the fingerprint scope.
+    The node's ``prog`` reference and other authoring-only inputs are outside the projection.
     """
     from pops._ir.symbolic import ImmutableSymbolic
-    from pops.model.handles import Handle
     from pops.model.ownership import _AuthoringAuthority
+    from pops.time._step.strategy import StepStrategy
+    from .api import Program
+    from .canonical_form_authorities import projection_authorities
+
+    if type(program) is not Program:
+        return None
+    admitted, leaf_types = projection_authorities()
 
     root_names, root_values = _state(program, omit_form=True)
     records: list[_ObjectWitness] = [(program, type(program), root_names, root_values)]
     registry_guards: list[tuple[Any, MethodType]] = []
+    mappings: list[_MappingWitness] = []
     stack = [value for name, value in zip(root_names, root_values)
              if name not in _AUTHORING_ONLY]
     seen: set[int] = {id(program)}
     while stack:
         node = stack.pop()
         kind = type(node)
-        if kind in _SCALARS:
+        if _SCALARS.get(id(kind)) is kind:
             continue
         if id(node) in seen:
             continue
@@ -421,28 +474,36 @@ def _immutable_closure(
             stack.extend(node)
             continue
         if kind is MappingProxyType:
-            # freeze_symbolic_metadata and freeze_containers always build the proxy over a fresh
-            # dict that nothing else holds, so the proxy is as immutable as its contents.
-            for key, value in node.items():
+            observed = _mapping_witness(node)
+            if observed is None:
+                return None
+            mappings.append(observed)
+            for key, value in observed[1]:
                 stack.append(key)
                 stack.append(value)
             continue
-        if isinstance(node, (Enum, Handle)) or kind is _AuthoringAuthority:
+        reference = leaf_types.get(id(kind)) is kind
+        if (reference and isinstance(node, Enum)) or kind is _AuthoringAuthority:
             continue
-        if not _immutable_class(kind, node):
+        if not reference and (admitted.get(id(kind)) is not kind or not _immutable_class(kind, node)):
             return None
         names, values = _state(node)
+        if isinstance(node, StepStrategy) and any(
+            _SCALARS.get(id(type(value))) is not type(value) for value in values
+        ):
+            return None
         records.append((node, kind, names, values))
         symbolic = isinstance(node, ImmutableSymbolic)
         for name, value in zip(names, values):
-            if value is _UNSET or (symbolic and name == "prog"):
+            if (value is _UNSET or (symbolic and name == "prog")
+                    or (reference and name not in _HANDLE_INPUTS)):
                 continue
             if name == "_mutation_guard" and type(value) is MethodType \
                     and _sealed_registry_guard(node, value):
                 registry_guards.append((node, value))
                 continue
             stack.append(value)
-    return tuple(records), tuple(registry_guards)
+    return tuple(records), tuple(registry_guards), tuple(mappings)
 
 
 __all__ = ["eligible", "has_form", "ir_hash", "projected_ir_hash", "serialize"]

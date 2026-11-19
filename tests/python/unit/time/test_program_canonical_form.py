@@ -1,11 +1,14 @@
 """One canonical form per frozen authoring Program (N11, F5): bit for bit, and its witness."""
 import gc
 import json
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from copy import copy
+from dataclasses import dataclass
 from threading import Barrier, get_ident
 from types import MappingProxyType
+from typing import ClassVar
 from weakref import ref
 
 import pytest
@@ -321,6 +324,162 @@ def test_copied_context_checks_a_kept_form_in_its_own_thread(monkeypatch):
         assert threads == [author_thread, reader]
     assert json.dumps(saved_context.run(program._serialize)) == expected
     assert threads == [author_thread, reader, author_thread]
+
+
+@pytest.mark.parametrize("read_from", ["proxy", "provider"])
+def test_registered_strategy_reprojects_current_application_data(read_from):
+    from pops.time._step.strategy import (
+        StepStrategy, register_step_strategy_type, validate_step_strategy_manifest,
+    )
+    from pops.time._program.serialization import _IR_IDENTITY_REUSE
+
+    settings = {"dt": 0.01}
+
+    @register_step_strategy_type
+    @dataclass(frozen=True, slots=True)
+    class Extension(StepStrategy):
+        kind: ClassVar[str] = "test_canonical_strategy_" + read_from
+        view: Mapping[str, float] | None
+
+        def to_data(self):
+            data = settings if self.view is None else self.view
+            return {"kind": self.kind, "dt": data["dt"]}
+
+        @classmethod
+        def from_data(cls, data):
+            return cls(MappingProxyType({"dt": data["dt"]}))
+
+    spec = build_profile("M01", profile="periodic-advection")
+    program = spec.case._time
+    strategy = Extension(MappingProxyType(settings) if read_from == "proxy" else None)
+    program.step_strategy(strategy)
+    validated = pops.validate(spec.case)
+    assert validated.frozen and program.transaction_plan().strategy is strategy
+
+    def assert_projection(expected):
+        data = {"kind": strategy.kind, "dt": expected}
+        for provenance in (False, True):
+            projected = program._serialize(include_provenance=provenance)
+            assert projected == program._canonical_projection(include_provenance=provenance)
+            assert projected["step_transaction"]["strategy"] == data
+        manifest = {"strategy": data, "controls": {}}
+        assert validate_step_strategy_manifest(manifest) == manifest
+        assert not canonical_form.has_form(program)
+        assert program._ir_hash() == canonical_form.projected_ir_hash(program)
+        return program._ir_hash()
+
+    before = assert_projection(0.01)
+    settings["dt"] = 0.02
+    current = assert_projection(0.02)
+    assert current != before
+    with pytest.raises(RuntimeError, match="changed during pops.resolve"):
+        with ir_identity_reuse("pops.resolve"):
+            assert program._ir_hash() == current
+            saved_context = copy_context()
+            settings["dt"] = 0.03
+    assert assert_projection(0.03) != current
+    reference = ref(program)
+    del validated, program, spec
+    gc.collect()
+    assert reference() is None
+    expired_scope = saved_context.run(_IR_IDENTITY_REUSE.get)
+    assert expired_scope is not None and not expired_scope.applies()
+
+
+@pytest.mark.parametrize("provider", ["stock", "schedule", "trigger"])
+def test_program_schedule_observes_its_actual_projection_sources(monkeypatch, provider):
+    from examples.api_v02 import models_M01_M14
+    from pops.time import AcceptedStep, Always, FixedDt, Schedule
+
+    settings = {"revision": 1}
+
+    @dataclass(frozen=True, slots=True)
+    class LiveSchedule(Schedule):
+        component_uri = "test://pops/time/schedule/canonical-source"
+        component_version = 1
+
+        def schedule_payload(self):
+            return {"configuration_revision": settings["revision"]}
+
+    @dataclass(frozen=True, slots=True)
+    class LiveTrigger(Always):
+        component_uri = "test://pops/time/schedule/trigger/canonical-source"
+        component_version = 1
+
+        def schedule_payload(self):
+            return {"configuration_revision": settings["revision"]}
+
+    def attach_euler(case, block, subject, rate, dt, *, name):
+        program = pops.Program(name)
+        state = program.state(block[subject])
+        domain = AcceptedStep(program.clock)
+        trigger = LiveTrigger(domain) if provider == "trigger" else Always(domain)
+        schedule = LiveSchedule(trigger) if provider == "schedule" else Schedule(trigger)
+        slope = rate(state.n, schedule=schedule)
+        endpoint = state.next
+        result = program.value("euler", state.n + program.dt * slope, at=endpoint.point)
+        program.commit(endpoint, result)
+        program.step_strategy(FixedDt(dt))
+        case.program(program)
+
+    monkeypatch.setattr(models_M01_M14, "_traced_ssprk2", attach_euler)
+    spec = models_M01_M14.build_m01()
+    assert pops.validate(spec.case).frozen
+    program = spec.case._time
+
+    def check_schedule(expected):
+        for variant in (False, True):
+            data = program._serialize(include_provenance=variant)
+            assert data == program._canonical_projection(include_provenance=variant)
+            scheduled = next(node["attrs"]["schedule"] for node in data["nodes"]
+                             if node["op"] == "rhs")
+            payload = scheduled["trigger"]["payload"] if provider == "trigger" else scheduled["payload"]
+            assert payload == ({} if provider == "stock" else {"configuration_revision": expected})
+        assert canonical_form.has_form(program) is (provider == "stock")
+        assert program._ir_hash() == canonical_form.projected_ir_hash(program)
+        return program._ir_hash()
+
+    before = check_schedule(1)
+    settings["revision"] = 2
+    after = check_schedule(2)
+    assert (after == before) is (provider == "stock")
+
+
+def test_mapping_witness_requires_passive_dict_storage_and_checks_entry_order():
+    from collections import UserDict
+
+    class ExternalMapping(UserDict):
+        def items(self):
+            raise AssertionError("cache witness must not call an application Mapping")
+
+    assert canonical_form._mapping_witness(MappingProxyType(ExternalMapping())) is None
+    source = {"first": 1, "second": 2}
+    record = canonical_form._mapping_witness(MappingProxyType(source))
+    assert record is not None
+    assert canonical_form._mappings_hold((record,))
+    source["first"] = source.pop("first")
+    assert not canonical_form._mappings_hold((record,))
+    record = canonical_form._mapping_witness(MappingProxyType(source))
+    assert record is not None
+    source["first"] = 2
+    assert not canonical_form._mappings_hold((record,))
+
+
+def test_mapping_witness_rechecks_a_kept_form_inside_an_operation():
+    _spec, program, _reference = _frozen_with_form()
+    value = program._values[-1]
+    backing = {**value.attrs, "observed_metadata": (1,)}
+    object.__setattr__(value, "attrs", MappingProxyType(backing))
+
+    with ir_identity_reuse("pops.resolve"):
+        before = program._serialize()
+        assert canonical_form.has_form(program)
+        assert before["nodes"][-1]["attrs"]["observed_metadata"] == [1]
+        assert program._serialize() == before
+        backing["observed_metadata"] = (2,)
+        after = program._serialize()
+        assert after["nodes"][-1]["attrs"]["observed_metadata"] == [2]
+        assert after == program._canonical_projection()
 
 
 def test_a_reuse_scope_trusts_a_checked_form_until_it_ends():
