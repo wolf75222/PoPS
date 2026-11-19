@@ -1928,6 +1928,61 @@ def test_consumer_publisher_adapter_prepares_only_a_resolved_effect(tmp_path):
         publisher.prepare(object())
 
 
+def test_consumer_publisher_accepts_a_cooperative_writer_with_the_public_file_catalogue(tmp_path):
+    calls = []
+
+    class JournalledSession:
+        def __init__(self, session):
+            self.session = session
+
+        def __getattr__(self, name):
+            return getattr(self.session, name)
+
+        def stage(self):
+            calls.append("stage")
+            return self.session.stage()
+
+        def publish(self):
+            calls.append("publish")
+            return self.session.publish()
+
+        def finalize(self):
+            calls.append("finalize")
+            return self.session.finalize()
+
+    class JournalledWriter:
+        def __init__(self, writer):
+            self.writer = writer
+
+        def preflight(self, context):
+            return self.writer.preflight(context)
+
+        def prepare_session(self, *args, **kwargs):
+            return JournalledSession(self.writer.prepare_session(*args, **kwargs))
+
+    class JournalledNPZ(NPZ):
+        def writer(self):
+            return JournalledWriter(super().writer())
+
+        def consumer_data(self):
+            return dict(super().consumer_data(), provider_id="example.output.journalled-npz.v1")
+
+    snapshot, request, _ = _snapshot()
+    format = JournalledNPZ()
+    target = deterministic_target(
+        tmp_path, "fields", request, snapshot, format.extension,
+        format_data=format.consumer_data(), format_name=format.format_name,
+    )
+    effect = _accepted_output_effect(request, target)
+    effect = replace(effect, target=replace(effect.target, output_format=format.consumer_data()))
+    publisher = ConsumerOutputPublisher(lambda _: OutputPreparation(format, snapshot, request, target))
+    prepared = publisher.prepare(effect)
+    prepared.publish()
+    prepared.finalize()
+    assert format.reopen_series(tmp_path).latest.output_identity == format.reopen(target).output_identity
+    assert calls == ["stage", "publish", "finalize"]
+
+
 def test_consumer_publisher_series_retry_releases_writer_authority(tmp_path):
     snapshot, request, _ = _snapshot()
     target = tmp_path / "series-finalizer.npz"

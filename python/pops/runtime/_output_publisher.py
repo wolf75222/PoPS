@@ -305,14 +305,15 @@ class PreparedConsumerOutput(PreparedPublication):
     __slots__ = (
         "_effect", "_session", "_publisher_id", "_request", "_communicator",
         "_target_path", "_format_name", "_series_publication", "_series_authority",
-        "_series_finalized", "_writer_finalized", "_artifact_authority",
+        "_series_finalized", "_writer_finalized", "_artifact_authority", "_series_file_proof",
     )
 
     def __init__(self, effect: AcceptedSideEffect, session: Any,
                  publisher_id: str, request: OutputRequest, communicator: Any,
                  *, target: Any, format_name: str,
                  series_publication: Any = None,
-                 series_publication_authority: dict[str, Any] | None = None) -> None:
+                 series_publication_authority: dict[str, Any] | None = None,
+                 series_file_proof: bool = False) -> None:
         self._effect = effect
         self._session = session
         self._publisher_id = publisher_id
@@ -323,6 +324,7 @@ class PreparedConsumerOutput(PreparedPublication):
         if series_publication is None and series_publication_authority is not None:
             raise ValueError("series authority requires a prepared publication")
         self._series_publication = series_publication
+        self._series_file_proof = series_file_proof
         self._series_authority = (
             None if series_publication_authority is None
             else dict(series_publication_authority))
@@ -472,7 +474,7 @@ class PreparedConsumerOutput(PreparedPublication):
                 None if evidence_data is None else tuple(evidence_data))
             proof_data = local.get("file_proof")
             file_proof = None if proof_data is None else _validated_file_proof(proof_data)
-            if type(self._series_publication) is FileSeriesPublication and file_proof is None:
+            if self._series_file_proof and file_proof is None:
                 raise TypeError("exact series indexing requires the current writer's byte proof")
             if file_proof is not None and (file_evidence is None or file_proof[2] != file_evidence[2]):
                 raise ValueError("output receipt byte proof differs from its file size")
@@ -562,7 +564,7 @@ class PreparedConsumerOutput(PreparedPublication):
                             "scientific output series has no published artifact authority")
                     artifact = dict(self._artifact_authority)
                     proof_data = artifact.pop("file_proof", None)
-                    if type(series_publication) is FileSeriesPublication:
+                    if self._series_file_proof:
                         proof = None if proof_data is None else _validated_file_proof(proof_data)
                         result = series_publication._publish(artifact, proof)
                     else:
@@ -735,6 +737,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
         session = None
         authority = None
         error = None
+        series_file_proof = False
         try:
             session = writer.prepare_session(
                 preparation.snapshot,
@@ -743,9 +746,9 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                 communicator=preparation.communicator,
             )
             authority = authenticate_writer_session(session)
-            if type(series_publication) is FileSeriesPublication:
-                if type(session) is not OutputWriterSession:
-                    raise TypeError("exact file series requires a writer session with byte evidence")
+            series_file_proof = (type(series_publication) is FileSeriesPublication
+                                 and type(session) is OutputWriterSession)
+            if series_file_proof:
                 session._require_file_proof()
             expected_target = Path(preparation.target).expanduser().resolve().as_posix()
             expected = {
@@ -767,10 +770,12 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                 "rank": preparation.request.rank,
                 "error": error,
                 "authority": authority,
+                "series_file_proof": series_file_proof,
             })
             if len(rows) != preparation.request.size or any(
                 not isinstance(row, Mapping)
-                or set(row) != {"rank", "error", "authority"}
+                or set(row) != {"rank", "error", "authority", "series_file_proof"}
+                or type(row["series_file_proof"]) is not bool
                 or row["rank"] != rank
                 for rank, row in enumerate(rows)
             ):
@@ -784,6 +789,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                 raise RuntimeError(
                     "%s output session preparation failed: %s"
                     % (mode.name, "; ".join(failures)))
+            series_file_proof = all(row["series_file_proof"] for row in rows)
             session_authorities = tuple(row["authority"] for row in rows)
             shared_keys = ("schema_version", "format", "parallel_mode", "size")
             if mode is not ParallelMode.PER_RANK:
@@ -804,6 +810,9 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             raise RuntimeError("SERIAL output session preparation failed: %s" % error)
         if session is None:
             raise RuntimeError("output writer session preparation returned no session")
+
+        if type(session) is OutputWriterSession and not series_file_proof:
+            session._seal = False
 
         stage_error = None
         try:
@@ -863,6 +872,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             format_name=target_format["format_name"],
             series_publication=series_publication,
             series_publication_authority=series_publication_authority,
+            series_file_proof=series_file_proof,
         )
 
 
