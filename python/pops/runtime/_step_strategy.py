@@ -1204,7 +1204,8 @@ def prepare_program_run(
 ) -> PreparedProgramRun:
     """Freeze one Program-authenticated temporal run before its first native attempt."""
     last_run = getattr(engine, "last_run_manifest", None)
-    if last_run is not None and "compiled_advance" in last_run.controls["step_transaction"] and not compiled:
+    if not compiled and last_run is not None and "compiled_advance" in last_run.controls["step_transaction"] \
+            and last_run.start_macro_step < engine.macro_step():
         raise RuntimeError("the historical step controller cannot continue a compiled Advance run")
     strategy = resolve_run_strategy(engine)
     control_payload = run_control_payload(strategy, controls)
