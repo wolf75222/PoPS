@@ -516,6 +516,10 @@ class Simulation:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
+            if manifest is not None and macro_step > start_step:
+                from pops.runtime._run_manifest import publish_run_manifest
+
+                publish_run_manifest(runtime._executor, manifest)
             self._continuation = Continuation(
                 time, macro_step, CellStepBound(*cells) if cells is not None
                 else Proposal(dt) if rule is None else StepRule(*rule),
@@ -529,10 +533,6 @@ class Simulation:
                 rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
                 failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
             )
-        if manifest is not None and report["steps"] > 0:
-            from pops.runtime._run_manifest import publish_run_manifest
-
-            publish_run_manifest(runtime._executor, manifest)
         for name in ("last_accepted_begin", "segment_proposal", "segment_time", "segment_macro_step"):
             report.pop(name, None)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}

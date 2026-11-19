@@ -305,7 +305,7 @@ def test_a_failed_trial_leaves_the_run_with_its_native_error(artifacts):
         assert (resumed.time, resumed.steps, resumed.rejections) == (spec.t_end, 2, 0)
 
 
-def test_the_compiled_run_refuses_what_it_cannot_run(artifacts):
+def test_the_compiled_run_refuses_what_it_cannot_run(artifacts, tmp_path):
     world, (spec, traced), (b6_spec, b6) = artifacts
     reference = _bind(world, b6_spec, b6)
     with collective_check(world):
@@ -330,6 +330,30 @@ def test_the_compiled_run_refuses_what_it_cannot_run(artifacts):
     with collective_check(world):
         with pytest.raises(RuntimeError, match="advanced outside"):
             simulation.run(1.0)
+
+    partial = _bind(world, spec, traced)
+    compiled = Simulation(partial)
+    native = compiled._run_native
+
+    def discard_report(*args):
+        native(*args)
+        raise RuntimeError("run report delivery failed")
+
+    compiled._run_native = discard_report
+    with collective_check(world):
+        with pytest.raises(RuntimeError, match="report delivery failed"):
+            compiled.run(spec.t_end)
+        assert partial.macro_step() == 2 and partial.last_run_identity is not None
+        with pytest.raises(RuntimeError, match="historical step controller"):
+            pops.run(partial, t_end=2 * spec.t_end, max_steps=8, console=False)
+    from tests.python.support.integral_state_receipts import collective_directory
+    folder = collective_directory(world, tmp_path)
+
+    def refuses_stale_time():
+        with pytest.raises(RuntimeError, match="desynchronized"):
+            partial.checkpoint(str(folder / "unprojected"))
+
+    collective_call(world, refuses_stale_time)
 
 
 def _master_fixed_dt(time, proposal, frontier, origin, steps):
