@@ -500,7 +500,7 @@ class Simulation:
             from pops.runtime._run_manifest import begin_run
             from pops.runtime._step_strategy import prepare_program_run
 
-            prepared = prepare_program_run(runtime._executor)
+            prepared = prepare_program_run(runtime._executor, compiled=True)
             begin_run(
                 runtime._executor, t_end=until, max_steps=max_steps, output_dir=None,
                 step_transaction={
