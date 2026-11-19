@@ -1092,7 +1092,8 @@ set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
   "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp"
   "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp"
   "${_euler_dir}/empty_cadence.cpp" "${_euler_dir}/scalar_history.cpp"
-  "${_euler_dir}/noop_history.cpp" "${_euler_dir}/mixed_cfl.cpp" "${_euler_dir}/mixed_norm.cpp" "${_euler_dir}/mixed_norm_wrong.cpp")
+  "${_euler_dir}/noop_history.cpp" "${_euler_dir}/declared_subcycling.cpp"
+  "${_euler_dir}/mixed_cfl.cpp" "${_euler_dir}/mixed_norm.cpp" "${_euler_dir}/mixed_norm_wrong.cpp")
 if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
   set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
     "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
