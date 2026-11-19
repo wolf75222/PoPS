@@ -449,33 +449,6 @@ def _check_source_selection(layout: Any, block: Any, rate: Any) -> None:
             "conservative state and numbers" % block.name, method="StateStorage")
 
 
-def _check_source_binding(layout: Any, block: Any, binding: Any) -> None:
-    from pops.model.handles import Handle
-    from pops.numerics.terms import SourceTerm
-
-    module = _source_module(block)
-    if module is not None and type(binding.method) is SourceTerm:
-        operator = binding.method.operator
-        subject = binding.subject
-        if (isinstance(subject, Handle) and subject.owner_path.canonical().to_data() in
-                (block.model_owner, block.instance_owner)
-                and operator.kind == "local_source" and operator.signature is not None
-                and operator.owner_path.canonical().to_data() in
-                (block.model_owner, block.instance_owner)):
-            inputs = operator.signature.inputs
-            if len(inputs) == 1 and inputs[0] in module.state_spaces().values():
-                state = module.state_handle(inputs[0])
-                if ((subject.kind == "state" and subject.local_id == state.local_id)
-                        or (subject.kind in ("source", "local_source") and
-                            getattr(subject, "reg_name", subject.local_id)
-                            == operator.registered_operator_name)):
-                    if _source_reads_state(module, state, operator.registered_operator_name):
-                        return
-    _refuse(layout, "static_geometry_consumer_unavailable",
-            "block %r has a source binding without a named law of its own conservative state "
-            "and numbers" % block.name, operation="source_binding")
-
-
 def validate_static_geometry_consumers(plan: Any) -> None:
     """Refuse, before any C++, every consumer of a mapped layout that the arrays do not serve."""
     from pops.codegen.program_lowerability import all_ops
@@ -540,11 +513,10 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                     "block %r has an analytic auxiliary input, which reads the cell coordinates "
                     "of the logical box" % block.name)
         numerics = block.numerics
-        if numerics.fields or numerics.interfaces or numerics.principal_groups:
+        if numerics.sources or numerics.fields or numerics.interfaces \
+                or numerics.principal_groups:
             _refuse(layout, "static_geometry_consumer_unavailable",
-                    "block %r has fields, interfaces or principal groups" % block.name)
-        for binding in numerics.sources:
-            _check_source_binding(layout, block, binding)
+                    "block %r has sources, fields, interfaces or principal groups" % block.name)
         for rate in numerics.rates:
             if isinstance(rate.method, Diffusion):
                 _check_diffusion(layout, block, rate.method, reading.rank, reading.kind)
