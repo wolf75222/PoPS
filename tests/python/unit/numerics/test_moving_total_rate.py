@@ -239,11 +239,13 @@ def test_native_moving_faces_require_the_interior_copy_for_the_exact_total_owner
         block.numerics.boundaries, canonical_handle(members.state_ref), assigned, geometry)
 
 
-def test_one_flux_closure_cannot_supply_the_moving_interior_copy(monkeypatch):
+@pytest.mark.parametrize("side", (0, 1))
+def test_one_flux_closure_cannot_supply_the_moving_interior_copy(monkeypatch, side):
     from examples.api_v02 import models_G03_moving_transport as fixture
     from pops.boundary.transport import NoFlux
 
-    closures = iter((fixture.Outflow, NoFlux))
+    closure = fixture.Outflow
+    closures = iter(NoFlux if ordinal == side else closure for ordinal in range(2))
     monkeypatch.setattr(fixture, "Outflow", lambda **kwargs: next(closures)(**kwargs))
     case, layout, _, _ = fixture.build_transport()
     with pytest.raises(MovingMembersNotYetElaborated, match="both physical faces") as refused:

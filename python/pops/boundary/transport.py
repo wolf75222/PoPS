@@ -1406,6 +1406,17 @@ class ResolvedTransportBoundarySet:
         from pops.mesh.boundaries import ClosureMode
 
         state, ncomp, conditions, depth, _ = self._native_contract()
+
+        def native_type(row: ResolvedTransportCondition) -> str:
+            if self.requires_expression_component(row):
+                return "external"
+            if row.provider.dependencies.characteristic.mode is not ClosureMode.NONE:
+                return "characteristic_no_inflow"
+            extension = _NATIVE_CELL_EXTENSION.get(row.condition_type)
+            if extension is not None:
+                return extension[0]
+            return {"inflow": "dirichlet", "source_ghost": "source_ghost"}[row.condition_type]
+
         return {
             "schema_version": 1,
             "authority_type": "prepared_boundary_plan_compile",
@@ -1421,19 +1432,7 @@ class ResolvedTransportBoundarySet:
                     "condition_type": row.condition_type,
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
-                    "type": (
-                        "external" if self.requires_expression_component(row) else
-                        "characteristic_no_inflow"
-                        if row.provider.dependencies.characteristic.mode
-                        is not ClosureMode.NONE
-                        else {
-                        "outflow": "foextrap",
-                        "inflow": "dirichlet",
-                        "no_flux": "no_flux",
-                        "slip_wall": "slip_wall",
-                        "source_ghost": "source_ghost",
-                        }[row.condition_type]
-                    ),
+                    "type": native_type(row),
                     **({"source_identity": row.source_ghost.source_identity}
                        if row.source_ghost is not None else {}),
                     "representation": self._native_representation_contract(
