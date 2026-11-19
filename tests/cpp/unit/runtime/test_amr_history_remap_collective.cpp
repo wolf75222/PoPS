@@ -279,7 +279,7 @@ TEST(AmrDeclaredHistoryGhosts, ScalarGhostOneSurvivesRealRegridOnStateGhostTwo) 
   EXPECT_EQ(pops::runtime::program::serialize_amr_program_accepted_state(wire), bytes);
 
   // A fresh actual runtime follows the same topology/clock trajectory with different data.
-  Fixture restored;
+  Fixture restored(true);
   restored.fill_history(pops::Real(80));
   restored.regrid(false);
   restored.regrid(true);
