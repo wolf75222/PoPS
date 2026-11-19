@@ -820,7 +820,7 @@ class _StagedOutputFile:
         "temporary", "target", "format", "output_identity", "selection_identity",
         "_verify", "_published", "_discarded", "_created_target", "_target_owner",
         "_target_evidence", "_staging", "_temporary_owner", "_communicator", "_recoveries",
-        "_file_proof",
+        "_file_proof", "_seal",
     )
 
     def __init__(
@@ -846,6 +846,7 @@ class _StagedOutputFile:
         self._target_owner: tuple[int, int] | None = None
         self._target_evidence: tuple[int, int, int, int, int] | None = None
         self._file_proof: _FileProof | None = None
+        self._seal = False
         self._temporary_owner = temporary.owner
         self._recoveries: list[Any] = []
         if communicator is None and not temporary.is_open:
@@ -1047,7 +1048,7 @@ class _StagedOutputFile:
             self._recoveries.append(error.recovery)
             raise
 
-    def publish(self, *, seal: bool = False) -> OutputPublicationReceipt:
+    def publish(self) -> OutputPublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded output cannot be published")
         if self._published:
@@ -1060,7 +1061,7 @@ class _StagedOutputFile:
         if self._rank() == 0:
             try:
                 before = None
-                if seal:
+                if self._seal:
                     self._staging.authenticate_path()
                     before = _file_evidence(os.fstat(self._staging.fileno()))
                 verified = self._verify(self.temporary)
@@ -1254,6 +1255,7 @@ class OutputWriterSession:
         staged = self._stage_file()
         if type(staged) is not _StagedOutputFile:
             raise TypeError("built-in writer stage must return its private staged file")
+        staged._seal = self._seal
         self._staged = staged
 
     def abort_prepare(self) -> None:
@@ -1268,7 +1270,7 @@ class OutputWriterSession:
             return None
         if self._staged is None:
             raise RuntimeError("writer session must be staged before publication")
-        return self._staged.publish(seal=self._seal)
+        return self._staged.publish()
 
     def rollback(self) -> None:
         if self._finalized:
@@ -1718,6 +1720,7 @@ def publish_output_series(
     artifact: Mapping[str, Any],
     reopen: Callable[[Any], ReopenedOutput],
     file_proof: _FileProof | None,
+    reauthenticate: bool,
 ) -> None:
     """Atomically refresh one family-scoped catalogue after accepted publication."""
     extension = _validate_series_extension(extension)
@@ -1742,13 +1745,13 @@ def publish_output_series(
             artifact["selection_identity"], "output-publication-selection",
             "series artifact selection") != selection_identity:
         raise ValueError("scientific output artifact selection differs from its series")
-    identity_from_token(
+    output_identity = identity_from_token(
         artifact["output_identity"], "scientific-output", "series artifact output")
     expected_target_evidence = _validated_file_evidence(
         artifact["file_evidence"], where="series artifact file_evidence")
-    if file_proof is None:
+    if file_proof is None and not reauthenticate:
         raise TypeError("exact series indexing requires the current writer's byte proof")
-    expected_proof = _validated_file_proof(file_proof)
+    expected_proof = None if file_proof is None else _validated_file_proof(file_proof)
     physical_time, current_order = _series_clock_data({"clock": dict(clock_data)})
     series_path = output_series_path(target.parent, extension, family)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1781,11 +1784,27 @@ def publish_output_series(
         if _regular_entry_at(directory_fd, lock_name) != lock_owner:
             raise RuntimeError("scientific output series lock inode was replaced")
         try:
-            actual_proof = _entry_file_proof(directory_fd, target.name, expected_target_evidence)
+            if expected_proof is not None:
+                matches = (_entry_file_proof(directory_fd, target.name, expected_target_evidence)
+                           == expected_proof)
+            else:
+                def authenticate_current(path: Any) -> ReopenedOutput:
+                    opened = reopen(path)
+                    opened_selection = make_identity(
+                        "output-publication-selection", opened.manifest["snapshot"]["selection"])
+                    if (opened.output_identity != output_identity
+                            or opened_selection != selection_identity):
+                        raise ValueError("reopened output differs from the received scientific identity")
+                    return opened
+
+                matches = _authenticated_series_member(
+                    target, family_scope=family.hexdigest, format_name=format_name,
+                    format_data=format_data, reopen=authenticate_current,
+                ) == (physical_time, current_order)
         except (FileNotFoundError, ValueError, RuntimeError) as error:
             raise RuntimeError(
                 "accepted scientific output artifact changed before series indexing") from error
-        if actual_proof != expected_proof:
+        if not matches:
             raise RuntimeError(
                 "accepted scientific output artifact changed before series indexing")
 
@@ -1944,9 +1963,11 @@ class FileSeriesPublication:
         return thaw_data(self._authority)
 
     def publish(self, artifact: Mapping[str, Any]) -> None:
-        self._publish(artifact, None)
+        self._publish(artifact, None, reauthenticate=True)
 
-    def _publish(self, artifact: Mapping[str, Any], proof: _FileProof | None) -> None:
+    def _publish(
+        self, artifact: Mapping[str, Any], proof: _FileProof | None, *, reauthenticate: bool = False,
+    ) -> None:
         publish_output_series(
             self._target,
             extension=self._extension,
@@ -1958,6 +1979,7 @@ class FileSeriesPublication:
             artifact=artifact,
             reopen=self._reopen,
             file_proof=proof,
+            reauthenticate=reauthenticate,
         )
 
 

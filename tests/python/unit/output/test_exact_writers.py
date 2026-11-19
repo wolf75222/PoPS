@@ -2605,6 +2605,16 @@ def test_new_exact_series_index_requires_a_current_byte_proof(tmp_path):
     with pytest.raises(TypeError, match="requires the current writer's byte proof"):
         _publish_series(format.series_catalog(), target, snapshot, request, receipt)
     assert not list(tmp_path.glob("*.series"))
+    catalog = format.series_catalog()
+    publication = catalog.prepare(target, snapshot, request)
+    publication.publish({
+        "output_identity": receipt.output_identity.token,
+        "selection_identity": receipt.selection_identity.token,
+        "path": receipt.path.as_posix(),
+        "format": receipt.format,
+        "file_evidence": list(receipt.file_evidence),
+    })
+    assert catalog.reopen(tmp_path).files == (target,)
     session.finalize()
 
 
