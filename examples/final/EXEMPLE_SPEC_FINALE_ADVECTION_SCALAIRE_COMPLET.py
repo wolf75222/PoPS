@@ -19,7 +19,7 @@ import numpy as np
 import pops
 from pops.domain import Rectangle, RectangleBoundaryNames
 from pops.frames import Cartesian2D
-from pops.math import ValueExpr, ddt, div
+from pops.math import ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -399,20 +399,21 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         Tag,
     )
     from pops.layouts import AMR
-    from pops.lib.amr import BergerRigoutsos, StateTransfer, SymbolicTagger
-    from pops.math import grad, norm
+    from pops.lib.amr import BergerRigoutsos, StateTransfer, gradient_norm
     from pops.time import every
 
-    # The explicit Handle -> Expr conversion preserves Python identity semantics.  AMRTagging binds
-    # this continuous-looking predicate to U's resolved spatial method.  That method owns the exact
-    # typed, serializable gradient coefficients/offsets/order/halos transported to both builtin and
-    # external Taggers; there is no runtime reconstruction-name switch or centered fallback.
-    tracer_value = ValueExpr(core.tracer_state)
-    gradient_magnitude = norm(grad(tracer_value))
+    # Each rule is a function of cell, generated into the compiled Program (spec 0.3, DM13b). The
+    # gradient reads the exact typed stencil that U's spatial method declares; there is no
+    # reconstruction-name switch or centered fallback.
+    stencil = core.finite_volume.amr_indicator_stencil(dimension=len(core.frame.axes))
+
+    def gradient(cell: Any) -> Any:
+        return gradient_norm(cell, core.tracer_state, axes=core.frame.axes, stencil=stencil)
+
     tagging = AMRTagging(
         rules=(
-            Tag(gradient_magnitude > core.case.value(core.refine_threshold)),
-            Coarsen(gradient_magnitude < core.case.value(core.coarsen_threshold)),
+            Tag(lambda cell: gradient(cell) > core.case.value(core.refine_threshold)),
+            Coarsen(lambda cell: gradient(cell) < core.case.value(core.coarsen_threshold)),
             Buffer(cells=2),
         ),
         hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
@@ -427,10 +428,8 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         grid=core.grid,
         hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
         tagging=tagging,
-        # Providers are explicit typed objects. A Tagger evaluates this exact resolved graph (all
-        # state inputs come from its leaves); it is never a second, independent tagging policy.
-        # pops.lib contains builtins; pops.amr exposes exact external native provider bindings.
-        tagger=SymbolicTagger(),
+        # Providers are explicit typed objects. pops.lib contains builtins; pops.amr exposes exact
+        # external native provider bindings.
         clustering=BergerRigoutsos(),
         regrid=AMRRegrid(schedule=every(5, clock=core.program.clock)),
         transfer=transfer,

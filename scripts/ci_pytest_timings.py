@@ -20,8 +20,20 @@ import ci_python_test_units  # noqa: E402
 
 ORDINARY_BUDGET_SECONDS = 35 * 60
 # The complete 2026-10-16 catalog retains the 35-minute ordinary budget.
-# 149 bins retain35min for complete inventories and measured CI47b2 costs (N3, N8, N9, N15, N16, N17).
-SHARD_TOTAL = 149
+# 148 bins retain35min for complete inventories and measured CI47b2 costs (N3, N8, N9, N15, N17).
+# Every shard of more than one file stays at least ten percent under that budget
+# (ORDINARY_MARGIN_SECONDS, pinned by test_ci_shard_binpack.py); a lot that crosses it raises
+# SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
+# (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 167 with the native
+# modules of the N9 relation solves (n9_20261112_*) and #823 merged first;
+# 168 with the shard 131 recalibration of batch 43469038506, then 169 with G03 accumulation.
+# N8 cell step rules require 170 shards. With the N17 graded layouts, 170 reaches 1902 s
+# and 171 keeps the largest multi-file shard at 1890 s.
+ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
+# With the N16 representation modules, 172 keeps the maximum at 1886 s.
+# The two-point mapped-face module brings the maximum to 1886 s at 173 bins.
+# Budgeting the cold WENO5 parity runs needs 174 bins, with a maximum of 1882 s.
+SHARD_TOTAL = 175
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:

@@ -292,7 +292,7 @@ def partition_stability_groups(value, *, include_transport=False):
     return tuple((state, alpha, tuple(rows)) for state, alpha, rows in groups.values())
 
 
-def emit_transport_frequency(value, var, lines, *, model, block_index, target="system"):
+def emit_transport_frequency(value, var, lines, *, model, block_index, target="system", state=None):
     """Capture the selected envelope while this exact rate's inputs/providers are current."""
     if not has_independent_diffusion_transport(model):
         return
@@ -303,8 +303,10 @@ def emit_transport_frequency(value, var, lines, *, model, block_index, target="s
     frequency = "transport_frequency_%d" % value.id
     trace = ("," + (var.get(("rhs_input_trace", value.id)) or "nullptr")
              if target == "amr_system" else "")
+    if state is None:
+        state = var[value.inputs[0].id]
     lines.append("const pops::Real %s = ctx.evaluated_transport_frequency(%d,%s,%d%s);"
-                 % (frequency, block_index, var[value.inputs[0].id], value.id, trace))
+                 % (frequency, block_index, state, value.id, trace))
     var[("partition_frequency", value.id)] = frequency
 
 
@@ -415,11 +417,15 @@ def _face_step_frequency_rejection(frequency, alpha):
     rejected = "pops_face_step_rejected"
     return [
         "} catch (const pops::runtime::program::StepAttemptRejected& %s) {" % rejected,
-        "  char pops_face_step_text[64];",
-        "  std::snprintf(pops_face_step_text, sizeof(pops_face_step_text), \"%%a\", "
-        "static_cast<double>(%s / %s));" % (frequency, alpha),
+        "  char pops_face_step_text[64] = {'0', 'x'};",
+        "  const auto pops_face_step_encoding = std::to_chars("
+        "pops_face_step_text + 2, pops_face_step_text + sizeof(pops_face_step_text),",
+        "      static_cast<double>(%s / %s), std::chars_format::hex);" % (frequency, alpha),
+        "  if (pops_face_step_encoding.ec != std::errc{})",
+        "    throw std::runtime_error(\"cannot encode the face step frequency\");",
         "  throw pops::runtime::program::StepAttemptRejected(%s.status(), %s.disposition(), "
-        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", std::string(pops_face_step_text));"
+        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", "
+        "std::string(pops_face_step_text, pops_face_step_encoding.ptr));"
         % (rejected, rejected, rejected, rejected, rejected, FACE_STEP_FREQUENCY_SCHEMA),
         "}",
     ]

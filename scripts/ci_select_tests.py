@@ -111,6 +111,7 @@ PYTHON_BROAD_PREFIXES = (
     "include/pops/parallel/",
     ".github/actions/setup-kokkos/",
     ".github/actions/native-module-for-runner/",
+    ".github/actions/mpi-module-for-runner/",
     "python/bindings/",
     "tests/python/support/",
 )

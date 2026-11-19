@@ -352,17 +352,21 @@ class _SystemIO(_System):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
             )
-        state_carriers = self._s.checkpoint_state_carriers()
-        if type(state_carriers) is not bytes or not state_carriers.startswith(b"POPSCAR1"):
-            raise ValueError("Uniform checkpoint requires complete POPSCAR1 immutable bytes")
+        positional_authority = getattr(self._s, "_checkpoint_has_positional_state_authority", None)
+        positional = callable(positional_authority) and positional_authority()
+        if positional:
+            state_carriers = self._s.checkpoint_state_carriers(positional=True)
+            auxiliary_checkpoint = self._s._capture_positional_auxiliary_checkpoint()
+        else:
+            state_carriers = self._s.checkpoint_state_carriers()
+            auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
+        carrier_magic = b"POPSCAR2" if positional else b"POPSCAR1"
+        if type(state_carriers) is not bytes or not state_carriers.startswith(carrier_magic):
+            raise ValueError("Uniform checkpoint requires complete immutable carrier bytes")
         out["state_carriers_checkpoint"] = np.frombuffer(state_carriers, dtype=np.uint8).copy()
-        auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
-        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(
-            (b"POPSAUX2", b"POPSAUX3")
-        ):
-            raise RuntimeError(
-                "native Uniform exact auxiliary checkpoint is not a POPSAUX2/3 bytes image"
-            )
+        auxiliary_magic = (b"POPSAUX4", b"POPSAUX5") if positional else (b"POPSAUX2", b"POPSAUX3")
+        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(auxiliary_magic):
+            raise RuntimeError("native Uniform exact auxiliary checkpoint has an unexpected format")
         out["auxiliary_checkpoint"] = np.frombuffer(auxiliary_checkpoint, dtype=np.uint8).copy()
         capture_histories(self._s, prepared.history_plan, out)
         for node in prepared.cache_nodes:
@@ -518,9 +522,16 @@ class _SystemIO(_System):
             raise ValueError(
                 "restart: exact auxiliary checkpoint must be a one-dimensional uint8 array"
             )
-        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() not in (b"POPSAUX2", b"POPSAUX3"):
-            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2/3")
+        auxiliary_magic = auxiliary_checkpoint[:8].tobytes()
+        positional = auxiliary_magic in (b"POPSAUX4", b"POPSAUX5")
+        if not positional and auxiliary_magic not in (b"POPSAUX2", b"POPSAUX3"):
+            raise ValueError("restart: unsupported exact Uniform auxiliary checkpoint format")
+        positional_carriers = carrier_bytes is not None and carrier_bytes.startswith(b"POPSCAR2")
+        if positional != positional_carriers:
+            raise ValueError("restart: Uniform carrier and auxiliary checkpoint authority differ")
         auxiliary_checkpoint_bytes = auxiliary_checkpoint.tobytes()
+        if positional:
+            self._s._validate_positional_auxiliary_checkpoint(auxiliary_checkpoint_bytes)
         cadence = prepare_program_cadence(
             self._s,
             d,

@@ -7,9 +7,11 @@ coupled ``geometry_state`` is needed. A map that reads the clock or a discrete i
 moving route and its refusals.
 
 The reading is structural and states no heuristic. A map whose component ``a`` reads the logical
-coordinate ``a`` alone is read as node positions with exact node differences (``nodes``); any
-other map is a chart, whose measures need the stated quadrature rule of its layout (D0b; omitted
-is refused, SU9).
+coordinate ``a`` alone is read as node positions with exact node differences (``nodes``), at any
+rank: a graded box, which ``pops.Graded`` elaborates to (design note N17, DN3), whose end nodes
+keep the bounds of the box (certified at bind); any other map is a chart, of rank two, whose
+measures need the stated quadrature rule of its layout (D0b; omitted is refused, SU9). A chart of
+rank three is planned, not covered (design note N17, 3.10).
 """
 from __future__ import annotations
 
@@ -18,8 +20,9 @@ from dataclasses import dataclass
 from typing import Any
 
 STATIC_GEOMETRY_CONTRACT = "pops://geometry/static-arrays@1"
-# The ranks served by this lot. Rank three lands with the graded three-dimensional box (L1b).
-STATIC_GEOMETRY_RANKS = (1, 2)
+# The ranks of node positions (graded boxes) and of charts.
+STATIC_GEOMETRY_RANKS = (1, 2, 3)
+STATIC_GEOMETRY_CHART_RANKS = (2,)
 
 
 class StaticGeometryRefusal(ValueError):
@@ -103,8 +106,8 @@ def static_geometry_reading(evolution: Mapping[str, Any], rule: Mapping[str, Any
     if dimension not in STATIC_GEOMETRY_RANKS:
         raise StaticGeometryRefusal(
             "static_geometry_rank_unavailable",
-            "static geometry arrays serve layouts of rank %s in this lot; rank %d lands with "
-            "the graded three-dimensional box" % (STATIC_GEOMETRY_RANKS, dimension))
+            "static geometry arrays serve layouts of rank %s, not %d"
+            % (STATIC_GEOMETRY_RANKS, dimension))
     if "parameter" in coordinate_map_reads(evolution):
         raise StaticGeometryRefusal(
             "static_geometry_parameter_unavailable",
@@ -125,6 +128,12 @@ def static_geometry_reading(evolution: Mapping[str, Any], rule: Mapping[str, Any
                 "positions with exact node differences; a stated quadrature rule would state "
                 "nothing, so it is refused rather than ignored")
         return StaticGeometryReading(frame_id, dimension, "nodes", components, None)
+    if dimension not in STATIC_GEOMETRY_CHART_RANKS:
+        raise StaticGeometryRefusal(
+            "static_geometry_rank_unavailable",
+            "a chart of rank %d is planned, not covered (design note N17, 3.10): a chart has rank "
+            "two, and a map whose component a reads the logical coordinate a alone (node "
+            "positions, a graded box) is served at every rank" % dimension)
     if rule is None:
         raise StaticGeometryRefusal(
             "static_geometry_rule_missing",
@@ -153,6 +162,6 @@ def layout_static_geometry(layout: Any) -> StaticGeometryReading | None:
                                    dimension=native.dimension)
 
 
-__all__ = ["STATIC_GEOMETRY_CONTRACT", "STATIC_GEOMETRY_RANKS", "StaticGeometryReading",
-           "StaticGeometryRefusal", "coordinate_map_reads", "is_static_coordinate_map",
-           "layout_static_geometry", "static_geometry_reading"]
+__all__ = ["STATIC_GEOMETRY_CHART_RANKS", "STATIC_GEOMETRY_CONTRACT", "STATIC_GEOMETRY_RANKS",
+           "StaticGeometryReading", "StaticGeometryRefusal", "coordinate_map_reads",
+           "is_static_coordinate_map", "layout_static_geometry", "static_geometry_reading"]

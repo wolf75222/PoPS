@@ -24,10 +24,16 @@ from pops.runtime._system import (  # ADC-545 advanced runtime seam
     System,
     SystemConfig,
 )
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 
 pops = pytest.importorskip("pops")
 import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis, Tag  # noqa: E402
+from pops.mesh._amr.refinement_criterion import (  # noqa: E402
+    ResolvedRefinementCriterion,
+    resolve_refinement_criterion,
+)
+from pops.model import Handle  # noqa: E402
+from pops.runtime._runtime_mesh_lowering import _flow_refinement_criterion  # noqa: E402
 
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView,
@@ -40,7 +46,10 @@ from pops.runtime.amr import (  # noqa: E402
     RuntimeInspection,
 )
 from tests.python.support.compiled_program import CompiledProgramStub  # noqa: E402
-from tests.python.support.explicit_program import install_forward_euler_program  # noqa: E402
+from tests.python.support.explicit_program import (  # noqa: E402
+    AMR_TEST_PROGRAM_CLOCK,
+    install_forward_euler_program,
+)
 
 
 def _model(name="ne"):
@@ -87,10 +96,9 @@ def _amr_config(
     return config
 
 
-def _built_amr(regrid_every=2, n=32):
-    """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
+def _assemble_amr(ne: np.ndarray, ni: np.ndarray, *, regrid_every: int):
     sim = AmrSystem(_amr_config(
-        n, regrid_every=regrid_every, coarse_max_grid=16))
+        ne.shape[0], regrid_every=regrid_every, coarse_max_grid=16))
     # Native package installation seals the complete state-route set. Register
     # both authenticated Case instances before attaching either block package.
     model = pops.Model("amr-runtime-inspect-state")
@@ -98,8 +106,9 @@ def _built_amr(regrid_every=2, n=32):
     case = pops.Case("amr-runtime-inspect")
     blocks = {name: case.block(name, model, states=(state,)) for name in ("ne", "ni")}
     validated = pops.validate(case)
-    for name, block in blocks.items():
-        sim._s._install_block_state_route(name, validated.resolve(block[state]).qualified_id)
+    reads = {name: validated.resolve(block[state]) for name, block in blocks.items()}
+    for name, read in reads.items():
+        sim._s._install_block_state_route(name, read.qualified_id)
     sim.set_poisson(bc=engine.Periodic())
     sim.add_equation(
         "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
@@ -108,16 +117,111 @@ def _built_amr(regrid_every=2, n=32):
         "ni", model=_model("ni"), spatial=engine.Spatial(minmod=True), time=engine.Explicit()
     )
     sim.set_temporal_relations([2], [1], ["integral_only"])
-    install_prepared_threshold_union(sim, (("ne", "n", 0.5), ("ni", "n", 0.5)))
+    sim.set_density("ne", ne)
+    sim.set_density("ni", ni)
+    return sim, reads
+
+
+def _density_criterion(reads: dict[str, Handle], threshold: float) -> ResolvedRefinementCriterion:
+    rules = (
+        ("refine", Tag(lambda cell: cell.value(reads["ne"]) > threshold).predicate),
+        ("refine", Tag(lambda cell: cell.value(reads["ni"]) > threshold).predicate),
+    )
+
+    def admit_state(state: Handle) -> None:
+        if not any(state is read for read in reads.values()):
+            raise ValueError("foreign runtime inspection fixture state")
+
+    return resolve_refinement_criterion(
+        rules,
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=admit_state,
+    )
+
+
+def _initial_densities(n: int) -> tuple[np.ndarray, np.ndarray]:
     ne = np.ones((n, n))
     ne[n // 3 : 2 * n // 3, n // 3 : 2 * n // 3] = 5.0
-    sim.set_density("ne", ne)
-    sim.set_density("ni", np.ones((n, n)))
-    install_forward_euler_program(sim)
+    return ne, np.ones((n, n))
+
+
+def _built_amr(regrid_every=2, n=32):
+    """A small shared-hierarchy AmrSystem with a refined level and live regrid counters."""
+    sim, reads = _assemble_amr(*_initial_densities(n), regrid_every=regrid_every)
+    criterion = _density_criterion(reads, 0.5)
+    _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+    install_forward_euler_program(sim, criterion=criterion)
     sim.mark_bound()  # seals the installed Program's accepted-state checkpoint capacity
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim
+
+
+def test_generated_criterion_threshold_changes_initial_refinement():
+    ne, ni = _initial_densities(32)
+    program_hashes = []
+    for threshold, levels in ((0.5, 2), (5.0, 1)):
+        sim, reads = _assemble_amr(ne, ni, regrid_every=2)
+        criterion = _density_criterion(reads, threshold)
+        _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+        install_forward_euler_program(sim, criterion=criterion)
+        sim.mark_bound()
+
+        assert sim._s.macro_step() == 0 and sim._s.time() == 0.0
+        assert sim.amr.patch_table().n_levels == levels
+        expected = (ne > threshold) | (ni > threshold)
+        assert sim._s._tagging_requests(0) == expected.astype(np.uint8).tobytes()
+        program_hash = sim._s.installed_program_hash()
+        assert program_hash
+        program_hashes.append(program_hash)
+    assert program_hashes[0] != program_hashes[1]
+
+
+def test_generated_criterion_reads_both_states_and_refuses_wrong_program_identity():
+    ne = np.full((32, 32), 0.25)
+    ni = np.full_like(ne, 0.25)
+    ne[3:7, 5:9] = 2.0
+    ni[19:25, 13:18] = 3.0
+    ne[13, 23] = 0.5
+    ni[26, 7] = 0.5
+    sim, reads = _assemble_amr(ne, ni, regrid_every=2)
+    criterion = _density_criterion(reads, 0.5)
+    wrong_criterion = _density_criterion(reads, 5.0)
+    assert criterion.qualified_id != wrong_criterion.qualified_id
+    _flow_refinement_criterion(sim._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+
+    def image():
+        # Patch/state access can materialize a hierarchy after blocks have been added.
+        return (
+            sim.amr.explain_regrid().to_dict(),
+            tuple(sim.block_names()),
+            sim._s.lifecycle_state(),
+            sim._s.time(),
+            sim._s.macro_step(),
+            sim._s.installed_program_hash(),
+            sim._s.program_block_map(),
+        )
+
+    before = image()
+    assert sim._s.lifecycle_state() == "assembling"
+    assert sim._s.checkpoint_topology_epoch() == 0
+    assert sim._s.installed_program_hash() == ""
+    with pytest.raises(
+        RuntimeError, match="refinement criterion .* differs .* installed AMR tagging authority"
+    ):
+        install_forward_euler_program(sim, criterion=wrong_criterion)
+    assert image() == before
+
+    install_forward_euler_program(sim, criterion=criterion)
+    assert sim._s.installed_program_hash()
+    sim.mark_bound()
+    assert sim._s.macro_step() == 0 and sim._s.time() == 0.0
+    assert sim.amr.patch_table().n_levels == 2
+    # Both arrays are (y, x), matching the native axis-0-fastest request order.
+    expected = (ne > 0.5) | (ni > 0.5)
+    assert sim._s._tagging_requests(0) == expected.astype(np.uint8).tobytes()
 
 
 # --- the handle ----------------------------------------------------------------

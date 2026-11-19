@@ -26,6 +26,9 @@ def rebuild_program(
     registry_keep: Any = None,
     canonical_owner: bool = False,
     transformation: str = "normalize",
+    inputs_of: Any = None,
+    commit_value: Any = None,
+    guard_keep: Any = None,
 ) -> Any:
     """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
     renumbering surviving ids to a contiguous 0.. range when nodes are removed or aliased.
@@ -48,7 +51,12 @@ def rebuild_program(
 
     ``state_keep`` and ``registry_keep`` are exact partitioning hooks. They project state-owned
     tables and model-scoped operator registries while the graph is rebuilt, so a partition never
-    retains foreign authoring authorities or temporal handles.
+    retains foreign authoring authorities or temporal handles. A caller that authenticates
+    block-local guards may also project their records with ``guard_keep``.
+
+    ``inputs_of`` may elaborate new IR in a node's evaluation region before replacing its
+    input edges. ``commit_value`` may similarly lower a check before publication. The
+    operation and commit keep the same roles and evaluation points in the rebuilt graph.
     """
     if reference_of is None:
         def _identity(value: Any) -> Any:
@@ -103,15 +111,19 @@ def rebuild_program(
     out._regrid = getattr(self, "_regrid", None)
     out._post_sync_recording = False
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
-    out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    original_guards = getattr(self, "_acceptance_guards", ())
+    out._acceptance_guards = tuple(
+        guard for guard in original_guards if guard_keep is None or guard_keep(guard)
+    )
     out._advance_control = getattr(self, "_advance_control", None)
+    out._advance_step_bound = getattr(self, "_advance_step_bound", None)
     out._integral_states = dict(getattr(self, "_integral_states", {}))
     out._integral_units = dict(getattr(self, "_integral_units", {}))
     if project_states and getattr(self, "_advance_outputs", ()):
         raise ValueError(
             "state-partitioned Program rebuild requires the Outputs of an Advance to be lowered "
             "by an explicit partitioning protocol")
-    if project_states and (self._dt_bound is not None or out._acceptance_guards):
+    if project_states and (self._dt_bound is not None or (original_guards and guard_keep is None)):
         raise ValueError(
             "state-partitioned Program rebuild requires global dt bounds and guards to be lowered "
             "by an explicit partitioning protocol")
@@ -223,8 +235,14 @@ def rebuild_program(
                 source_values.append(candidate)
         return tuple(item.provenance for item in source_values)
 
+    inserted: dict[int, tuple[ProgramValue, ...]] = {}
+
     def clone_block(block: Any, region_hint: Any = None) -> Any:
-        copied = [clone(w) for w in block]
+        copied = []
+        for value in block:
+            node = clone(value)
+            copied.extend(inserted.get(value.id, ()))
+            copied.append(node)
         regions = {mapped_region(w.region) for w in block}
         if not regions and region_hint is not None:
             regions.add(mapped_region(region_hint))
@@ -383,12 +401,31 @@ def rebuild_program(
         # own clone).
         for w in deps(v):
             clone(w)
-        vid = v.id if preserve_value_ids else out._next_id
-        out._next_id = max(out._next_id, vid + 1)
         # Reserve the owning node's region before clone_attrs recursively maps branch/sub-block
         # regions. Parent-first allocation is part of exact rebuild identity for nested branches.
         node_region = mapped_region(v.region)
         new_inputs = [idmap[rep(i).id] for i in v.inputs]
+        if inputs_of is not None:
+            if node_region == 0:
+                start = len(out._values)
+                new_inputs = inputs_of(out, v, new_inputs)
+                inserted[v.id] = tuple(out._values[start:])
+                del out._values[start:]
+            else:
+                recording = []
+                out._recording_regions[id(recording)] = (recording, node_region)
+                out._region_imports[node_region] = {
+                    mapped_region(source) for source in self._region_imports.get(v.region, ())
+                }
+                out._recording.append(recording)
+                try:
+                    new_inputs = inputs_of(out, v, new_inputs)
+                finally:
+                    out._recording.pop()
+                    del out._recording_regions[id(recording)]
+                inserted[v.id] = tuple(recording)
+        vid = v.id if preserve_value_ids else out._next_id
+        out._next_id = max(out._next_id, vid + 1)
         field_context = v.field_context
         if field_context is not None:
             field_context = remap_provenance(field_context)
@@ -420,12 +457,13 @@ def rebuild_program(
     # Actual elimination/aliasing retains the existing compact numbering behavior.
     kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
     preserve_value_ids = (len(kept) == len(self._values)
-                          and all(source == target for source, target in alias.items()))
+                          and all(source == target for source, target in alias.items())
+                          and inputs_of is None and commit_value is None)
     if preserve_value_ids:
         out._next_id = self._next_id
     for v in kept:
         clone(v)
-    out._values = [idmap[v.id] for v in kept]
+    out._values = clone_block(kept)
     source_by_id = by_id  # Includes owned child-region evaluations retained by integral selectors.
     out._integral_transfers = [
         (name, idmap[rep(source_by_id[rate_id]).id].id,
@@ -443,6 +481,10 @@ def rebuild_program(
         for state_ref, value in getattr(self, "_post_sync_commits", {}).items()
         if state_keep(state_ref)
     }
+    if commit_value is not None:
+        out._commits = {
+            state: commit_value(out, state, node) for state, node in out._commits.items()
+        }
     active_regions = {value.region for value in idmap.values()}
     out._region_imports = {
         mapped_region(destination): {

@@ -38,6 +38,7 @@ class Accumulation:
     law: Any = None
     representation: Any = None
     quadrature: Any = None
+    recovery: Any = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -50,7 +51,7 @@ class Accumulation:
             raise TypeError("accumulation requires a declared state Handle")
         if self.law is None:
             if any(value is not None for value in (
-                    self.coordinates, self.representation, self.quadrature)):
+                    self.coordinates, self.representation, self.quadrature, self.recovery)):
                 raise ValueError("identity accumulation is inferred without coordinate metadata")
             return
         if self.coordinates is None or self.representation is None or self.quadrature is None:
@@ -59,12 +60,23 @@ class Accumulation:
         laws = self.law if isinstance(self.law, (tuple, list)) else (self.law,)
         if not laws or any(not isinstance(law, Expr) for law in laws):
             raise TypeError("accumulation law must contain immutable symbolic expressions")
+        if self.recovery is not None:
+            from .local_root import PointwiseRoot
+            if not isinstance(self.recovery, PointwiseRoot):
+                raise TypeError("the recovery of an accumulation is the PointwiseRoot of its law")
         for name in ("coordinates", "law", "representation", "quadrature"):
             object.__setattr__(self, name, freeze_symbolic_metadata(getattr(self, name)))
 
     @property
     def is_identity(self) -> bool:
         return self.law is None
+
+    @property
+    def advances_stored_state(self) -> bool:
+        """An explicit step advances the stored U by the rate (G03 lot A, note §6): the identity,
+        or a law whose coordinates are recovered from U on each point, so that the rate reads q
+        like a definition over U and U_new - U_old is the method's combination of the rates."""
+        return self.law is None or self.recovery is not None
 
     def temporal_residual(self, candidate: Any, previous: Any, *, interval: Any,
                           rate: Any) -> DiscreteAccumulationEquation:
@@ -74,18 +86,25 @@ class Accumulation:
 
         from .expr_references import collect_reference_value
         result: list[Handle] = [self.state]
-        for value in (self.coordinates, self.law, self.representation, self.quadrature):
+        for value in (self.coordinates, self.law, self.representation, self.quadrature,
+                      self.recovery):
             collect_reference_value(value, result, set())
         return tuple(result)
 
     def resolve_references(self, resolver: Any) -> Accumulation:
         from .expr_references import resolve_reference_value
-        return Accumulation(*(resolve_reference_value(value, resolver, {}) for value in (
-            self.state, self.coordinates, self.law, self.representation, self.quadrature)))
+        # The coordinates of a recovered law are a primitive of the model, read by name like the
+        # primitives of its fluxes; its state component stays a typed reference.
+        formulas = self.recovery is not None
+        return Accumulation(*(resolve_reference_value(value, resolver, {},
+                                                      allow_formula_vars=formulas)
+                              for value in (self.state, self.coordinates, self.law,
+                                            self.representation, self.quadrature,
+                                            self.recovery)))
 
     def to_data(self) -> dict[str, Any]:
         from pops.model.hash_data import canonical_hash_data
-        return {
+        data = {
             "kind": "identity" if self.is_identity else "discrete_constitutive_map",
             "state": _handle_data(self.state),
             "coordinates": canonical_hash_data(self.coordinates),
@@ -93,6 +112,10 @@ class Accumulation:
             "representation": canonical_hash_data(self.representation),
             "quadrature": canonical_hash_data(self.quadrature),
         }
+        if self.recovery is not None:
+            # Only a recovered law carries the row, so every record before lot A keeps its data.
+            data["recovery"] = canonical_hash_data(self.recovery)
+        return data
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -293,8 +316,9 @@ class BalanceView:
             return "nonconservative products require an explicit path-conservative realization"
         if any(item.kind == "projection" for item in self.occurrences):
             return "joint rate application projections require a native interaction realization (M4)"
-        if not self.accumulation.is_identity:
-            return "nonidentity accumulation requires a discrete temporal solve construction"
+        if not self.accumulation.advances_stored_state:
+            return ("nonidentity accumulation requires a discrete temporal solve construction, "
+                    "or a recovery of its coordinates (model.accumulation(..., recovery=))")
         fluxes = [item for item in self.occurrences if item.kind == "flux"]
         if len(fluxes) > 1:
             return "multiple divergence occurrences require an explicit numerical coverage construction"

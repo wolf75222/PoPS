@@ -722,7 +722,7 @@ def test_m4_gate_pins_complete_program_only_dispatch_and_fallback_fences():
     assert "evidence ledger is **REQUIRED BY CI AND CURRENTLY OPEN**" in documentation
     assert "53 executable checks and two" in documentation
     assert "external boundary" in documentation
-    assert "external AMR Tagger/Clustering/Reflux" in documentation
+    assert "external AMR Tagger/Reflux" in documentation
 
 
 def test_m4_gate_rejects_fake_nodeid_before_execution(tmp_path):

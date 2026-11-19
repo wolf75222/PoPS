@@ -115,3 +115,71 @@ def test_a_sample_and_a_stated_rule_run_bit_for_bit_as_the_average_from_the_same
     with collective_check(world):
         assert report.accepted_steps == UNIFORM_STEPS
         np.testing.assert_array_equal(state, bare)
+
+
+def test_finite_rejects_an_overflowing_candidate_with_a_finite_base(
+        isolated_native_cache, native_cxx, kokkos_root):
+    import pops
+    from pops import math as pm
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Outflow
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid
+    from pops.numerics import DiscretizationPlan
+    from pops.projection import ConservativeCellAverage
+    from pops.representations.definition import cell_total
+    from pops.runtime._simulation import BudgetExhausted, Simulation
+    from pops.time._program.elaboration import Advance, Proposal, elaborate
+    from pops.time._program.traced_method import Candidate, method
+
+    from examples.api_v02.models_G03_totals import _finite_volume
+    from tests.python.support.native_execution_context import artifact_execution_context
+
+    @method
+    def euler(B, p, growth):
+        return Candidate(B.state + p.dt * growth(B.state, B.time), B.time + p.dt)
+
+    cells, speed, growth, dt = 4, 1.0 / 64, 0.25, 16.0
+    frame = CartesianDomain("line", (0.0,), (float(cells),)).frame(Cartesian1D())
+    model = pops.Model("growth", frame=frame)
+    u = model.state("u", components=("u",))
+    flux = model.flux("transport", state=u, frame=frame,
+                      components={frame.x: (speed * u[0],)}, waves={frame.x: (speed,)})
+    source = model.source("growth", on=u, value=(growth * u[0],))
+    rate = model.rate("balance", equation=pm.ddt(u) == -pm.div(flux) + source)
+    case = pops.Case("finite_candidate_overflow")
+    block = case.block("line", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, _finite_volume(flux, u))
+    numerics.representations.add(u, cell_total(1))
+    numerics.boundaries.add(TransportBoundarySet({
+        frame.boundaries.x_min: Outflow(state=block[u]),
+        frame.boundaries.x_max: Outflow(state=block[u]),
+    }))
+    case.numerics(numerics, block=block)
+    case.initials.add(InitialCondition(state=block[u], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    layout = Uniform(CartesianGrid(frame=frame, cells=(cells,)))
+    elaborate(Advance(euler(growth=rate)), case=case, state=block[u], proposal=Proposal(dt))
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+
+    # Uniform totals and outflow give zero flux divergence. The source is finite and its
+    # Euler increment overflows; the face Courant number is below the guard's bound.
+    coefficients = np.full((1, cells), np.finfo(np.float64).max / 2)
+    assert np.isfinite(growth * coefficients).all()
+    with np.errstate(over="ignore"):
+        assert np.isinf(coefficients + dt * (growth * coefficients)).all()
+    runtime = pops.bind(artifact, initial_values={block[u]: coefficients},
+                        resources={"execution_context": artifact_execution_context(artifact)})
+    with pytest.raises(BudgetExhausted, match="Advance assessment 'finite' rejected") as refused:
+        Simulation(runtime).run(until=dt)
+    result = refused.value.result
+    assert result.failure.origin == "assessment"
+    assert result.failure.payload["budget"] == "max_attempts"
+    assert (result.time, result.steps, result.rejections) == (0.0, 0, 1)
+    assert (runtime.time(), runtime.macro_step()) == (0.0, 0)
+    np.testing.assert_array_equal(np.asarray(runtime.state_global("line")), coefficients)

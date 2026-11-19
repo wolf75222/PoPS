@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pops._frozen_data import freeze_data, thaw_data
 from pops.identity import canonical_bytes
 from pops.identity.semantic import semantic_value
 from pops.model import Handle, OwnerPath
@@ -74,10 +75,44 @@ def _token(data: Any) -> str:
 
 def _handle(prefix: str, kind: str, *, owner: Any, evidence: Any) -> Handle:
     return Handle(
-        "%s_%s" % (prefix, _token(evidence)[:24]),
+        _ghost_local_id(prefix, evidence),
         kind=kind,
         owner=owner,
     )
+
+
+def _ghost_local_id(prefix: str, evidence: Any) -> str:
+    return "%s_%s" % (prefix, _token(evidence)[:24])
+
+
+@dataclass(frozen=True, slots=True)
+class GhostHandleOrigin:
+    handle: Handle
+    prefix: str
+    evidence: Any
+
+    def __post_init__(self) -> None:
+        normalized = semantic_value(self.evidence, where="ghost handle evidence")
+        object.__setattr__(self, "evidence", freeze_data(normalized, "ghost handle evidence"))
+
+    def named_evidence(self) -> Any:
+        evidence = thaw_data(self.evidence)
+        if self.handle != _handle(
+            self.prefix, self.handle.kind, owner=self.handle.owner_path, evidence=evidence,
+        ):
+            raise ValueError("ghost handle identity differs from its composition evidence")
+        return evidence
+
+    def projected_local_id(self, evidence: Any) -> str:
+        return _ghost_local_id(self.prefix, evidence)
+
+
+@dataclass(frozen=True, slots=True)
+class GhostPresentationOrigins:
+    numerics: Any
+    layout_plan: Any
+    amr_transfer: Any
+    handles: tuple[GhostHandleOrigin, ...]
 
 
 def compose_transport_boundary(
@@ -88,6 +123,12 @@ def compose_transport_boundary(
     numerics = context.numerics
     layout_plan = context.layout_plan
     amr_transfer = context.amr_transfer
+    identities: list[GhostHandleOrigin] = []
+
+    def generated(prefix: str, kind: str, *, owner: Any, evidence: Any) -> Handle:
+        handle = _handle(prefix, kind, owner=owner, evidence=evidence)
+        identities.append(GhostHandleOrigin(handle, prefix, evidence))
+        return handle
     # This validates one-state native support, exact face coverage, dependency kinds, and derived
     # depth before any GhostRegion claims are emitted.
     compile_contract = authority.compile_boundary_data()
@@ -106,23 +147,23 @@ def compose_transport_boundary(
         "layout": layout.canonical_identity(),
         "adaptive": normalized.adaptive,
     }
-    layout_manifest = _handle(
+    layout_manifest = generated(
         "layout_manifest", "layout_manifest", owner=owner,
         evidence={"layout": layout.canonical_identity(), "plan": layout_plan.canonical_id},
     )
-    discretization_manifest = _handle(
+    discretization_manifest = generated(
         "discretization_manifest", "discretization_manifest", owner=owner,
         evidence=numerics.identity.to_data(),
     )
     stencil = GhostStencilManifest(
-        _handle("boundary_stencil", "stencil_manifest", owner=owner,
+        generated("boundary_stencil", "stencil_manifest", owner=owner,
                 evidence={"depth": depth, "numerics": numerics.identity.to_data()}),
         depth,
     )
     # The block allocator derives its halo from the same resolved FV methods.  Equality here is an
     # authenticated exact capability, not a user-authored duplicate order/depth knob.
     depth_capability = GhostDepthCapability(
-        _handle("allocated_ghosts", "capability", owner=owner, evidence=base_evidence),
+        generated("allocated_ghosts", "capability", owner=owner, evidence=base_evidence),
         layout_manifest,
         depth,
     )
@@ -139,7 +180,7 @@ def compose_transport_boundary(
         return GhostRegion(
             state,
             layout,
-            _handle(name, "ghost_region", owner=owner, evidence=selector_evidence),
+            generated(name, "ghost_region", owner=owner, evidence=selector_evidence),
             requirement,
             boundary,
         )
@@ -147,7 +188,7 @@ def compose_transport_boundary(
     protocol_owner = OwnerPath.shared("pops.boundary.ghost-producers")
     same_level_region = region("same_level_halo")
     same_level = SameLevelHaloMPI(
-        handle=_handle("same_level_halo", "ghost_producer", owner=owner,
+        handle=generated("same_level_halo", "ghost_producer", owner=owner,
                        evidence=base_evidence),
         protocol=_handle("same_level_halo", "ghost_producer_protocol",
                          owner=protocol_owner, evidence={"protocol": "same-level-v1"}),
@@ -163,7 +204,7 @@ def compose_transport_boundary(
 
     for identification in topology.periodic:
         periodic = PeriodicGhost(
-            handle=_handle("periodic", "ghost_producer", owner=owner,
+            handle=generated("periodic", "ghost_producer", owner=owner,
                            evidence={**base_evidence,
                                      "identification": identification.canonical_identity()}),
             protocol=_handle("periodic", "ghost_producer_protocol", owner=protocol_owner,
@@ -184,11 +225,11 @@ def compose_transport_boundary(
         transfer_identity = amr_transfer.identity.to_data()
         coarse_fine_region = region("coarse_fine")
         coarse_fine = CoarseFineInterpolation(
-            handle=_handle("coarse_fine", "ghost_producer", owner=owner,
+            handle=generated("coarse_fine", "ghost_producer", owner=owner,
                            evidence={**base_evidence, "transfer": transfer_identity}),
             protocol=_handle("coarse_fine", "ghost_producer_protocol",
                              owner=protocol_owner, evidence={"protocol": "coarse-fine-v1"}),
-            interpolation=_handle(
+            interpolation=generated(
                 "resolved_amr_transfer", "interpolation", owner=owner,
                 evidence=transfer_identity,
             ),
@@ -211,7 +252,7 @@ def compose_transport_boundary(
             )
         physical_region = region("physical_face", boundary=boundary)
         physical = PhysicalGhost(
-            handle=_handle(
+            handle=generated(
                 "physical", "ghost_producer", owner=owner,
                 evidence={**base_evidence, "boundary": boundary.canonical_identity()},
             ),
@@ -225,7 +266,7 @@ def compose_transport_boundary(
         producers.append(physical)
 
     coverage = GhostCoverageManifest(
-        _handle("ghost_coverage", "ghost_coverage_manifest", owner=owner,
+        generated("ghost_coverage", "ghost_coverage_manifest", owner=owner,
                 evidence=base_evidence),
         layout_manifest,
         discretization_manifest,
@@ -239,6 +280,8 @@ def compose_transport_boundary(
         tuple(productions),
         execution_authority=authority,
         component_bindings=tuple(binding for binding,_ in inferred),
+        _presentation_origins=GhostPresentationOrigins(
+            numerics, layout_plan, amr_transfer, tuple(identities)),
     )
 
 

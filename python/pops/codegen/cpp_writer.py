@@ -7,13 +7,14 @@ import them from here.  No dependency on pops.dsl (no import cycle).
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Exp, UnaryMath, Abs, Sign, Pow, Div, Mul, Minimum, Maximum, BooleanAnd, BooleanOr, BooleanNot
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _dag_key_ids, _key, _children
 from pops._ir.expr import _wrap
 from pops._ir.control_expr import Where, Rounded, has_evaluation_boundary
+from pops._ir.local_root import PointwiseRoot
 
 
 _CPP_KEYWORDS = frozenset({
@@ -74,6 +75,8 @@ def _cpp_expand(e: Any, cse_map: Any, key_memo: Any = None, guarded: Any = None)
     if isinstance(e, Var):
         from .cpp_symbols import variable_identifier
         return variable_identifier(e.name,e.kind)
+    if isinstance(e, PointwiseRoot):
+        return e.emit_cpp(_cpp_cse(e.target, cse_map, key_memo, guarded))
     if isinstance(e, Neg):
         return "(-%s)" % _cpp_cse(e.a, cse_map, key_memo, guarded)
     if isinstance(e, Sqrt):
@@ -130,6 +133,7 @@ def _cse_emit(
     indent: Any,
     *,
     materialize_all: bool = False,
+    literal_renderer: Callable[[Const], str] | None = None,
     return_names: bool = False,
     return_native_statuses: bool = False,
     scalar_bindings: Any = None,
@@ -142,6 +146,9 @@ def _cse_emit(
     including a non-finite intermediate that a later comparison or IEEE min/max could otherwise
     conceal. ``return_names`` additionally returns the local names in declaration order;
     ``observe``, a predicate on a materialized expression, keeps only the names it accepts.
+
+    With a ``literal_renderer``, scalar literals also acquire the local numeric type
+    before any operation and share the scope of their use.
 
     Memo by id(): a shared Expr OBJECT (DAG, e.g. intermediates reused from a large model)
     is traversed only once; its later occurrences re-credit the counter of its
@@ -187,7 +194,7 @@ def _cse_emit(
         counts, rep, size, memo = {}, {}, {}, {}
 
         def visit(e):
-            if (isinstance(e, Const) or (isinstance(e, Var) and e.name not in bindings
+            if ((isinstance(e, Const) and literal_renderer is None) or (isinstance(e, Var) and e.name not in bindings
                     and (e.kind,e.name) not in bindings and not controlled)
                     or _key(e, key_memo) in inherited):
                 return 1, None
@@ -223,6 +230,7 @@ def _cse_emit(
                     counts[k] = counts.get(k, 0) + c
         cand = sorted(
             (k for k, count in counts.items() if materialize_all or count >= 2 or joint_kind(rep[k])
+             or (literal_renderer is not None and isinstance(rep[k], Const))
              or isinstance(rep[k], (BooleanAnd, BooleanOr, Where))
              or isinstance(rep[k], Var) and (rep[k].name in bindings or (rep[k].kind,rep[k].name) in bindings)),
             key=lambda k: size[k],
@@ -265,7 +273,9 @@ def _cse_emit(
                 native_statuses.append(name)
             else:
                 variable_key = ((expression.kind,expression.name) if isinstance(expression,Var) else None)
-                value = (bindings[variable_key] if variable_key in bindings else
+                value = (literal_renderer(expression)
+                         if literal_renderer is not None and isinstance(expression, Const) else
+                         bindings[variable_key] if variable_key in bindings else
                          bindings[expression.name] if isinstance(expression, Var)
                          and expression.name in bindings else
                          _cpp_expand(expression, cse_map, key_memo, guarded))

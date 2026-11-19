@@ -137,7 +137,7 @@ def _retained_offsets(expression: Expr) -> tuple[int, ...]:
 
 
 def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
-         sampling: tuple = ()) -> BrickDescriptor:
+         sampling: tuple = (), origin: Any = None) -> BrickDescriptor:
     """Author one scalar trace formula from ``sample(integer_offset)``.
 
     The formula is applied independently to each component and each oriented face.
@@ -150,6 +150,10 @@ def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
     vector. ``sample(offset, V)`` reads a state declared in ``sampling=(V,...)``.
     Return exactly one scalar expression per U component; cross-component and
     cross-state reads are compiled into the common native reconstruction kernel.
+
+    ``origin`` is where the body is written (``pops._source_origin.code_origin``), for the model
+    source map; left out, it is the origin of ``body``. A layer that wraps the author's body
+    passes the author's. It stays outside the descriptor's identity.
     """
     if not callable(body):
         raise TypeError("reconstruction.User(body=) requires a callable symbolic body")
@@ -161,7 +165,10 @@ def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
         raise ValueError("reconstruction.User name must be a non-empty string")
     if state is not None:
         from .joint import author_joint
-        return author_joint(body, state=state, sampling=sampling, formal_order=formal_order, name=name)
+        joint = author_joint(body, state=state, sampling=sampling, formal_order=formal_order,
+                             name=name)
+        joint.origin = _origin(body, origin)
+        return joint
     if sampling:
         raise ValueError("reconstruction.User sampling requires an explicit output state")
     sample = _Sample()
@@ -191,7 +198,16 @@ def User(body: Any, *, formal_order: int, name: str = "user", state: Any = None,
         requirements={"ghost_depth": ghost_depth, "source_compiled": True},
         capabilities={"componentwise_scalar": True, "oriented_sample": True},
         expression=expression,
+        origin=_origin(body, origin),
     )
+
+
+def _origin(body: Any, origin: Any) -> Any:
+    from pops._source_origin import code_origin
+
+    if origin is None:
+        return code_origin(body) if hasattr(body, "__code__") else None
+    return dict(origin)
 
 
 def authenticated_user_reconstruction(value: Any) -> BrickDescriptor:

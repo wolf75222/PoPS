@@ -245,6 +245,10 @@ def resolve(
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
+    snapshot_numerics = {block.name: block.numerics for block in blocks if block.numerics is not None}
+    if target == "system":
+        from ._moving_members_consumers import lower_moving_member_guards
+        resolved_time = lower_moving_member_guards(resolved_time, blocks)
     resolved_hierarchy = None
     amr_transfer = None
     initial_condition_plan = None
@@ -394,7 +398,7 @@ def resolve(
         from .program_emit_moving import check_moving_program
         check_moving_program(resolved_time, ProgramModelGraph.from_resolved_blocks(blocks), target)
     snapshot = prepare_problem_snapshot(
-        problem, resolved_time, layout=layout_plan, libraries=())
+        problem, resolved_time, layout=layout_plan, libraries=(), numerics=snapshot_numerics)
     from pops.codegen._resolution import resolve_capability_evidence
 
     amr_program_context = None
@@ -499,6 +503,8 @@ def resolve(
     )
     validate_cell_total_consumers(resolved_plan)
     validate_represented_initials(resolved_plan)
+    from pops.codegen._moving_members_consumers import validate_moving_member_consumers
+    validate_moving_member_consumers(resolved_plan)
     return resolved_plan
 
 
@@ -509,6 +515,16 @@ def compile(plan: Any) -> Any:
     if type(plan) is not ResolvedSimulationPlan:
         raise TypeError("pops.compile requires the ResolvedSimulationPlan returned by pops.resolve")
     plan.verify()
+    from pops.codegen._checkpoint_provenance import checkpoint_provenance
+
+    presentation = (plan.snapshot.presentation
+                    if plan.target == "system" and len(plan.layout_plan.layouts) == 1
+                    else None)
+    with checkpoint_provenance(presentation):
+        return _compile_verified_plan(plan)
+
+
+def _compile_verified_plan(plan: Any) -> Any:
     from pops.codegen._orchestration_compile import compile_install_models
 
     models = compile_install_models(plan, plan.compile_options)

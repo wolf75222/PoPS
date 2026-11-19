@@ -1,7 +1,7 @@
 {
  "source": {
   "spec": "pops_api_spec_v0_3.md",
-  "sha256": "97f007de6a16d249e4be6aceebf163841f359b5824b8b34cc8f3f5104582c410",
+  "sha256": "ed56f4c1c3930ed8e06e94ae1966d63566e12a21955dd00230453ba1729fa5c1",
   "sections": [
    {
     "section": "2.6.2",
@@ -35,7 +35,7 @@
     "section": "2.6.9",
     "lines": [
      942,
-     1107
+     1109
     ]
    }
   ],
@@ -225,6 +225,7 @@
   "General",
   "Ghost",
   "Global",
+  "Graded",
   "Gradient",
   "Hierarchy",
   "HistoryPolicyMissing",
@@ -421,6 +422,7 @@
   "characteristic",
   "charge",
   "charge_number",
+  "chart",
   "checkpoint",
   "checks",
   "child",
@@ -503,6 +505,7 @@
   "directory",
   "discrete",
   "discrete_maxwellian",
+  "disk",
   "displacement",
   "distance",
   "div",
@@ -593,6 +596,7 @@
   "gas",
   "gather",
   "gather_charge",
+  "geometry",
   "get",
   "ghosts",
   "globalization",
@@ -723,6 +727,7 @@
   "max_levels",
   "max_steps",
   "maxwellian",
+  "mc",
   "md",
   "mean",
   "mean_of_children",
@@ -749,6 +754,7 @@
   "muscl",
   "n",
   "n0",
+  "n17",
   "n3",
   "n8",
   "name",
@@ -827,6 +833,7 @@
   "pointwise",
   "poisson",
   "poisson_residual",
+  "pole",
   "pops",
   "position",
   "positive_definite",
@@ -945,6 +952,7 @@
   "segment",
   "select",
   "shared",
+  "sheath",
   "shift",
   "show",
   "side",
@@ -1016,6 +1024,7 @@
   "sum_fibre",
   "sum_incident",
   "sum_over",
+  "superbee",
   "support",
   "sweeps",
   "symmetric",
@@ -1101,6 +1110,7 @@
   "wave_speeds",
   "weak_fluxes",
   "weight",
+  "weighted",
   "weights",
   "when",
   "where",

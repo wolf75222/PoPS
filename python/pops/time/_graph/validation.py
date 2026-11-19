@@ -19,6 +19,9 @@ def _nested_regions(node: Any) -> tuple[Any, ...]:
         return ((node.condition,) if node.condition is not None else ()) + (node.body,)
     if node.kind == "capture":
         return (node.body,)
+    if node.kind == "solve" and node.body is not None:
+        # The region of a reference realization (SV12).
+        return (node.body,)
     return ()
 
 

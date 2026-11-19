@@ -8,12 +8,15 @@
 // INTROSPECTION and install-time requirement validation. It is read ONCE at install; the step body
 // never touches it, so operators stay inlined and there is NO string lookup in any hot kernel.
 //
+#include <pops/core/identity/sha256.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/program/cell_temporal_partition.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
+#include <tuple>
 #include <cstdint>
 #include <limits>
 #include <set>
@@ -76,6 +79,68 @@ struct ModuleMetadata {
     return result;
   }
 };
+
+// Optional cold metadata for an installed Uniform Program. The loaded module owns the literals.
+struct ProgramExchangeIncidenceRow {
+  const char *destination, *operation, *occurrence, *point, *evaluation, *units;
+  int ordinal, block, axis, side, component;
+  double scale, initial;
+};
+
+using MountedExchangeIncidenceRow =
+    std::tuple<int, int, int, std::string, std::string, std::string, std::string, std::string, int,
+               int, int, double, std::string, double>;
+
+inline std::vector<MountedExchangeIncidenceRow> read_exchange_incidence(
+    pops::dynlib::handle handle, const std::vector<int>& block_map, std::size_t authored_count,
+    int dimension) {
+  using Read = const ProgramExchangeIncidenceRow* (*)(int*);
+  const auto read =
+      reinterpret_cast<Read>(pops::dynlib::sym(handle, "pops_program_exchange_incidence_v1"));
+  if (!read)
+    return {};
+  int count = 0;
+  const auto* rows = read(&count);
+  if (!rows || count < 1 || count > (1 << 20) || std::size_t(count) != authored_count)
+    throw std::invalid_argument("installed Program exchange incidence is incomplete");
+  using Selection = std::tuple<std::string, std::string, std::string, int, int, int>;
+  std::set<Selection> selections;
+  std::vector<MountedExchangeIncidenceRow> result;
+  for (int ordinal = 0; ordinal < count; ++ordinal) {
+    const auto& row = rows[ordinal];
+    if (!row.destination || !*row.destination || !row.operation || !*row.operation ||
+        !row.occurrence || !*row.occurrence || !row.point || !*row.point || !row.evaluation ||
+        !*row.evaluation || !row.units || row.ordinal != ordinal || row.block < 0 ||
+        std::size_t(row.block) >= block_map.size() || row.axis < 0 || row.axis >= dimension ||
+        (row.side != 0 && row.side != 1) || row.component < 0 || row.scale == 0 ||
+        !std::isfinite(row.scale) || !std::isfinite(row.initial))
+      throw std::invalid_argument("installed Program exchange incidence has an invalid row");
+    const std::string_view destination(row.destination);
+    const auto name_separator = destination.rfind('/');
+    const auto unit_separator = name_separator == std::string_view::npos || name_separator == 0
+                                    ? std::string_view::npos
+                                    : destination.rfind('/', name_separator - 1);
+    if (destination.starts_with("pops.integral.v2/")) {
+      const std::string_view units(row.units);
+      if (units.empty() || unit_separator == std::string_view::npos ||
+          destination.substr(unit_separator + 1, name_separator - unit_separator - 1) !=
+              pops::identity::sha256_hex(std::vector<std::uint8_t>(units.begin(), units.end())))
+        throw std::invalid_argument(
+            "exchange incidence units differ from the declared destination");
+    } else if (!destination.starts_with("pops.integral.v1/") || *row.units) {
+      throw std::invalid_argument("exchange incidence destination has an unsupported contract");
+    }
+    if (!selections
+             .emplace(row.operation, row.occurrence, row.evaluation, row.axis, row.side,
+                      row.component)
+             .second)
+      throw std::invalid_argument("installed Program exchange incidence has ambiguous consumption");
+    result.emplace_back(row.ordinal, row.block, block_map[row.block], row.destination,
+                        row.operation, row.occurrence, row.point, row.evaluation, row.axis,
+                        row.side, row.component, row.scale, row.units, row.initial);
+  }
+  return result;
+}
 
 namespace detail {
 

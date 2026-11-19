@@ -38,7 +38,7 @@ WORDS = {"average": CellAverage, "total": CellTotal, "sample": PointValue,
          "rule": lambda: CellAverage(quadrature=GaussLegendre(3))}
 
 
-def _case(word):
+def _case(word, *, method=ssprk2):
     domain = surface.Box(x=surface.Periodic(0, LENGTH))
     model = surface.Model("advection")
     u = model.quantity("u", surface.Scalar(domain))
@@ -47,7 +47,7 @@ def _case(word):
     advection = model.flux(of=u, value=a * u)
     model.balance(ddt(u) == -div(advection))
     numerics = surface.Numerics(represent={u: WORDS[word]()}, schemes={advection: upwind()})
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=DT),
+    program = surface.Program(advance=surface.Advance(method(rate=model), dt=DT),
                               initial={u: u0})
     case = surface.Case(model=model, numerics=numerics, program=program,
                         layout={domain: surface.Uniform(cells=CELLS)})
@@ -112,3 +112,20 @@ def test_published_totals_are_not_the_datum_of_the_averages(artifacts):
     with pytest.raises(TypeError) as caught:
         surface.bind(artifact, data={u0: totals})
     assert "of kind 'total'" in str(caught.value) and "of kind 'average'" in str(caught.value)
+
+
+@surface.method
+def hold_coefficients(step, rate):
+    return surface.Candidate(step.state)
+
+
+def test_finite_assesses_the_stored_total_without_decoding(
+        isolated_native_cache, native_cxx, kokkos_root):
+    coefficients = np.full(CELLS, np.finfo(np.float64).max)
+    with np.errstate(over="ignore"):
+        assert np.isinf(coefficients / (LENGTH / CELLS)).all()
+    case, u, u0 = _case("total", method=hold_coefficients)
+    artifact = surface.compile(case, target=surface.OpenMP())
+    result = surface.bind(artifact, data={u0: coefficients}).run(until=DT)
+    assert (result.time, result.steps, result.rejections) == (DT, 1, 0)
+    np.testing.assert_array_equal(np.asarray(result.state[u]), coefficients)

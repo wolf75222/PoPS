@@ -127,5 +127,9 @@ def test_complete_amr_regrid_projection_closures_emit_after_resolve(auxiliary):
         plan = pops.resolve(pops.validate(spec.case), layout=spec.layout)
     cpp = emit_cpp_program(plan.time, model_graph=build_program_model_graph(plan),
                            target="amr_system", field_plans=plan.field_plans)
-    assert "::requests(" in cpp
+    # N10 lot 3b: the remap is two parent reads and one integral after resolve; the request
+    # closures of the deleted bridge (bundle injection) are gone.
+    assert cpp.count("ctx.regrid_read(") == 2 and cpp.count("ctx.regrid_integral(") == 1
+    assert "pops_relayout_byte_count" in cpp
+    assert "::requests(" not in cpp
     assert "level_continuation_" in cpp

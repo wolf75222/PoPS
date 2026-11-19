@@ -1,0 +1,47 @@
+schema_version = 1
+gate = "mg8-rewritten"
+# The « rewritten » lane of MG8 (OD31, condition S1-c of the vertical slice; section 6, step 3, of
+# tranche/note_tranche_verticale.md): the case file of the slice, master's tutorial 02 written in
+# the surface, against the archive of master's tutorial 02 run on the same machine by
+# scripts/run_mg8_tutorials.py. scripts/run_mg8_rewritten.py runs the file as written and its
+# companion, the same file with master's initial array bound as data, and compares both.
+tutorial = "02"
+lane = "serial-dim2"
+case = "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py"
+output = "results/02_openmp_explicit_ssprk2.npz"
+# The eleven scalars of master's archive, written by npz(..., metadata=pops.record(...)).
+scalars = ["nx", "ny", "ax", "ay", "far_field", "gaussian_amplitude", "gaussian_beta",
+           "gaussian_center_x", "gaussian_center_y", "cfl", "t_end"]
+
+# Master writes initial and final, of shape (1, nx, ny) in its (y, x) order; the Output of the
+# slice records u at t = 0 and t = t_end, in the (x, y) order of the surface (2.6.5).
+[[array]]
+master = "initial"
+record = "u"
+index = 0
+transpose = true
+
+[[array]]
+master = "final"
+record = "u"
+index = 1
+transpose = true
+
+# The gap of the file as written (driver's ruling, « S1-c, écart exp »). Master evaluates the
+# Gaussian of its initial value with NumPy on the host; pops.project lowers it onto b6's analytic
+# route, whose exp is the native one: the twelve cells below (master's (row, column)) differ at
+# t = 0, ten by one unit in the last place and (15, 16) and (27, 24) by two, since
+# 0.05 + 0.95 exp(.) rounds a one-ulp gap of exp up; the run carries the gap to t_end (6.0e-16
+# relative on the runner of 12/11). The companion, bound to master's initial array, is
+# bit for bit at t = 0 and t_end. The cells that differ must be among those below, each by at
+# most ulps; one outside them fails and goes back to the driver, and a listed cell that no longer
+# differs is named so that the list shrinks (« S1-c, suite »). The bound only shrinks (MG6) and
+# leaves when G07 delivers initial data without the analytic VM (C44); the reception report of the
+# slice records it.
+[bound]
+cause = "C44: the initial value of pops.project is evaluated by b6's analytic route (native exp), master's by NumPy"
+issue = "G07"
+cells = [[15, 16], [16, 16], [17, 18], [18, 22], [19, 13], [22, 18], [24, 13], [24, 15],
+         [27, 24], [27, 27], [29, 25], [31, 16]]
+ulps = 2
+final_relative = 1e-12

@@ -48,6 +48,24 @@ def _common_exact(values: Any, *, where: str) -> Any:
     return first
 
 
+def _compose_transaction_plans(plans: Any) -> Any:
+    from pops.time._step.transaction import StepTransactionPlan
+
+    rows = tuple(plans)
+    first = rows[0]
+    if not any(getattr(row, "guards", ()) for row in rows):
+        if any(row != first for row in rows[1:]):
+            raise ValueError("per-layout Programs do not share one exact transaction strategy")
+        return first
+    if any(type(row) is not StepTransactionPlan or row.strategy != first.strategy
+           or row.stores != first.stores for row in rows):
+        raise ValueError("per-layout Programs do not share one exact transaction strategy")
+    # The caller has authenticated each fixed guard against its own sliced Program. A guard
+    # appears in precisely one slice; the execution order also defines the reporting order.
+    guards = tuple(guard for row in rows for guard in row.guards)
+    return StepTransactionPlan(first.strategy, first.stores, guards)
+
+
 class _LayoutCompiledView:
     """Per-layout compiled view carrying the aggregate identities and exact sliced binary."""
 
@@ -546,6 +564,8 @@ def _build_multi_layout_executor(
     engines: dict[str, Any] | None,
     blocks: dict[str, str] | None,
     transfer_routes: tuple[_NativeTransferRoute, ...] | list[_NativeTransferRoute] | None,
+    child_transactions: Any,
+    transaction_plan: Any,
 ) -> Any:
     """Construct the coordinator; a failed self is scrubbed before the traceback escapes."""
     if engines is None or blocks is None or transfer_routes is None:
@@ -555,7 +575,8 @@ def _build_multi_layout_executor(
     }
     executor = _MultiLayoutUniformExecutor.__new__(_MultiLayoutUniformExecutor)
     try:
-        executor.__init__(plan, runtime_plan, engines, blocks, tuple(transfer_routes))
+        executor.__init__(plan, runtime_plan, engines, blocks, tuple(transfer_routes),
+                          child_transactions, transaction_plan)
         return executor
     except BaseException:
         _rollback_child_bound_snapshots(engines, previous_snapshots)
@@ -819,6 +840,8 @@ class _MultiLayoutUniformExecutor:
         engines: dict[str, Any] | None,
         blocks: dict[str, str] | None,
         transfer_routes: tuple[_NativeTransferRoute, ...] | None,
+        child_transactions: Any,
+        transaction_plan: Any,
     ) -> None:
         snapshot = None
         child_budgets = None
@@ -853,10 +876,16 @@ class _MultiLayoutUniformExecutor:
                 (engine._step_strategy for engine in self._engines.values()),
                 where="multi-layout step strategy",
             )
-            self._step_transaction_plan = _common_exact(
-                (engine._step_transaction_plan for engine in self._engines.values()),
-                where="multi-layout transaction plan",
-            )
+            if transaction_plan is None:
+                self._step_transaction_plan = _common_exact(
+                    (engine._step_transaction_plan for engine in self._engines.values()),
+                    where="multi-layout transaction plan",
+                )
+            else:
+                if any(engine._step_transaction_plan != child_transactions[layout_id]
+                       for layout_id, engine in self._engines.items()):
+                    raise ValueError("multi-layout child transaction plan differs from its compiled Program")
+                self._step_transaction_plan = transaction_plan
             self._temporal_restart_state = _CompositeTemporalRestartState(
                 {key: engine._temporal_restart_state for key, engine in self._engines.items()}
             )
@@ -865,7 +894,9 @@ class _MultiLayoutUniformExecutor:
             from pops.runtime._bound_snapshot import MultiLayoutBoundSnapshot
 
             snapshot = MultiLayoutBoundSnapshot(
-                plan, tuple(engine.bound_snapshot for engine in self._engines.values())
+                plan, tuple(engine.bound_snapshot for engine in self._engines.values()),
+                child_transactions=tuple(child_transactions.values()),
+                transaction_plan=transaction_plan,
             )
             self._bound_snapshot = snapshot
             for engine in self._engines.values():
@@ -920,6 +951,9 @@ class _MultiLayoutUniformExecutor:
             self._bound_snapshot.bind_identity,
         )
 
+    def _checkpoint_program_id(self) -> Any:
+        return self._bound_snapshot.program_id
+
     @property
     def last_run_identity(self) -> Any:
         return self._last_run_identity
@@ -965,12 +999,18 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError(
                 "multi-layout Program reports differ from the installed layout order"
             )
+        transaction_plan = getattr(self, "_step_transaction_plan", None)
         rows = []
         for layout_program in layout_programs:
             engine = self._engines[layout_program.layout_id]
             report = engine.program_report()
             if type(report) is not ProgramRuntimeReport:
                 raise TypeError("multi-layout child returned a non-canonical ProgramRuntimeReport")
+            if getattr(transaction_plan, "guards", ()):
+                expected_transaction = layout_program.program.program.transaction_plan()
+                if (engine._step_transaction_plan != expected_transaction
+                        or report.step_transaction != expected_transaction.to_data()):
+                    raise RuntimeError("multi-layout child transaction report differs from its installed Program")
             if (
                 not report.installed
                 or not isinstance(report.program_hash, str)
@@ -1107,12 +1147,16 @@ class _MultiLayoutUniformExecutor:
                 for layout_program, _engine_blocks, report in children
             ],
         ).hexdigest
+        transaction_plan = getattr(self, "_step_transaction_plan", None)
         return ProgramRuntimeReport(
             installed=True,
             program_hash=program_hash,
-            step_transaction=_common_exact(
-                (report.step_transaction for _row, _blocks, report in children),
-                where="multi-layout Program transaction report",
+            step_transaction=(
+                transaction_plan.to_data()
+                if transaction_plan is not None and getattr(transaction_plan, "guards", ()) else _common_exact(
+                    (report.step_transaction for _row, _blocks, report in children),
+                    where="multi-layout Program transaction report",
+                )
             ),
             block_map=block_map,
             params=params,
@@ -1882,8 +1926,10 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     programs = {row.layout_id: row for row in plan.artifact.layout_programs}
     if set(programs) != {row.handle.qualified_id for row in layouts.plan.layouts}:
         raise ValueError("compiled layout Program set is not exact")
+    from pops.codegen.program_slicing import _local_guard_owners
+
     strategies = []
-    transaction_plans = []
+    transaction_plans = {}
     configs = {}
     native_layouts = plan.artifact.native_layouts
     for row in layouts.rows:
@@ -1895,7 +1941,10 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
                 "multi-layout execution requires exact FixedDt Program strategy"
             )
         strategies.append(strategy)
-        transaction_plans.append(authored.transaction_plan())
+        transaction = authored.transaction_plan()
+        if getattr(transaction, "guards", ()):
+            _local_guard_owners(authored)
+        transaction_plans[layout_id] = transaction
         execution_target = programs[layout_id].target
         if execution_target == "system":
             # Validate every ranked Uniform tiling before materializing any child.
@@ -1904,10 +1953,11 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
             configs[layout_id].runtime_parameter_byte_capacity = plan.runtime_parameter_storage["byte_capacity"]
         elif execution_target != "amr_system":
             raise NotImplementedError("multi-layout native execution target is unsupported")
-    if any(value != strategies[0] for value in strategies[1:]) or any(
-        value != transaction_plans[0] for value in transaction_plans[1:]
-    ):
+    if any(value != strategies[0] for value in strategies[1:]):
         raise ValueError("per-layout Programs do not share one exact transaction strategy")
+    transaction_plan = _compose_transaction_plans(transaction_plans.values())
+    if not getattr(transaction_plan, "guards", ()):
+        transaction_plan = None
     transfer_rows = {row.mapping_id: row for row in runtime_plan.communication.transfers}
     if set(transfer_rows) != {
         row.requirement.qualified_id for row in plan.artifact.layout_plan.mappings
@@ -2016,7 +2066,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
 
         execution = None
         return _build_multi_layout_executor(
-            plan, runtime_plan, engines, blocks, transfer_routes
+            plan, runtime_plan, engines, blocks, transfer_routes, transaction_plans, transaction_plan,
         )
     except BaseException as error:
         transfer_note = None

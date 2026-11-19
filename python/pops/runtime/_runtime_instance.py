@@ -438,6 +438,7 @@ class RuntimeInstance:
 
     __slots__ = (
         "_install_plan",
+        "_guard_failure_catalog",
         "_layout_plan",
         "_execution_context",
         "_installed_components",
@@ -467,6 +468,9 @@ class RuntimeInstance:
         publisher: Any = None,
     ) -> None:
         plan = require_install_plan(install_plan)
+        from pops.runtime._guard_failure import bound_guard_failure_catalog
+
+        guard_failure_catalog = bound_guard_failure_catalog(plan.artifact)
         manifests = (
             component_manifests_for_install(plan)
             if component_manifests is None
@@ -483,6 +487,7 @@ class RuntimeInstance:
         if native is None:
             raise TypeError("RuntimeInstance executor cannot be None")
         self._install_plan = plan
+        self._guard_failure_catalog = guard_failure_catalog
         self._layout_plan = plan.artifact.layout_plan
         self._execution_context = plan.execution_context
         self._installed_components = plan.components
@@ -698,6 +703,9 @@ class RuntimeInstance:
             artifact.artifact_identity,
             self._install_plan.bind_identity,
         )
+
+    def _checkpoint_program_id(self) -> Identity:
+        return self._install_plan.artifact.program_id
 
     # Public read-only runtime surface.  Each route is intentionally named here: there is no
     # generic delegation to the private System/AmrSystem engine.
@@ -1017,6 +1025,7 @@ class RuntimeInstance:
             instance={
                 "bind_identity": self.bind_identity.to_data(),
                 "artifact_identity": self._install_plan.artifact.artifact_identity.to_data(),
+                "program_id": self._install_plan.artifact.program_id.to_data(),
                 "plan_identity": self._install_plan.artifact.plan.plan_identity.to_data(),
                 "layout_plan": self._layout_plan.inspect(),
                 "resolved_dimension": self._install_plan.artifact.resolved_dimension,
@@ -1636,6 +1645,14 @@ class RuntimeInstance:
                     ),
                     diagnostics=(str(error),),
                 )
+            if cleanup_error is None and phase == "solve":
+                from pops.runtime._guard_failure import attach_guard_failure
+
+                guard_failure = attach_guard_failure(error, self._guard_failure_catalog)
+                if guard_failure is not None:
+                    if not isinstance(failure_report, StepTransactionReport):
+                        raise RuntimeError("global guard lost its rollback report") from error
+                    failure_report = replace(failure_report, failure=guard_failure)
             if failure_report is not None and hasattr(native, "_last_step_transaction_report"):
                 native._last_step_transaction_report = failure_report
             if cleanup_error is not None:
@@ -1928,6 +1945,7 @@ class RuntimeInstance:
             bind_identity=self.bind_identity,
             execution_identity=self._execution_context.identity,
             artifact_identity=self._install_plan.artifact.artifact_identity,
+            program_id=self._install_plan.artifact.program_id,
             field_providers=_field_provider_evidence(
                 self._install_plan, self._layout_plan, self._executor
             ),
@@ -2437,7 +2455,8 @@ class RuntimeInstance:
 
         budget = (require_checkpoint_resource_budget(self) if workspace_byte_capacity is None else
                   restart_checkpoint_resource_budget(self, workspace_byte_capacity))
-        stored = decode_checkpoint_bytes(payload, budget)
+        stored = decode_checkpoint_bytes(
+            payload, budget, allow_historical_amr_refusal=budget.runtime_kind == "amr")
         if MANIFEST_KEY not in stored.files:
             raise ValueError("checkpoint has no canonical manifest")
         manifest = json.loads(str(stored[MANIFEST_KEY]))
@@ -2445,6 +2464,10 @@ class RuntimeInstance:
         if not isinstance(runtime_kind, str) or not runtime_kind:
             raise ValueError("checkpoint manifest lacks its runtime kind")
         authenticate_checkpoint_payload(self, stored, runtime_kind=runtime_kind)
+        return self._inspect_checkpoint_consumer_state(stored)
+
+    def _inspect_checkpoint_consumer_state(self, stored: Any) -> ConsumerCursorSet:
+        """Check the consumer continuation in an already authenticated archive."""
         required = {
             "runtime_consumer_graph",
             "runtime_consumer_cursors",

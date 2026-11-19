@@ -324,10 +324,9 @@ Supported native routes include:
   child payloads are decoded and replayed in memory without shared child files. AMR preserves
   multi-block/multi-level accepted state under active regridding, including topology ownership,
   clocks, the held cadence window, the last accepted Program interval, histories and transfer
-  provenance. Native `SymbolicTagger` temporal hysteresis is part of that accepted image: non-zero
-  `Hysteresis.min_cycles` is supported, restored transactionally, and rematerialized exactly across
-  MPI rank-count changes. External Tagger components still refuse non-zero hysteresis before
-  artifact creation until their adapter contract owns the same persistent-state route. MPI capture
+  provenance. The temporal hysteresis of the refinement criterion is part of that accepted image:
+  non-zero `Hysteresis.min_cycles` is supported, restored transactionally, and rematerialized
+  exactly across MPI rank-count changes. MPI capture
   validates the rank-independent accepted-state image on every producer before sealing or
   publication; disagreement fails collectively and cannot leave a partial checkpoint.
 - The prepared limiter registry exposes native `Minmod`, `VanLeer`, `MC`, and `Superbee` MUSCL

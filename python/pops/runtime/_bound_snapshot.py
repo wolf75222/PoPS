@@ -173,19 +173,24 @@ class BoundSnapshot:
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
         "field_plans", "step_transaction", "params", "aux_evidence", "initial_evidence",
-        "bind_schema_identity", "execution_context", "bind_identity",
+        "bind_schema_identity", "execution_context", "bind_identity", "program_id",
+        "_uniform_checkpoint_projection",
     )
 
     def __init__(self, *, semantic_identity: Any, artifact_identity: Any, layout: Any,
                  blocks: Any, field_plans: Any, step_transaction: Any, params: Any, aux_evidence: Any,
                  initial_evidence: Any, bind_schema_identity: Any,
-                 execution_context: Any = None) -> None:
+                 execution_context: Any = None, program_id: Any = None) -> None:
         semantic = _identity(semantic_identity, "semantic", where="semantic_identity")
         artifact = _identity(artifact_identity, "artifact", where="artifact_identity")
         schema_id = _identity(bind_schema_identity, "bind-schema", where="bind_schema_identity")
         object.__setattr__(self, "schema_version", SCHEMA_VERSION)
         object.__setattr__(self, "semantic_identity", semantic)
         object.__setattr__(self, "artifact_identity", artifact)
+        # The compiled program_id (N11 lot 2b) authenticates checkpoints; it is carried beside the
+        # bind preimage, not in it, so the bind identity keeps its exact preimage.
+        object.__setattr__(self, "program_id", None if program_id is None else _identity(
+            program_id, "program", where="program_id"))
         for name, value in (
             ("layout", layout), ("blocks", list(blocks)), ("field_plans", field_plans),
             ("step_transaction", step_transaction), ("params", list(params)),
@@ -196,6 +201,7 @@ class BoundSnapshot:
             object.__setattr__(self, name, _freeze(_data(value, where=name), where=name))
         object.__setattr__(self, "bind_schema_identity", schema_id)
         object.__setattr__(self, "bind_identity", make_identity("bind", self._identity_payload()))
+        object.__setattr__(self, "_uniform_checkpoint_projection", None)
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
@@ -245,10 +251,11 @@ class MultiLayoutBoundSnapshot:
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
         "field_plans", "step_transaction", "params", "aux_evidence", "initial_evidence",
-        "bind_schema_identity", "execution_context", "bind_identity",
+        "bind_schema_identity", "execution_context", "bind_identity", "program_id",
     )
 
-    def __init__(self, install_plan: Any, child_snapshots: Any) -> None:
+    def __init__(self, install_plan: Any, child_snapshots: Any, *, child_transactions: Any,
+                 transaction_plan: Any) -> None:
         from pops.codegen._plans import require_install_plan
 
         install_plan = require_install_plan(install_plan)
@@ -282,10 +289,15 @@ class MultiLayoutBoundSnapshot:
         object.__setattr__(self, "blocks", _freeze(ordered, where="blocks"))
         object.__setattr__(self, "field_plans", _freeze({}, where="field_plans"))
         transactions = tuple(snapshot.to_dict()["step_transaction"] for snapshot in snapshots)
-        if any(value != transactions[0] for value in transactions[1:]):
-            raise ValueError("per-layout Program transaction contracts are not identical")
-        object.__setattr__(
-            self, "step_transaction", _freeze(transactions[0], where="step_transaction"))
+        if transaction_plan is None:
+            if any(value != transactions[0] for value in transactions[1:]):
+                raise ValueError("per-layout Program transaction contracts are not identical")
+            transaction_data = transactions[0]
+        else:
+            if transactions != tuple(row.to_data() for row in child_transactions):
+                raise ValueError("multi-layout child snapshot transaction differs from its compiled Program")
+            transaction_data = transaction_plan.to_data()
+        object.__setattr__(self, "step_transaction", _freeze(transaction_data, where="step_transaction"))
         object.__setattr__(self, "params", _freeze(
             _data(install_plan.params.rows(), where="params"), where="params"))
         from pops.runtime._auxiliary_bind import auxiliary_array_evidence
@@ -302,6 +314,8 @@ class MultiLayoutBoundSnapshot:
             _data(install_plan.execution_context, where="execution_context"),
             where="execution_context"))
         object.__setattr__(self, "bind_identity", install_plan.bind_identity)
+        object.__setattr__(self, "program_id", _identity(
+            artifact.program_id, "program", where="program_id"))
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -452,6 +466,7 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any
             plan.execution_context if plan is not None
             else getattr(engine, "_execution_context", None)
         ),
+        program_id=getattr(compiled, "program_id", None),
     )
     if plan is not None:
         # ``plan`` has just passed require_install_plan() and the exact-input proof above.  This is

@@ -30,7 +30,7 @@ from pops.identity import make_identity  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
-from tests.python.support.block_instance_owner import make_testing_block_instance_owner  # noqa: E402
+from pops.codegen._plans import canonical_block_instance_owner  # noqa: E402
 from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
@@ -78,8 +78,13 @@ def _compiled(blocks, artifact_directory, *, ghost_depth=2):
 
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
+    declaration = module.state_handle(state)
+    state_identities = {
+        name: problem.resolve(declaration, block=problem.blocks()[name]).qualified_id
+        for name in blocks
+    }
     layout_plan, layout_coverage = resolved_layout_contract(
-        None, target="system", block_names=blocks)
+        None, target="system", block_names=blocks, owner=problem.owner_path)
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",
@@ -94,8 +99,11 @@ def _compiled(blocks, artifact_directory, *, ghost_depth=2):
             ResolvedBlock(
                 name, {"model": "ghost-depth-model"},
                 None if ghost_depth is None else {"ghost_depth": ghost_depth},
-                "production", ("U",), ("test::%s::state::U" % name,),
-                make_testing_block_instance_owner("ghost-depth", name, "ghost-depth-model"))
+                "production", ("U",), (state_identities[name],),
+                # The case's own block instance owner: a fabricated owner of another case and
+                # model is a name the presentation map does not know (N11 lot 2b, refused).
+                canonical_block_instance_owner(
+                    case=problem, block=problem.blocks()[name], model_owner=None))
             for name in blocks
         ),
         bind_schema=schema,

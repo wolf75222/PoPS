@@ -584,13 +584,13 @@ Un layout AMR agrège six autorités d'authoring : cinq facettes scientifiques, 
 disposition des patches et deux providers d'exécution :
 
 - `AMRHierarchy` : niveaux et ratios par transition ;
-- `AMRTagging` : graphe de prédicats, décisions, hystérésis et conflits ;
+- `AMRTagging` : régions de `cell` (raffiner, déraffiner), hystérésis et conflits ; le critère
+  est généré dans le Program compilé (spec 0.3, DM13b) ;
 - `AMRRegrid` : cadence et règle de reconstruction ;
 - `AMRTransfer` : politique par espace/état ;
 - `AMRExecution` : relation temporelle entre niveaux ;
 - `PatchLayout` : distribution du niveau grossier et, seulement lorsqu'elle est imposée, taille
   maximale de ses patches ;
-- un provider `Tagger` qui matérialise le graphe de tagging ;
 - un provider `Clustering` qui transforme les tags en boîtes parentes.
 
 ```python
@@ -600,7 +600,6 @@ layout = AMR(
     grid=grid,
     hierarchy=AMRHierarchy(max_levels=..., ratios=(...)),
     tagging=tagging,
-    tagger=pops.lib.amr.SymbolicTagger(),
     clustering=pops.lib.amr.BergerRigoutsos(),
     regrid=AMRRegrid(schedule=every(5, clock=T.clock)),
     transfer=transfer,
@@ -624,80 +623,25 @@ entier sentinelle n'appartient au contrat public ; une éventuelle représentati
 détail de lowering privé. Une taille positive n'est écrite dans `coarse_max_grid` que lorsque
 l'utilisateur veut réellement contraindre ce choix.
 
-Les builtins de `pops.lib.amr` et les composants externes implémentent le même petit protocole de
-provider. Un composant externe est sélectionné sans callback Python :
+Le clustering des cellules marquées fait partie de la mécanique AMR du cœur (DM13).
+`AMR(clustering=BergerRigoutsos(...))` règle l'efficacité minimale et les tailles minimale et
+maximale des boîtes. La politique authentifie ces trois contrôles et le layout. Elle ne charge
+aucun composant natif de substitution (N12, lot 4, C38).
 
-```python
-from pops.amr import ClusteringProvider, RefluxProvider, TaggerProvider
+Le protocole de composant AMR expose la déclaration `RefluxProvider`. Son autorité identifie
+un `pops.external.ExternalComponent` portant l'interface générée `Reflux`. Le même objet exact
+doit être fourni à `resolve(components=...)` avec un manifeste `bitwise` ou `reproducible`.
+L'installation externe reste refusée tant que l'autorité atomique correspondante manque.
+Le chemin intégré emploie le flux ledger transactionnel.
 
-layout = AMR(
-    ...,
-    tagger=TaggerProvider(component=my_tagger),
-    clustering=ClusteringProvider(component=my_clustering),
-    reflux=RefluxProvider(component=my_reflux),
-)
-resolved = pops.resolve(
-    pops.validate(case),
-    layout=layout,
-    components=(my_tagger, my_clustering, my_reflux),
-)
-```
-
-Les trois valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
-respectivement l'interface générée `Tagger`, `Clustering` ou `Reflux`. Le même objet exact doit
-être fourni à
-`resolve(components=...)`; son identité de manifest, son interface et sa version traversent
-`resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
-`reproducible`, car chaque rang doit produire la même hiérarchie. Un `Tagger` déclare en plus une
-capacité `amr_tagging_program` exacte : opcodes feuilles/logiques supportés, nombre maximal
-d'instructions, routes de stencil d'indicateur, nombre maximal de termes par axe et les quatre
-sorties `refine_candidates`, `coarsen_candidates`,
-`refine_equalities`, `coarsen_equalities`. La résolution refuse un opcode ou une capacité absente ;
-elle ne réduit jamais le graphe à un prédicat privé du composant.
-Le `Tagger` déclare aussi exactement `execution_mode="native_backend"` ou `"host"` et ses espaces
-mémoire. Le premier sélectionne un unique variant 2D/float64 CPU, CUDA, HIP, SYCL ou OpenMP target
-compatible avec l'allocation du runtime. Le second doit déclarer uniquement `host` : c'est le seul
-cas où PoPS matérialise une image host, jamais un fallback implicite. Une déclaration 3D ne rend pas
-l'adapter 2D compatible.
-
-Le contrat `Tagger` v2 reçoit, pour chaque patch local, toutes les vues d'états qualifiées utilisées
-par le graphe ainsi que son programme lié canonique : feuilles, composantes, seuils, programmes
-refine/coarsen, stencils discrets, hystérésis, égalité, conflits et identité. Un stencil discret
-transporte sa route versionnée, sa dimension, sa norme, son échelle, son mode de frontière et, pour
-chaque axe, offsets, coefficients, ordre de dérivée, ordre formel et halos inférieur/supérieur. Le
-spatial method le fournit sous forme typée et sérialisable ; `resolve` refuse une méthode absente ou
-ambiguë. Il n'existe aucun choix runtime par nom de reconstruction et aucun fallback vers une
-différence centrée. Les moments des coefficients jusqu'à l'ordre formel déclaré sont vérifiés, puis
-les halos requis sont comparés aux halos réellement alloués avant le premier appel du provider.
-Avec `boundary_mode="ghost_extension"`, les halos same-level, coarse/fine et physiques sont produits
-par les autorités `AMRTransfer`/`PreparedBoundaryPlan` exactes au clock et au temps logique du
-tagging. Une frontière physique non périodique sans producteur complet, ou une face d'interface
-omise sans transfert de ghost correspondant, fait échouer le bind ; un stencil ne lit jamais une
-valeur de halo résiduelle.
-
-Le composant évalue ce même programme exact et rend
-les quatre masques candidats. En mode natif, les vues empruntent directement les allocations de
-champs et le composant exécute sur le backend/stream authentifié ; seuls les quatre masques compacts
-sont rapatriés avant le clustering. PoPS reste l'unique autorité qui applique la couverture fine courante,
-la politique d'égalité et les conflits refine/coarsen. En mode natif, les états ne sont ni packés ni
-réduits globalement. Pour un parent distribué, seule une OR collective groupée des quatre bitmaps est
-autorisée ; pour un parent répliqué, les bitmaps doivent être identiques rang par rang et toute
-divergence est refusée au lieu d'être masquée par une union. `min_cycles > 0` est refusé
-à la résolution tant que le runtime ne possède pas le stockage persistant de décision requis : une
-hystérésis ne peut jamais être acceptée puis ignorée. Changer un seuil, le graphe, coarsen, l'égalité
-ou les conflits change l'identité et le contenu du programme lié.
-
-L'évaluation logique est trivaluée. Une égalité de feuille produit `Unknown`; `not Unknown` reste
-`Unknown`; `Any` vaut `True` dès qu'un enfant vaut `True`, sinon `Unknown` s'il en existe un, sinon
-`False`; `All` vaut `False` dès qu'un enfant vaut `False`, sinon `Unknown` s'il en existe un, sinon
-`True`. Les quatre masques représentent le résultat des racines, pas l'union des égalités internes.
-`EqualityPolicy` transforme ensuite tout `Unknown` de racine en aucune action, candidat refine ou
-candidat coarsen, avant `ConflictPolicy`, y compris si l'autre racine vaut déjà `True`.
-`non_finite_policy="reject"` est fixe dans la capability et l'ABI v2 : une valeur scalaire, un terme
-de stencil ou un gradient dérivé `NaN`/infini interrompt le tagging avant toute logique booléenne.
-En particulier `Not(NaN)` ne peut pas devenir `True`. Un composant externe signale ce rejet par son
-`PopsComponentStatusV1`; l'adapter ne relit pas tout le champ sur CPU avant l'appel et ne convertit
-jamais une erreur numérique en masque `False`.
+Le tagging n'a plus de provider (N12, lot 3c-2b). `AMRTagging` s'écrit en régions de `cell`,
+`Tag(lambda cell: cell.value(q) > case.value(t))`, et le critère est généré dans le Program compilé
+(spec 0.3, DM13b) : le cœur parcourt les patches d'un niveau, passe chacun à l'entrée générée et
+relit un octet de décision par cellule valide. Une comparaison stricte à égalité exacte ne décide
+rien (`EqualityPolicy.HOLD`), les régions exigent `ConflictPolicy.REFINE_WINS`, et une valeur non
+finie lue par une comparaison rejette le niveau collectivement. Le graphe de prédicats `ValueExpr`,
+le provider `Tagger`, `pops.lib.amr.SymbolicTagger` et l'emplacement `tagger=` de `AMR` sont
+retirés ; la VM de bytecode native ne reste qu'une couture de test jusqu'au lot 3c-2c.
 
 L'installation prépare chaque table une fois avant la création du runtime. Une table absente, une
 capacité de sortie insuffisante ou une identité divergente échoue
@@ -1436,7 +1380,7 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, kernel local de reflux, solveur de
+ghost boundary, closure de champ, tagging, transfert, kernel local de reflux, solveur de
 champ, writer et topologie de champ). Le reflux conservatif complet reste une autorité interne
 pilotée par le flux ledger ; la table externe `Reflux` ne couvre que la transformation locale,
 non collective, de flux intégrés en correction non appliquée. Chaque famille possède sa propre version d'interface, indépendante de la version
@@ -1455,12 +1399,11 @@ active, une tentative périmée, une couverture incomplète ou une divergence en
 publication. Il n'existe plus de façade parallèle `EdgeStrip`/`Fx`/`Fy` ni d'adaptateur 2D du
 Program.
 
-La sélection `AMR(..., reflux=RefluxProvider(component))` traverse désormais la même résolution
-normalisée, identité de provider, artifact et transaction d'installation que `Tagger` et
-`Clustering`. Sans sélection explicite, `FluxRegisterReflux` décrit le kernel builtin par le même
-protocole et apparaît dans le même rapport de providers. La qualification initiale de l'adaptateur
-reste limitée à la cible 2D, `float64`, CPU avec stockage hôte. Le chemin n'est pas encore prouvé par
-exécution MPI avec un composant externe, mesure de conservation ni backend GPU.
+La sélection `AMR(..., reflux=RefluxProvider(component))` authentifie le composant et
+l'horloge du Program à la résolution. L'autorité par défaut `FluxRegisterReflux` conserve
+le chemin intégré. Le rapport porte aussi les contrôles du clustering, dont l'identité
+est indépendante du catalogue de substitution. Le changement du catalogue impose de
+reconstruire les composants concernés et l'authentification des checkpoints reste exacte.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.

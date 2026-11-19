@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -312,11 +313,13 @@ TEST(test_amr_history_ring, ThreeLevelProgramFailsClosedWithoutExactFluxExpressi
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "test.amr-history.three-level/runtime@1");
   system.set_temporal_relations({2, 2}, {1, 1}, {"integral_only", "integral_only"});
-  system.install_block_state_route("tracer", "state/tracer");
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_history_budget, POPS_TEST_standalone_history_budget_DSO,
+      POPS_TEST_standalone_history_budget_RECEIPT};
+  system.install_block_state_route("tracer", criterion.criterion.state);
   install_advection(system);
   system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}},
-                                               "test.amr-history.three-level-tagging@1");
+  criterion.install(system);
 
   auto* runtime = system.engine();
   ASSERT_NE(runtime, nullptr);

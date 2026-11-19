@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include "gtest_compat.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
@@ -639,8 +639,10 @@ std::string block_consumer_qid(std::string_view name) {
   return "tests.mpi.multiblock-field/physical-flux/" + std::string(name);
 }
 
-void install_block_boundary(pops::AmrSystem<Dim>& system, const std::string& name) {
-  const std::string state_identity = "tests.mpi.multiblock-field/state/" + name;
+constexpr const char* primary_amr_state_route = "tests.mpi.multiblock-field/state/a";
+
+void install_block_boundary(pops::AmrSystem<Dim>& system, const std::string& name,
+                            const std::string& state_identity) {
   std::vector<std::string> face_types(static_cast<std::size_t>(2 * Dim), "foextrap");
   std::vector<std::string> face_identities;
   face_identities.reserve(static_cast<std::size_t>(2 * Dim));
@@ -761,8 +763,8 @@ pops::AmrSystemConfig<Dim> replicated_coarse_config() {
 bool amr_registry_bind_rejected(std::string token) {
   pops::AmrSystem<Dim> system(replicated_coarse_config());
   pops::test::install_amr_runtime_authority(system, "tests.mpi.amr-registry/runtime");
-  system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
-  install_block_boundary(system, "a");
+  system.install_block_state_route("a", primary_amr_state_route);
+  install_block_boundary(system, "a", primary_amr_state_route);
   install_provider_free_block(system, "a");
   const pops::AmrFieldHierarchyPolicyAuthority hierarchy{
       "pops.field-hierarchy.composite", 1, {"pops.field-hierarchy.options.empty@1", {}}};
@@ -948,8 +950,8 @@ int run_multiblock_field_solve(int argc, char** argv) {
       pops::AmrSystem<Dim> system(replicated_coarse_config());
       pops::test::install_amr_runtime_authority(system,
                                                 "tests.mpi.multiblock-field/replicated-fac");
-      system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
-      install_block_boundary(system, "a");
+      system.install_block_state_route("a", primary_amr_state_route);
+      install_block_boundary(system, "a", primary_amr_state_route);
       install_provider_free_block(system, "a");
       system.set_poisson("charge_density", "geometric_mg", "dirichlet");
       const std::vector<double> coarse_state(cell_count(system.spatial_shape()), 1.0);
@@ -975,10 +977,13 @@ int run_multiblock_field_solve(int argc, char** argv) {
     config.explicit_bootstrap = true;
     pops::AmrSystem<Dim> system(config);
     pops::test::install_amr_runtime_authority(system, "tests.mpi.multiblock-field/runtime");
-    system.install_block_state_route("a", "tests.mpi.multiblock-field/state/a");
-    system.install_block_state_route("b", "tests.mpi.multiblock-field/state/b");
-    install_block_boundary(system, "a");
-    install_block_boundary(system, "b");
+    system.install_block_state_route("a", primary_amr_state_route);
+    const pops::test::StandaloneFixtureCriterion criterion{
+        pops::test::standalone_secondary_block, POPS_TEST_standalone_secondary_block_DSO,
+        POPS_TEST_standalone_secondary_block_RECEIPT};
+    system.install_block_state_route("b", criterion.criterion.state);
+    install_block_boundary(system, "a", primary_amr_state_route);
+    install_block_boundary(system, "b", criterion.criterion.state);
     install_block(system, "a");
     install_block(system, "b");
     const auto output = install_field_output(system);
@@ -993,8 +998,7 @@ int run_multiblock_field_solve(int argc, char** argv) {
                                     AmrProviderFault::candidate_validation_throw_once_on_rank_one,
                                     true);
     install_consensus_provider_plan(system, "field/reject", AmrProviderFault::reject_attempt);
-    pops::test::install_prepared_threshold_union(system, {{"b", "u", 0.5}},
-                                                 "tests.mpi.multiblock-field/tagger-b@1");
+    criterion.install(system);
     int rhs_calls = 0;
     bool fail_rhs_on_rank_one = false;
     const auto install_slot_rhs = [&](const std::string& slot) {

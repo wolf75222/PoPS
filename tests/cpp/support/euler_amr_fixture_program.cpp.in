@@ -1,0 +1,174 @@
+#include "explicit_amr_program.hpp"
+
+#include <pops/runtime/config/route_ids.hpp>
+#include <pops/runtime/dynamic/abi_key.hpp>
+
+namespace {
+constexpr const char* blocks[] = POPS_TEST_EULER_BLOCKS;
+constexpr int block_count = int(std::size(blocks));
+constexpr bool block_index(int index) {
+  return index >= 0 && index < block_count;
+}
+}  // namespace
+
+extern "C" const char* pops_program_abi_key() {
+  return POPS_ABI_KEY_LITERAL;
+}
+extern "C" const char* pops_program_route_manifest() {
+  return pops::kRouteRegistrySignature;
+}
+extern "C" const char* pops_program_name() {
+  return "test-forward-euler-amr";
+}
+extern "C" const char* pops_program_hash() {
+  return POPS_TEST_EULER_HASH;
+}
+extern "C" int pops_program_block_count() {
+  return block_count;
+}
+extern "C" const char* pops_program_block_name(int block) {
+  return block_index(block) ? blocks[block] : "";
+}
+extern "C" int pops_program_param_count() {
+  return 0;
+}
+extern "C" int pops_program_param_block(int) {
+  return -1;
+}
+extern "C" int pops_program_param_index(int) {
+  return -1;
+}
+extern "C" double pops_program_param_default(int) {
+  return 0.0;
+}
+extern "C" bool pops_program_has_dt_bound() {
+  return false;
+}
+extern "C" bool pops_program_has_flux_expression() {
+  return true;
+}
+extern "C" int pops_program_flux_expression_budget_count() {
+  return block_count;
+}
+extern "C" std::uint64_t pops_program_flux_rhs_basis_bound(int block) {
+  return block_index(block) ? 1 : 0;
+}
+extern "C" std::uint64_t pops_program_flux_coefficient_term_bound(int block) {
+  return block_index(block) ? 1 : 0;
+}
+extern "C" std::uint64_t pops_program_interface_coupling_application_bound() {
+  return 0;
+}
+extern "C" std::uint64_t pops_program_interface_coupling_identity_character_bound() {
+  return 0;
+}
+extern "C" int pops_program_operator_authority_count() {
+  return 0;
+}
+extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
+  return 0;
+}
+extern "C" int pops_program_checkpoint_history_count() {
+  return 0;
+}
+extern "C" const char* pops_program_checkpoint_history_name(int) {
+  return "";
+}
+extern "C" int pops_program_checkpoint_history_owner(int) {
+  return -1;
+}
+extern "C" const char* pops_program_checkpoint_history_state_identity(int) {
+  return "";
+}
+extern "C" const char* pops_program_checkpoint_history_space_identity(int) {
+  return "";
+}
+extern "C" const char* pops_program_checkpoint_history_clock_identity(int) {
+  return "";
+}
+extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) {
+  return "";
+}
+extern "C" int pops_program_checkpoint_history_depth(int) {
+  return 0;
+}
+extern "C" int pops_program_checkpoint_history_components(int) {
+  return 0;
+}
+extern "C" int pops_program_checkpoint_history_ghost_depth(int) {
+  return -1;
+}
+extern "C" int pops_program_checkpoint_logical_clock_count() {
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  return 2;
+#else
+  return 1;
+#endif
+}
+extern "C" const char* pops_program_checkpoint_logical_clock_identity(int index) {
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  if (index == 1)
+    return POPS_TEST_EULER_FINE_CLOCK;
+#endif
+  return index == 0 ? "test.clock.macro" : "";
+}
+extern "C" const char* pops_program_checkpoint_primary_clock_identity() {
+  return "test.clock.macro";
+}
+extern "C" const char* pops_program_checkpoint_clock_manifest_contract() {
+  return "pops.program.owned-clock-manifest@1";
+}
+extern "C" const char* pops_program_checkpoint_temporal_provider_identity() {
+  return "pops.temporal-partition.global@1";
+}
+extern "C" std::uint64_t pops_program_checkpoint_temporal_cell_capacity() {
+  return 0;
+}
+extern "C" std::uint64_t pops_program_checkpoint_temporal_cells_per_topology_cell() {
+  return 0;
+}
+extern "C" int pops_module_operator_count() {
+  return 0;
+}
+extern "C" const char* pops_module_operator_owner(int) {
+  return "";
+}
+extern "C" const char* pops_module_operator_name(int) {
+  return "";
+}
+extern "C" const char* pops_module_operator_kind(int) {
+  return "";
+}
+extern "C" const char* pops_module_operator_signature(int) {
+  return "";
+}
+extern "C" const char* pops_module_operator_requirements(int) {
+  return "";
+}
+extern "C" int pops_module_state_space_count() {
+  return block_count;
+}
+extern "C" const char* pops_module_state_space_name(int block) {
+  return block_index(block) ? "U" : "";
+}
+extern "C" const char* pops_module_state_space_owner(int block) {
+  return pops_program_block_name(block);
+}
+extern "C" int pops_module_field_space_count() {
+  return 0;
+}
+extern "C" const char* pops_module_field_space_name(int) {
+  return "";
+}
+extern "C" const char* pops_module_field_space_owner(int) {
+  return "";
+}
+
+extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
+  const auto context = pops::runtime::program::make_program_execution_provider(system);
+  context->configure_primary_clock("test.clock.macro");
+  pops::test::install_forward_euler_step(context, POPS_TEST_EULER_SOLVE_DEFAULT);
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  context->declare_clock_relation("test.clock.macro", POPS_TEST_EULER_FINE_CLOCK, 2);
+#endif
+}

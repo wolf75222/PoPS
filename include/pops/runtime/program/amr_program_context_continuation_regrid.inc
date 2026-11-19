@@ -69,7 +69,8 @@ void require_field_topology(const FieldTopology& view) const {
         "Field topology belongs to another owner, layout or regrid attempt");
 }
 
-FieldTopology continuation_source_topology(int block, std::int64_t level) const {
+private:
+FieldTopology regrid_source_view_(int block, std::int64_t level) const {
   const auto& frame = require_continuation_regrid_();
   if (level < 0 || level >= static_cast<std::int64_t>(frame.sources.size()) - 1)
     throw std::out_of_range("source Field topology level is outside the immutable forest");
@@ -77,7 +78,7 @@ FieldTopology continuation_source_topology(int block, std::int64_t level) const 
   require_field_topology(view);
   return view;
 }
-FieldTopology continuation_target_topology(int block, std::int64_t level) const {
+FieldTopology regrid_target_view_(int block, std::int64_t level) const {
   const auto& frame = require_continuation_regrid_();
   if (level < 0 || level >= nlev())
     throw std::out_of_range("target Field topology level is outside the candidate forest");
@@ -126,25 +127,24 @@ FieldTopology derive_field_topology_(const FieldTopology& storage, const field_t
   return view;
 }
 
-public:
-FieldTopology continuation_source_topology(int block, std::int64_t level,
-                                           const field_type& field) const {
-  return derive_field_topology_(continuation_source_topology(block, level), field);
+FieldTopology regrid_source_view_(int block, std::int64_t level, const field_type& field) const {
+  return derive_field_topology_(regrid_source_view_(block, level), field);
 }
-FieldTopology continuation_target_topology(int block, std::int64_t level,
-                                           const field_type& field) const {
-  return derive_field_topology_(continuation_target_topology(block, level), field);
+FieldTopology regrid_target_view_(int block, std::int64_t level, const field_type& field) const {
+  return derive_field_topology_(regrid_target_view_(block, level), field);
 }
-FieldTopology continuation_source_topology(std::string_view provider, std::int64_t level,
-                                           const field_type& field) const {
+FieldTopology regrid_source_view_(std::string_view provider, std::int64_t level,
+                                  const field_type& field) const {
   return derive_field_topology_(
       continuation_provider_topology_(provider, level, FieldTopology::Side::Source), field);
 }
-FieldTopology continuation_target_topology(std::string_view provider, std::int64_t level,
-                                           const field_type& field) const {
+FieldTopology regrid_target_view_(std::string_view provider, std::int64_t level,
+                                  const field_type& field) const {
   return derive_field_topology_(
       continuation_provider_topology_(provider, level, FieldTopology::Side::Target), field);
 }
+
+public:
 void require_regrid_field_topology(const field_type& field, const FieldTopology& view) const {
   require_field_topology(view);
   view.require_field(field);

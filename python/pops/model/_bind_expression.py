@@ -9,6 +9,22 @@ from typing import Any
 from ._bind_schema_data import literal_value
 
 
+def resolved_declaration_expression(declaration: Any, resolver: Any) -> dict[str, Any]:
+    """Serialize a DerivedParam expression after authenticating its Handle leaves."""
+    from pops._ir.visitors import _key
+    from pops.params._declaration_data import freeze_json, thaw_json
+
+    expression = getattr(declaration, "expression", None)
+    resolve_references = getattr(expression, "resolve_references", None)
+    if not callable(resolve_references):
+        raise TypeError("DerivedParam expression must expose resolve_references(resolver)")
+    resolved = resolve_references(resolver)
+    return {
+        "protocol": "pops.expr.key.v1",
+        "value": thaw_json(freeze_json(_key(resolved), where="resolved DerivedParam expression")),
+    }
+
+
 def qualified_expression_key(value: Any, *, where: str) -> Any:
     """Serialize one Bind-time expression with exact parameter identities.
 

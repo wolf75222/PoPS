@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
-from pops._bootstrap import StepAttemptRejected
+from pops._bootstrap import StepAttemptRejected, StepTerminalFailure
 from pops.time.solve_outcome import SOLVE_STATUSES
 from pops.time._step.strategy import (
     AdaptiveCFL,
+    CellStepBound,
     ComputedDt,
     ErrorControlledDt,
     ExternalTimeGrid,
@@ -153,6 +154,7 @@ def _attempt_world(engine: Any, *, preparing: bool = False) -> Any:
 
 def _attempt_error_record(error: BaseException) -> dict[str, Any]:
     rejected = isinstance(error, StepAttemptRejected)
+    typed_native = rejected or type(error) is StepTerminalFailure
 
     def attribute(name: str, default: Any) -> Any:
         try:
@@ -182,8 +184,8 @@ def _attempt_error_record(error: BaseException) -> dict[str, Any]:
     except (TypeError, ValueError, OverflowError):
         reason_code = 0
 
-    schema = attribute("typed_failure_schema", "") if rejected else ""
-    payload = attribute("typed_failure_payload", b"") if rejected else b""
+    schema = attribute("typed_failure_schema", "") if typed_native else ""
+    payload = attribute("typed_failure_payload", b"") if typed_native else b""
     valid = type(schema) is str and type(payload) is bytes and bool(schema) == bool(payload)
     return {
         "kind": "reject" if rejected else "fail",
@@ -289,8 +291,15 @@ def _select_collective_attempt_error(rows, typed_schema, typed_payload, typed_ag
     # already restored its attempt-local state.  A mixed success/rejection is escalated to FailRun;
     # the enclosing RuntimeInstance transaction then rolls every rank back before publication.
     if fatal or rank_divergent or rejection_divergent:
-        return RuntimeError(
-            "collective step attempt failed during %s: %s" % (phase, diagnostics))
+        message = "collective step attempt failed during %s: %s" % (phase, diagnostics)
+        if len(fatal) == len(rows) and typed_agreement and typed_schema and all(
+                error["type"] == StepTerminalFailure.__name__ and error["typed_failure_present"]
+                for _, error in fatal):
+            failure = StepTerminalFailure(message)
+            failure.typed_failure_schema = typed_schema
+            failure.typed_failure_payload = typed_payload
+            return failure
+        return RuntimeError(message)
 
     status = selected["status"]
     disposition = selected["disposition"]
@@ -947,6 +956,63 @@ class ExternalTimeGridController(StepController[ExternalTimeGrid]):
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         return _execute_prepared_attempts(
             self.prepare_attempts(engine, native, t_end=t_end))
+
+
+class CellStepBoundController(StepController[CellStepBound]):
+    """``pops.run`` of a cells rule (N8 « dt= as a function of cell », design note D4): each step is
+    the step bound that the Program generates, at the accepted state, capped at the final time,
+    run under the rule's Courant budget; a face refusal that carries the faces' frequency F is
+    retried once at fraction / F, as ``AdaptiveCFLController`` retries at cfl / F (ROM-108)."""
+
+    def prepare_attempts(
+        self, engine: Any, native: Any, *, t_end: float,
+    ) -> _PreparedStepAttempts:
+        remaining = t_end - float(native.time())
+        if not remaining > 0.0:
+            raise RuntimeError("CellStepBound has no positive interval left before the final time")
+        # The installed-plan and bound-identity checks join the same collective as the minimum.
+        # At +infinity the rule steps to the final time.
+        cap = [min(float(native._step_bound(self.strategy.bound)), remaining)]
+        number = self.strategy.fraction
+
+        def attempt() -> None:
+            _native_attempt(engine, native,
+                            lambda: native._step_at_fraction(cap[0], number))
+
+        def retry(error: BaseException, _attempts: int) -> bool | str:
+            # One retry, whose step is the budget over the frequency that the refused attempt's
+            # faces recorded (2.6.9, ROM-108), as AdaptiveCFL's.
+            frequency = _face_step_frequency(error)
+            if frequency is None:
+                return ("only a face step refusal is retried, and this refusal carries no "
+                        "recorded face frequency (%s)" % FACE_STEP_FREQUENCY_SCHEMA)
+            bound = number / frequency
+            if not bound < cap[0]:
+                return "the step of the recorded face frequency does not shorten the refused step"
+            cap[0] = bound
+            return True
+
+        return _PreparedStepAttempts(
+            engine=engine,
+            controller=self,
+            attempt=attempt,
+            retry=retry,
+            retry_budget=1,
+        )
+
+    def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
+        return _execute_prepared_attempts(
+            self.prepare_attempts(engine, native, t_end=t_end))
+
+
+@register_step_controller_factory(CellStepBound)
+def _cell_step_bound_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController[Any]:
+    del controls
+    if type(strategy) is not CellStepBound:
+        raise TypeError("CellStepBound controller factory received another strategy type")
+    return CellStepBoundController(strategy)
 
 
 @register_step_controller_factory(FixedDt)

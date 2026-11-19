@@ -165,27 +165,72 @@ pre_freeze = true
 what = """
 A layout whose coordinate map reads neither the clock nor a discrete input is served by the static
 geometry arrays of its configuration, the zero-velocity case of the geometry-evolution contract
-(D0b, D18, D21), whose one provider before was the moving interval of rank one. A map of rank one
-is read as node positions with exact node differences; a map of rank two is a chart whose measures
-and face integrals take the rule that the layout states (D0b). At bind the System generates the
-arrays once, the same on every rank, from the analytic programs of the map evaluated with their
-forward-mode derivatives by the native interpreter: cell measures and centroids; face area
-vectors, measures, unit normals and centroids; distances across faces (across the seam of a
-periodic axis with its translation); widths. It refuses them collectively unless their
-certificates hold (finite and positive measures, det DX > 0 at every rule point, every cell closed
-to 8 eps sum |S|, the seams identified). The generated faces of a block compiled for such a layout
-read the physical unit normal and the face measure of the arrays, F.n = sum_k n_k F_k with the
-bound sum_k |n_k| rho(A_k), and the cell measure of the arrays in place of the products of
-spacings; the prepared diffusion of a Program reads their distances, face measures and cell
-measures. The consumers it serves are stated as capability rules at resolution, never by method
-name (CF2): face laws whose requirements are the normal flux, the provider pack and the stability
-bound, traces of formal order one, boundaries that extend the interior state, the scalar diagonal
-diffusion of node positions of rank one, FixedDt and bound initial values. On a box nothing is
-materialized and the generated code is unchanged. Rank three, the renormalization of child
-measures at regrid and the graded surface are L1b; G03 extends the same entry per interval."""
+(D0b, D18, D21), whose one provider before was the moving interval of rank one. A map whose
+component a reads the logical coordinate a alone is read as node positions with exact node
+differences, at ranks one to three (a graded box); any other map is a chart, of rank two, whose
+measures and face integrals take the rule that the layout states (D0b). At bind the System
+generates the arrays once, the same on every rank, from the analytic programs of the map evaluated
+with their forward-mode derivatives by the native interpreter: cell measures and centroids; face
+area vectors, measures, unit normals and centroids; distances across faces (across the seam of a
+periodic axis with its translation); widths. It refuses them collectively unless their certificates
+hold (finite and positive measures, det DX > 0 at every rule point, every cell closed to 8 eps sum
+|S|, the seams identified). The generated faces of a block compiled for such a layout read the
+physical unit normal and the face measure of the arrays, F.n = sum_k n_k F_k with the bound sum_k
+|n_k| rho(A_k), and the cell measure of the arrays in place of the products of spacings; the
+prepared diffusion of a Program reads their distances, face measures and cell measures. The
+consumers it serves are stated as capability rules at resolution, never by method name (CF2): face
+laws whose requirements are the normal flux, the provider pack and the stability bound, traces of
+formal order one, boundaries that extend the interior state, the two-point diffusion of one
+component with a diagonal coefficient on node positions of any rank, the reductions that a block
+owns with the finite assessment of an Advance, FixedDt and bound initial values. On a box nothing
+is materialized and the generated code is unchanged. L1b serves node positions of rank three, whose
+faces are faces of a box (the logical axis times the product of the node differences of the other
+axes), and the graded surface: pops.Graded(base=, nodes=) elaborates to this static case; its
+logical nodes are lower + (upper - lower) (k / c) with k / c correctly rounded, so that graded
+nodes nest bitwise across resolutions; the end nodes of node positions keep the bounds of their box
+(within 4 ulp, then set to them); and the two copies of a seam face share their distance. The
+renormalization of child measures at regrid is L4, with the transfers of G11; G03 extends the same
+entry per interval. After N3 lot 1 the words of pops.lib.numerics are schemes authored in source,
+and L1b serves them on the arrays: a riemann.User face (rusanov(), upwind()) reads the cell values
+as its traces and the physical unit normal of the arrays as n, on node positions and on a chart,
+and the step guard of such a face weighs each face bound by the measure of the face over the
+measure of the cell; a StencilFlux (two_point()) on node positions reads, on the faces of axis a,
+the two cells of the face and the distance across it as its spacing along a, integrates over the
+face measure, divides by the cell measure, and turns the incident frequency f of a face into the
+conductance f d |S| that each cell sums over |K|, which is f unchanged on a box. L2a writes the
+chart at the surface: sigma.chart(x=e_x, y=e_y) on a support of rank two, its keywords the frame
+axes and the coordinates of sigma its logical axes (S6), elaborates with the rule that
+pops.Uniform(geometry=) states to this static case, a graded chart composing its node functions with
+the chart; on a physical normal the face input s of a face authored in source is the bound
+sum_k |n_k| rho(A_k), which rusanov() reads as its spectral radius (DN31): a transitional route,
+named by pops.inspect, until lot L2d of N17 generates the exact radius on a physical normal. L2b-1
+serves the two-point face on a chart: at a physical end the arrays of a chart state the mirrored
+distance 2 |m_f - c_K| under the certificate of node positions, where they stated NaN; they publish
+the largest sine between the normal of a face and the line of the two centroids that it separates,
+measured and not required (DN36); and the stencil of a StencilFlux and the prepared diffusion of a
+Program are served on a chart when their law is one law on every logical axis (rows equal once the
+two cells and the spacing of their axis are renamed, one coefficient on every axis), which reads the
+normal through n.n = 1 alone, so that the row of the axis normal is the flux density along the
+physical normal (DN35). L2b-2 serves the centred differences of a Program on every static layout,
+with the scratch it allocates and the cellwise algebra of Program values, which reads no
+coordinate: the slope g_K solves delta X g = delta e, row a of delta X the difference of the
+centroids of the two neighbours of K along a (the stored centroids, the centroid at the other end
+translated by the seam across a periodic axis, the centroid of K reflected through the centroid
+of its end face, 2 m_f - c_K, at a physical end), with the values of the boundary session of the
+Program; the geometric part is one header function of the view of the arrays,
+pops::centroid_slope with pops::neighbour_centroid, which the generated cell read of N15 will call
+(DN38), solved by elimination with partial pivoting, which on node positions returns the quotient
+by the diagonal bitwise (DN39); the arrays keep the periodicity of each axis and the translation
+of its seam, which the view carries."""
 structures = [
   { case = "N17-annulus", builder = "build_annulus_free_stream", structure = "2-D isothermal Euler, a vector balance in Cartesian components on a charted annulus, theta periodic" },
   { case = "N17-graded", builder = "build_graded_diffusion", structure = "1-D scalar diffusion with no-flux ends on graded nodes x = tanh(3 s) / tanh(3)" },
+  { case = "N17-graded-box", builder = "build_graded_box", structure = "3-D scalar two-point diffusion on a periodic box graded along x and z, written with pops.Graded: the test of rank three of L1" },
+  { case = "N17-graded-plane", builder = "build_graded_plane", structure = "2-D scalar Rusanov advection at the velocity (1, 1/2) on a periodic plane graded along x, written with pops.Graded" },
+  { case = "N17-chart-annulus", builder = "build_chart_annulus", structure = "2-D scalar Rusanov advection at the Cartesian velocity (1, 1/2) on the annulus written with sigma.chart and geometry=, outflow walls, uniform or graded radial nodes: the test of the charted surface of L2a" },
+  { case = "N17-annulus-diffusion", builder = "build_annulus_diffusion", structure = "2-D scalar diffusion with one conductivity on every axis on the charted annulus, theta periodic, its walls held at the values 1 and 0: the end distances of a chart at a concave and a convex wall (L2b-1)" },
+  { case = "N17-chart-diffusion", builder = "build_chart_diffusion", structure = "2-D scalar two_point() diffusion of -k grad(u) on the doubly periodic unit square under a chart, turned by pi / 6 (K-orthogonal) or sheared x = s + t / 4 (sine 1 / sqrt(17)), written with sigma.chart: the stencil of a chart at the surface (L2b-1)" },
+  { case = "N17-graded-slope", builder = "build_graded_slope", structure = "1-D centred slope of a Program, one step that commits the slope of a computed cell field on 24 graded cells, a rod x = tanh(3 s) / tanh(3) with physical ends or a periodic ring x = s - 0.6 sin(2 pi s) / (2 pi) whose seam translates by 1: the reflected and translated neighbour centroids (L2b-2)" },
 ]
 measurement = """
 At the base d06bb2c1 both builders were refused at resolution with
@@ -201,16 +246,104 @@ measures uniform. The graded segment (widths in a ratio of 92), on a native buil
 widths and cell measures equal bitwise to its node differences, takes 8 steps of an independent
 NumPy assembly of the same two-point scheme on the graded cells to 8.9e-16 relative, and keeps its
 inventory sum |K| u to 2.2e-16 relative
-(tests/python/integration/runtime/test_n17_static_geometry_graded_native.py)."""
-refusal_set = "removed: native_geometry_evolution_unavailable for a clock-free map of rank one or two whose consumers the arrays serve; added at resolution, for a layout that the arrays serve: a static_geometry_* refusal for every consumer they do not serve (trace, face law, sampling, spatial operator, source-authored numerics, diffusion, boundary, boundary data, initial value, step strategy, Program operation, several layouts), and for a map that reads a parameter, whose rank is not its layout's or is neither one nor two, with a component that reads no coordinate, a chart without its rule or node positions with one, a frame mismatch, a layout with no native projection, an adaptive layout or an embedded boundary; at bind: one collective refusal when a certificate fails; unchanged for every box and for the moving interval"
+(tests/python/integration/runtime/test_n17_static_geometry_graded_native.py).
+L1b, at the base b8871a23: pops.Graded was not a word of the surface (SymbolNotInSurface), a map of
+rank three was refused at resolution with static_geometry_rank_unavailable and the diffusion of
+node positions of rank two with static_geometry_diffusion_unavailable (tests committed failing
+first). With L1b, every case written with the surface and run through pops.compile, pops.bind and
+simulation.run (same build): the graded ring of 32 cells (widths in a ratio of 3.95) takes 10
+SSPRK2 steps of an independent NumPy assembly of the same scheme on the graded cells to 2.7e-16
+relative for the two-point diffusion (the state moves by 1.2 percent, the same oracle on uniform
+spacing is 1.3e-2 away) and to 2.8e-16 for the Rusanov advection (21 percent, 0.12 away), the
+inventory sum |K| u kept to 1.1e-16 relative in the diffusion and exactly in the advection; its
+nodes nest bitwise from 32 and from 24 cells at ratios 2, 4 and 8
+(tests/python/integration/runtime/test_n17_graded_ring_native.py). The plane of 16 x 8 cells graded
+along x (ratio 3.82) takes 8 steps of its Rusanov oracle on the graded faces to 4.4e-16 (10
+percent, 5.3e-2 away), its face speed |v.n| exactly, the inventory kept exactly
+(test_n17_graded_plane_native.py). The box of rank three, 8 x 6 x 4 cells graded along x and z
+(ratios 3.35 and 1.93), has widths, face measures and cell measures equal bitwise to the node
+differences and their products, takes 6 steps of its two-point oracle to 4.1e-16 (0.76 percent,
+4.5e-3 away) and keeps its inventory to 1.1e-16 (test_n17_graded_box_native.py). The wall nodes of
+probe 3 nest bitwise from 32 to 256 cells and their end widths keep the ratio of the slopes of
+tanh(3 s), from 0.91 to 0.99 of cosh(3)^2. After the merge of N3 lot 1 (base 0d3a0b41) the same
+cases, whose words are now a face authored in source and a StencilFlux, were refused at resolution
+(static_geometry_source_numerics_unavailable, and static_geometry_consumer_unavailable for the
+Program operation stencil_flux_divergence; tests committed failing first). With L1b they run on
+the arrays to the same oracles: the ring to 2.7e-16 (diffusion) and 2.8e-16 (advection), the
+plane to 4.4e-16, the box to 4.1e-16, the inventories as before; the guard reads the measures: on
+the graded ring under FixedDt and SSPRK2 the step 5 percent above the bound of its cells (8.1e-3
+for the diffusion, 1.26e-2 for the advection) is refused with reason 503, where the logical
+spacing would admit steps 6.0 and 2.5 times larger, and the step 5 percent below is admitted
+(test_n17_graded_ring_native.py); master's Rusanov written in source takes on the annulus the 4
+steps of the oracle of the catalogue face to 4.6e-16 (test_n17_static_geometry_graphs.py). The
+stencil and source-face regressions of the uniform box pass unchanged
+(test_stencil_adaptive_cfl_native.py, test_stencil_runtime_parameter_native.py,
+test_stencil_flux_v02_native.py, test_api_v02_python_faces_native.py,
+test_lib_face_body_swap_native.py). L2a, at the base 454031a8: a support had no reading chart and
+pops.Uniform no keyword geometry (tests committed failing first). With L2a (same build) the annulus
+of 8 x 16 cells written with the surface, compiled, bound and run, has the cell measures of the
+polar map to 1.3e-15 relative, every cell closed within 0.029 of its bound; a constant state stays
+bitwise constant over 6 SSPRK2 steps, and a state that varies along both axes, which moves by 2.9
+percent, takes the 6 steps of an independent NumPy assembly of the same Rusanov faces on the polar
+chords to 7.1e-16 relative, 9.3e-3 away from the same assembly with the exact normal radius
+|a n_x + b n_y|; the annulus with graded radial nodes (widths in a ratio of 2.56) the same to
+1.4e-15, 7.4e-16 and 9.6e-3 (test_n17_chart_annulus_native.py). L2b-1, at the base 83fa129b: the
+arrays of a chart stated NaN for the distance of an end face, and a StencilFlux or a prepared
+diffusion on a chart was refused at resolution (static_geometry_stencil_unavailable,
+static_geometry_diffusion_unavailable; tests committed failing first). With L2b-1 (gcc 13, Kokkos
+4.4.1 Serial, builds of 73fda3ac) the annulus of 8 x 16 cells diffused with one conductivity on
+every axis, theta periodic, its walls held at 1 and 0 and written below the surface, has its
+centroid distances and the mirrored end distances 2 |m_f - c_K| (0.152 at the concave wall, 0.0717
+at the convex one) equal to an independent computation to 1.7e-14 relative across r and 4.7e-16
+across theta, publishes an orthogonality below 1e-13 (its polar faces are orthogonal to the line of
+the centroids, to 5.1e-15 in the independent computation), and takes the 10 SSPRK2 steps of an
+independent NumPy assembly of the same faces to 1.7e-14 relative, the state moving by 0.50 at most,
+the inner ring warmed by 0.17 and the outer one cooled by 0.31 on average. At the surface,
+two_point() on the doubly periodic unit square of 8 x 8 cells turned by pi / 6 publishes an
+orthogonality below 1e-13 and takes the 8 steps of the box to 1.7e-16 relative (its NumPy assembly
+to 5.0e-16, the state moving by 2.6 percent); sheared, x = s + t / 4, it publishes the sine 1 /
+sqrt(17) to 1e-14, its centroid distances equal the independent ones bitwise, and it takes the 8
+steps of the NumPy assembly of its faces to 5.7e-16, 7.2e-4 away from the box
+(test_n17_chart_two_point_native.py). On the same builds the charted annulus of L2a, the graphs of
+L1a and the graded files of L1b pass unchanged. L2b-2, at the base 64955be6: the Program operation
+of centred differences, the scratch that it fills and the cellwise algebra that consumes it were
+refused on the arrays (static_geometry_consumer_unavailable), and the System had no seam that
+evaluates the slope of its arrays (tests committed failing first). With L2b-2 (gcc 13, Kokkos 4.4.1
+Serial, builds of cf3d1682) one step of a Program on 24 graded cells commits the centred slope of a
+computed cell field: on the rod x = tanh(3 s) / tanh(3), with physical ends, an affine field bound
+at the centroids returns its slope to 2.5e-14 in the 22 interior cells, the end cells read the
+repeated end value on the reflected centroid 2 m_f - c_K (0.496 and 0.533 of the slope), and every
+cell is the NumPy oracle of the same ghosts bitwise; on the ring x = s - 0.6 sin(2 pi s) / (2 pi),
+whose seam translates by 1, a periodic field is the oracle of the translated seam bitwise; on both,
+the seam of the System returns the slopes of the Program bitwise
+(test_n17_centroid_slope_rod_native.py). Through that seam an affine field read at the neighbour
+centroids returns its slope in every cell, walls and seams included, within 3.3 percent of the
+rounding floor of its solve, 32 eps ||dX^-1|| (|e| + ||dX|| |b|) in the infinity norm: to 2.5e-14 on
+the rod and 3.6e-15 on the ring, 3.5e-15 on the annulus of 8 x 16 cells, 1.8e-15 on the sheared
+square of 8 x 8, 5.7e-15 on the graded plane of 16 x 8 and 8.9e-16 on a plane of 6 x 5 node
+positions with walls on both axes (test_n17_centroid_slope_native.py), 2.0e-15 on the graded box of
+8 x 6 x 4 (test_n17_graded_box_native.py); on node positions dX has exact zeros off its diagonal and
+the slope is the quotient of the differences by the diagonal, bitwise. The DN39 correction makes
+that quotient include the sign of zero. Its tests use the walled and periodic node layouts and
+two structures that need the slope's numerical domain checked where it is consumed: a certified
+chart of two periodic shears with a singular matrix of centroid differences, and a graded rod
+whose finite differences produce non-finite quotients. The chart's volume and face certificates
+still serve the other consumers. A Program on the static arrays converges a single numerical
+failure at the slope before publishing the result. The private seam distinguishes the failure
+at its first invalid offset. On the original builds the native files of L1a, L1b, L2a and L2b-1
+pass unchanged."""
+refusal_set = "removed: native_geometry_evolution_unavailable for a clock-free map of rank one or two whose consumers the arrays serve; added at resolution, for a layout that the arrays serve: a static_geometry_* refusal for every consumer they do not serve (trace, face law, sampling, spatial operator, source-authored numerics, diffusion, boundary, boundary data, initial value, step strategy, Program operation, several layouts), and for a map that reads a parameter, whose rank is not its layout's or is neither one nor two, with a component that reads no coordinate, a chart without its rule or node positions with one, a frame mismatch, a layout with no native projection, an adaptive layout or an embedded boundary; at bind: one collective refusal when a certificate fails; unchanged for every box and for the moving interval. L1b removes static_geometry_rank_unavailable for node positions of rank three and static_geometry_diffusion_unavailable for the two-point diffusion of node positions of ranks two and three; it adds static_geometry_rank_unavailable for a chart of rank three (planned, not covered), static_geometry_diffusion_unavailable for a vector, a full tensor or a face wider than its two cells, static_geometry_consumer_unavailable for a reduction that no block owns, and at bind the refusal of node positions whose ends leave the bounds of their box by more than 4 ulp; at elaboration of pops.Graded, SupportMismatch for ends beyond 4 ulp, nodes that do not increase strictly, a node that is not finite or a node function that reads anything but s, numbers, pi and the constants of the model, and NotYetElaborated (N11) for a word that the analytic programs of bind lack. After N3 lot 1, L1b removes static_geometry_source_numerics_unavailable for a face authored in source (riemann.User), which the arrays now serve, and keeps it for a trace authored in source; it removes static_geometry_consumer_unavailable for the Program operation stencil_flux_divergence on node positions, and adds static_geometry_stencil_unavailable for a StencilFlux on a chart or one that reads a cell beyond the two cells of its face, the spacing of another axis or a field. L2a adds at the surface: SupportMismatch for a chart of rank one or a separable chart (naming pops.Graded), a keyword that names an axis of the support, a number of keywords other than its rank, a component that reads no coordinate, a coordinate that no component reads, a read other than the coordinates of the support, numbers and pi, a second chart, identify after chart, a degenerate piece read from the boundary, geometry= on a box or on node positions, and pops.Graded keyed by a frame axis; AmbiguousElaboration for a charted support without geometry=; NotYetElaborated for frame axes not named x and y (G03), a chart of rank three, a word that the analytic programs of bind lack (N11), a case on a support with a degenerate piece (L2c), a coordinate read, pops.project, a value relation or a reconstruction above the cell values on a charted support (L2b) and weighted (L3); ReservedName for an axis named chart or weighted. L2b-1 removes static_geometry_stencil_unavailable for a StencilFlux on a chart whose rows are one law on every logical axis and static_geometry_diffusion_unavailable for the two-point diffusion of a chart with one coefficient on every logical axis; it adds static_geometry_stencil_unavailable for the rows of a stencil that differ by axis on a chart, static_geometry_diffusion_unavailable for a coefficient that differs by axis on a chart, and at bind the refusal of a chart whose end cell keeps its centroid outside its end face. L2b-2 removes static_geometry_consumer_unavailable for the Program operations gradient (centred differences), scalar_field and pointwise_expression on every static layout, and keeps it for the Laplacian and the divergence of a Program, which read the uniform spacings"
 paths = [
+  "include/pops/mesh/geometry/centroid_slope.hpp",
   "include/pops/mesh/geometry/coordinate_map.hpp",
   "include/pops/mesh/geometry/prepared_metric_provider.hpp",
   "include/pops/mesh/geometry/static_geometry.hpp",
   "include/pops/numerics/diffusion/prepared_diffusion.hpp",
   "include/pops/numerics/fv/normal_flux.hpp",
+  "include/pops/numerics/fv/stencil_flux.hpp",
   "include/pops/numerics/spatial/embedded_boundary/operator.hpp",
   "include/pops/numerics/spatial/nd/finite_volume.hpp",
+  "include/pops/numerics/spatial/nd/static_geometry_face_frequency.hpp",
   "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
   "include/pops/numerics/spatial/operators/masked_operator.hpp",
   "include/pops/runtime/analytic/expression.hpp",
@@ -230,6 +363,7 @@ paths = [
   "python/pops/codegen/_static_geometry_consumers.py",
   "python/pops/codegen/program_emit_diffusion.py",
   "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_emit_stencil_flux.py",
   "python/pops/codegen/program_moving_layout_contract.py",
   "python/pops/mesh/_static_geometry.py",
   "python/pops/mesh/moving.py",
@@ -237,6 +371,13 @@ paths = [
   "python/pops/physics/_facade_compile.py",
   "python/pops/runtime/_runtime_executor.py",
   "python/pops/runtime/_runtime_mesh_lowering.py",
+  "python/pops/surface/__init__.py",
+  "python/pops/surface/_elaborate.py",
+  "python/pops/surface/_geometry.py",
+  "python/pops/surface/_model.py",
+  "python/pops/surface/_program.py",
+  "python/pops/surface/_scheme.py",
+  "python/pops/time/_program/local.py",
   "src/runtime/system/system_embedded_boundary.cpp",
   "src/runtime/system/system_impl.hpp",
   "src/runtime/system/system_install.cpp",
@@ -282,4 +423,379 @@ paths = [
   "python/pops/codegen/program_emit_stencil_flux.py",
   "python/pops/model/stencil_expression.py",
   "python/pops/time/_program/stencil_flux.py",
+]
+
+[[mechanism]]
+id = "state-operand-of-a-matrix-free-operator"
+issue = "ROM-90"
+rule = "IR26"
+pre_freeze = true
+what = """
+A matrix_free_operator of domain and range "state" may record its apply on State placeholders of
+the unknown's block, with the State's state_ref, instead of scalar fields (set_apply,
+time/_program/local.py). The apply then evaluates the model's own rates at its operand: the -div_h
+of a StencilFlux, with the runtime parameters that its body reads (core commit 2f44e80f). Only a
+reference realization (SV9) applies such an operator, inside its region, through the same authoring
+body. The operator is linear in its operand: a nonlinear face enters through its frozen-coefficient
+linearization, every factor that is not linear in the iterate read from a frozen state through the
+StencilFlux's field inputs; the entry claims no symmetry or definiteness. The apply block is a
+declaration that the accepted decomposition (rule linear_solve), the identity and pops.inspect
+read; no C++ lambda is emitted from it. Its native realization is the operator generated by G10,
+and until G10 a native solve of such an operator is refused by that name. No structure of the
+corpus solves with it yet: the first case that does is L1-d of section 17.1, a litmus case, and the
+first corpus structure comes with G10. Every operator recorded on scalar fields keeps the code it
+had."""
+structures = [
+  { case = "M05", builder = "build_m05", structure = "2-D compressible Navier-Stokes, frozen-coefficient linearization of the viscous and conductive face stencil, four components" },
+  { case = "M23", builder = "build_m23", structure = "2-D Hall MHD, frozen-coefficient linearization of the Hall and ohmic face stencil, eight components" },
+]
+measurement = """
+The need is the stiff part of a face stencil, which an implicit solve applies at a State. build_m05's
+viscous face reports the frequency 2((4/3) mu + k/cv) / (rho h^2) (navier_stokes_face), and
+build_m23 caps its step at 0.01 / (cells^2 (hall + ohmic + 0.01)): both steps shrink as h^2. Both
+faces are nonlinear in the state (1/rho, the viscous work, J x B / (n e)), so an implicit solve
+applies their frozen-coefficient linearization, which is linear in the iterate and general (no SPD
+claim). A scalar-field apply cannot evaluate either stencil: it has no state_ref, no ghosts of the
+block and no parameter table. The case that needs the mechanism now is L1-d of section 17.1, with nu a
+model.parameter, solved by cg() (n9/relation_solves/lot_note.md, probes P1 and P2: 50 steps equal
+to the native realization within 4.4e-16; one artifact bound with nu = 0.01 and 0.05, each equal to
+its constant build and within 1.1e-15 of a dense solve).
+tests/python/integration/runtime/test_state_operand_n9_native.py records the frozen-coefficient
+stencils of build_m05 and build_m23 on a State operand with general properties, lowers each inside
+a reference region, and checks one evaluation against the explicit face at the frozen state (on an
+8x8 grid, within 64 ulps of max|W| over the explicit step; observed 1.1e-11 relative for M05 and
+9.1e-11 for M23); it solves with neither."""
+refusal_set = "added: the native solve of a State-operand matrix_free_operator, refused naming the operator generated by G10; a rate that is not region-safe in a State-operand apply, refused by its name; removed: nothing"
+paths = [
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/surface/_solver.py",
+  "python/pops/time/_program/local.py",
+  "python/pops/time/_program/solve.py",
+  "python/pops/time/solve_outcome.py",
+]
+
+[[mechanism]]
+id = "refinement-region-reads-a-runtime-parameter-of-its-model"
+issue = "ROM-95"
+rule = "DM13b"
+pre_freeze = true
+what = """
+A refinement region (Tag or Coarsen written as a function of cell) may read model.value(p), a
+RuntimeParam of the model of a block whose state it reads, as the body of a StencilFlux does
+(stencil-body-reads-a-runtime-parameter-of-its-model): resolution lists it as a model parameter
+row of the criterion, compile routes it to its slot in the block's RuntimeParams table through
+program_param_entries, and the native tagging plan reads program.params(block).get(slot) when it
+is prepared, after the case parameters in the parameter table of the generated patch entry. The
+value is bind data: it enters neither the identity of the criterion nor the C++. A
+set_program_params on a table that the criterion reads drops the prepared tagging program, so the
+next tagging reads the table as it then stands, as the faces and stencils do. A criterion that reads no model parameter keeps its
+identity and its code. The when body of a Regrid and its indicators refuse a model parameter by its
+name and point to case.param (named follow-up of N12)."""
+structures = [
+  { case = "M05", builder = "build_m05", structure = "2-D compressible Navier-Stokes: a region on the cell Reynolds number reads the viscosity nu that the viscous face stencil reads" },
+  { case = "M23", builder = "build_m23", structure = "2-D Hall MHD: a region on the resolution of the ion inertial length reads the hall coefficient that the Hall face stencil reads" },
+]
+measurement = """
+On aa2064ce a region reads only case parameters: model.value(p) is refused ('RuntimeParamRef is
+none of them'), so a criterion on the cell Reynolds number of M05 or the ion inertial length of
+M23 must copy nu or the hall coefficient into a case parameter, two values that bind can set apart,
+whereas Q4 puts a value that a relation reads on the model. lot 3c part 1 met it in the initial
+Field/Ghost fixture, which read a model threshold through the tag graph. Measured by
+tests/python/unit/amr/test_refinement_criterion_model_parameters.py (two defaults give one
+identity; the parameter follows the case parameters in the patch table; refusals by name) and
+tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py: a region on
+model.value(nu) bound to 0.3 (default 0.5) gives the same requests, boxes and state at every step
+to T_END as the same region on a case threshold of 0.3, and one artifact bound to 0.3 and 0.6
+marks exactly the cells above each value."""
+refusal_set = "removed: the refusal of a RuntimeParamRef in a refinement region ('RuntimeParamRef is none of them') for a RuntimeParam of the model of a block that the region reads, read by one of its formulas; added: a parameter without its declaring handle, a non-runtime parameter, a parameter of the model of no block that the region reads, one that no formula of the model reads (no slot, at compile and at bind), and a model parameter in a Regrid when body or indicator, each refused by its name"
+paths = [
+  "include/pops/runtime/amr_system.hpp",
+  "python/bindings/core/init/init_amr.cpp",
+  "python/pops/codegen/_compile_drivers.py",
+  "python/pops/codegen/program_emit_refinement_criterion.py",
+  "python/pops/mesh/_amr/refinement_criterion.py",
+  "python/pops/mesh/_amr/regrid_decision.py",
+  "python/pops/runtime/_runtime_mesh_lowering.py",
+  "src/runtime/amr/amr_system.cpp",
+]
+
+[[mechanism]]
+id = "cell-step-bound-selection-with-failure-consensus"
+issue = "ROM-89"
+rule = "IR26"
+pre_freeze = true
+what = """
+Select the minimum binary64 bound of a traced function over the accepted cells of a Uniform
+System. The generated entry evaluates it in one pass per box and records the first global
+ordinal in each invalid category. An exact rank reduction decides both the minimum and the
+dispatch or cell failure. The same installed-plan check guards both native step selection
+routes. The core supplies ownership, reduction and diagnostics."""
+structures = [
+  { case = "T02", builder = "tests/python/integration/mpi/probe_cell_step_bound_collectives.py::_tutorial", structure = "two-dimensional bounded linear transport with MUSCL and a Courant cap" },
+  { case = "L1", builder = "tests/python/integration/runtime/test_cell_step_rule_n8_native.py::_compile_l1", structure = "two-dimensional periodic advection and diffusion with a combined advective and parabolic restriction" },
+]
+measurement = """
+tests/python/integration/mpi/probe_cell_step_bound_collectives.py, witnesses committed ahead of
+the mechanism at c31146291 and 248dee69d. On d13ad5e0, the Mac Dim2 MPICH build at two ranks
+executes five MPI_Allreduce calls per rank and two Kokkos reduction launches per owned box
+for selection alone on each structure. Rank 0 owns one box; rank 1 owns none.
+The bound is exact on each rank: T02 0x1.ccccccccccccdp-8, L1 0x1.97a4b01a16d40p-7.
+The PF8 witness requires one Allreduce per rank and one traversal per owned box."""
+refusal_set = "the installed-plan refusal applies to both public step routes; cells selection requires binary64 and keeps the named non-finite and non-positive diagnostics"
+paths = [
+  "include/pops/parallel/comm.hpp",
+  "include/pops/runtime/program/generated_step_bound.hpp",
+  "include/pops/runtime/program/program_runtime_state.hpp",
+  "include/pops/runtime/system.hpp",
+  "python/bindings/core/init/init_system.cpp",
+  "python/pops/codegen/program_emit_step_bound.py",
+  "python/pops/runtime/_simulation.py",
+  "python/pops/runtime/_step_strategy.py",
+  "src/runtime/system/system.cpp",
+  "src/runtime/system/system_io.cpp",
+]
+
+[[mechanism]]
+id = "durable-uniform-checkpoint-owner-roles"
+issue = "ROM-93"
+rule = "CN11"
+pre_freeze = true
+what = """
+A Uniform checkpoint can encode the installed Program's block positions and the logical roles of
+its sealed auxiliary registry. The generated registrars carry the projection of their typed
+providers and consumers from the authenticated Plan. The model cache key includes that projection
+when it affects the emitted package. Checkpoint capture and preflight build a detached view from
+the final sealed registry, including consumers added after the first seal. They use the same
+native contract writer and map storage columns, accepted publication points and invalidations
+bijectively. POPSCAR2 carries the block positions; POPSAUX4/5 carries the projected registry and
+its data. Runtime execution keeps its installed registry and Program. Provider-empty and other
+unqualified Uniform routes use the named formats, as do AMR and the public storage observation.
+The outer restart identity and guards are retained."""
+structures = [
+  { case = "Uniform-two-block-transport", builder = "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py::test_transport_checkpoint_follows_logical_block_order", structure = "Two-dimensional scalar transport with distinct block states, speeds and analytic auxiliary columns in the same storage group" },
+  { case = "M14", builder = "build_m14", structure = "Uniform two-fluid sheath with a solved Poisson field, wall and reservoir integrals, and dense source-state history" },
+]
+measurement = """
+The two tracked witnesses were added in a961b503e and collected after 266fb0765, before the
+mechanism in bcdd0bcad. On 027d0ef7, ROMEO job 828832 (c031, Dim2 serial) reached both intended
+assertions after the same-owner restart and its next step. Renaming the transport owners changes
+the native carrier bytes and the nested auxiliary contract despite equal program_id and state.
+Renaming only the M14 Case changes the nested contract despite equal program_id, accepted
+states, field, history and integrals. Jobs 828798 and 828809 retain the original two preimages.
+At c2630db58 both tracked witnesses pass in Dim2 serial along with the acquired Uniform v2
+migration and CP9 controls. ROMEO job 828884 authenticates the exact MPI SDK built in 828873.
+Each renamed pair has identical POPSCAR2 and POPSAUX4 bytes at two ranks, one with no boxes, with
+bitwise accepted and next states on same-owner restart. The actual transport storage columns
+change from (1,0) to (0,1) on both ranks. M14 binds a Program consumer after seal and retains its
+four-window FV-Poisson oracle. The MPI publication control of 828873 retains the named format.
+Cold and warm runs with different call and declaration orders show equal generated source and
+inner images for each fixed Plan. The stock and distributed receipts are recorded for ROM-93."""
+refusal_set = """
+The Uniform preflight refuses invalid carrier positions and shapes, mixed named and positional
+families, and a positional auxiliary contract that differs from the final sealed registry. The
+resealed contract attack refuses before restart transaction and leaves the accepted state intact.
+The named readers, outer artifact mismatch, and historical AMR restart rules keep their authority.
+A profile lacking the complete installed projection continues to write the named formats."""
+paths = [
+  "include/pops/runtime/checkpoint/state_carriers.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/auxiliary_checkpoint.hpp",
+  "include/pops/runtime/system/derived_aux_provider.hpp",
+  "include/pops/runtime/system/exact_aux_registry.hpp",
+  "python/bindings/core/init/init_system.cpp",
+  "python/pops/codegen/_analytic_aux.py",
+  "python/pops/codegen/_artifact_identity.py",
+  "python/pops/codegen/_checkpoint_provenance.py",
+  "python/pops/codegen/_compile_emit.py",
+  "python/pops/codegen/_phases.py",
+  "python/pops/codegen/program_emit_kernels.py",
+  "python/pops/physics/_facade_compile.py",
+  "python/pops/runtime/_system_io.py",
+  "src/runtime/system/auxiliary_checkpoint_projection.hpp",
+  "src/runtime/system/system.cpp",
+  "src/runtime/system/system_aux.cpp",
+]
+
+[[mechanism]]
+id = "compiled-face-frequency-retry"
+issue = "ROM-113"
+rule = "IR26"
+pre_freeze = true
+what = """
+Retry one correctable face rejection within the compiled Uniform Advance attempt budget. The
+collective step rejection provides the measured frequency. A finite and strictly shorter
+Courant correction is checked again against the output or run frontier before the next trial.
+Rollback, retry epochs and publication retain their existing ownership."""
+structures = [
+  { case = "T02", builder = "tests/python/integration/runtime/test_cell_step_rule_n8_native.py::_master", structure = "two-dimensional bounded linear transport with a MUSCL reconstruction and a face-written wave speed" },
+  { case = "L1", builder = "tests/python/integration/runtime/test_l1_program_a_dim1_native.py::_compile", structure = "periodic advection and diffusion on an interval with two diffusive faces and a shared Courant guard" },
+]
+measurement = """
+Native failure witnesses at c04f6d9a run the two authored structures through the installed
+Dim2 and Dim1 SDKs. The legacy step controller rejects once and accepts a corrected step for
+each. The compiled transport reports the recorded frequency 64 and publishes zero steps
+under both cells and stability; the compiled interval reports 1566.72 and publishes zero
+steps. The same fixtures require one rejected attempt followed by one published attempt at
+the measured Courant correction, with exact reference state. The interval keeps its
+zero-rejection trajectory and distinguishes a one-attempt budget that preserves accepted state."""
+refusal_set = "correction requires the recorded face schema and a compiled step rule, a strictly shorter duration after frontier handling, and a remaining attempt; fixed failures and exhausted method budgets keep their typed origin"
+paths = [
+  "include/pops/runtime/program/advance_run.hpp",
+  "python/pops/runtime/_simulation.py",
+  "src/runtime/system/system.cpp",
+]
+
+[[mechanism]]
+id = "mesh-owns-a-standalone-generated-refinement-criterion"
+issue = "ROM-95"
+rule = "DM13b"
+pre_freeze = true
+what = """
+The mesh can install a compiled local-state refinement region independently of a time Program.
+The package uses the established generated-criterion patch ABI and the same kernel emitter. The
+mesh validates the artifact and its ordered field table against its block state authorities and
+publishes the entry and table together after agreement, before any hierarchy exists. The prepared
+tagger runs the same generated entry on valid patches and uses the same tagging policy and
+topology publication. A compiled Program still owns the regions that it exports itself."""
+structures = [
+  { case = "AMR-scalar-seed", builder = "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp::test_amr_seed_no_refine/PreparedTaggingSeedsExactGeometryWithoutReadMutation", structure = "Gaussian tracer: initial hierarchy seeding and exact geometry on first mesh access, without time advance" },
+  { case = "AMR-Euler-component-regrids", builder = "tests/cpp/integration/amr/test_amr_regrid_variable.cpp::test_amr_regrid_variable/FixedRefineRequestsDoNotRedilateExistingBuffer", structure = "Euler energy bump with uniform density: explicit repeated regrid and buffer retention, without time advance" },
+]
+measurement = """
+On d7677287 (ROMEO 829122, GNU 15.3, Dim2 Float64 without MPI), the 17 original CTest cases
+pass. Installing the two emitted tables in the real fixtures, with qualified routes and exact
+component names, fails at the first patch_boxes call because the criterion has no executable
+owner without a compiled Program. The two red tests precede the core change at 0b46601e. The
+historical evaluator gives identical boxes, coarse state and clock with the old and qualified
+route (one tracer image and five Euler images). The same test IDs check the generated results,
+native marks at the threshold and its Real neighbors, normalized decisions, wrong artifact and
+route, duplicate ownership and non-finite regrid refusal without publication."""
+refusal_set = "removed: a local conserved-state criterion had no generated entry outside a compiled Program; added: standalone artifacts refuse another field table, storage route, binary, ABI, or criterion identity, late or duplicate installation, and dependencies requiring halo or parameter/Program authority"
+paths = [
+  "include/pops/runtime/amr/generated_refinement_criterion.hpp",
+  "include/pops/runtime/amr_system.hpp",
+  "python/pops/codegen/program_emit_refinement_criterion.py",
+  "src/runtime/amr/amr_system.cpp",
+]
+
+[[mechanism]]
+id = "cartesian-coordinate-reads-at-flux-faces"
+issue = "ROM-106"
+rule = "CF15"
+pre_freeze = true
+what = """
+A physical flux and its Jacobian can read coordinates supplied by the installed Cartesian
+metric. Resolved provider roles identify coordinate axes and project them into native storage
+slots. The face materializer binds one physical point to the coordinate slots of both traces
+and delegates the remaining slots to their original per-trace readers. At an identified
+periodic endpoint it uses the physical lower bound on the face axis and the same tangential
+coordinates. Metric measures and face orientation continue through FaceContext. Cell readers
+use the analytic cell-center provider with halo exchange from the installed topology.
+For a pack without coordinate slots, the registered face program follows its original path."""
+structures = [
+  { case = "periodic-kinematic-film", builder = "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py::build_film_case", structure = "One-dimensional cubic kinematic-wave flux, spatial mobility and state-dependent Rusanov radius" },
+  { case = "rotation-on-offset-box", builder = "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py::build_rotation_case", structure = "Two-dimensional linear advection with signed tangential speed and upwind switching" },
+]
+measurement = """
+The native-integration builders were committed at e396d5a5c before the product change
+ad415af40. On that pre-product revision and the verified stock Mac Kokkos Dim1 and Dim2 SDKs,
+both tests reached the intended G03 refusal in the public Surface compilation route after
+selection of their native dimension. The corresponding constant controls ran one native step.
+With the product, the two tracked native trials each run one SSPRK2 step at dt=0.002 without
+rejection and meet their independent conservative update oracles. The private case probes
+observe a maximum absolute error of 1.11e-16 in both dimensions. The Dim2 resolved consumer-to-
+native projection exchanges x and y slots. A native pack probe observes x=1.625 on both sides
+of an offset patch interface and x=1 at both periodic endpoints. Its diagnostic flux and
+Jacobian radius use the same point despite distinct ordinary values on the two traces and
+a coordinate cell sentinel. Reversing the face orientation inverts the flux density with
+an unchanged radius. An oversized fixed step exercises the real user-face stability refusal
+in both laws, preserving the native accepted state bytes and cursor. ROM-106 holds the raw
+case, SDK, slot projection and rollback receipts.
+"""
+refusal_set = """
+The admitted surface scope is fixed steps, CellAverage, Uniform Cartesian support with fully
+periodic topology and constant reconstruction. The surface refuses coordinate flux laws on
+unqualified routes. Native startup checks the installed topology and pack before evaluation.
+A coordinate-bearing face law refuses a reader that lacks the prepared face-point carrier.
+The existing native user-face guard still refuses over-budget attempts before publication."""
+paths = [
+  "include/pops/numerics/fv/flux_interfaces.hpp",
+  "include/pops/numerics/spatial/operators/cartesian_operator.hpp",
+  "include/pops/physics/composition/composite.hpp",
+  "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+  "python/pops/codegen/component_provider_packs.py",
+  "python/pops/codegen/module_emit_brick.py",
+  "python/pops/fields/aux.py",
+  "python/pops/surface/_elaborate.py",
+]
+
+[[mechanism]]
+id = "owned-cell-fold-for-exclusive-acceptance-guards"
+issue = "ROM-20"
+rule = "IR26"
+pre_freeze = true
+what = """
+Lower a contiguous exclusive guard cut on one exact State and evaluation point to a single
+owned-cell fold. Eligible consumers test a strict positive component minimum with either
+all-component finiteness or the status of a checked closed expression. Every row and active
+intermediate of the latter still uses the original checked expression lowering. The maximum
+of exact small status codes carries cell invalidity, while route, lane, layout and representation
+failures keep their own words and priorities. The original guard consumes the result within the
+same invocation, retaining the failure action, site and envelope. The runtime uses the installed
+Uniform owner tiling, one local traversal per owner box and one collective on the prepared lane.
+The unmasked host route is admitted cold. Active or inactive installed embedded geometry,
+non-host execution, alternate readers and unmatched guard shapes retain their existing lowering."""
+structures = [
+  { case = "M1a-heun-moving-members", builder = "tests/python/integration/runtime/test_g03_moving_members_native.py::_inverting_trial", structure = "Dim1 moving-member geometry advanced by Heun, finite geometry and positive member volume required before its interstage rate" },
+  { case = "M17", builder = "tests/python/integration/runtime/test_fan_li15_public_composition_runtime.py::test_installed_fan_li15_public_composition", structure = "Dim2 nonconservative Fan–Li15 path flux with SSPRK2, all checked expression intermediates and a strict positive SPD margin required at its guard" },
+]
+measurement = """
+With F2 and moving members assembled at af2146c5, ROMEO jobs 829097 (Heun) and 829098 (M17)
+run the actual Programs with the existing state, rollback, failure action and source-site oracles.
+Both controls perform seven Allreduces per guard in MPI2 and MPI3, including the rank without an
+owner box. Heun traverses the owned box four times. M17 traverses it five times in steady state
+and uses two additional scratch initializations at first evaluation. The private witness was
+recorded before product at 33527d1a0. The PF8 witness requires one Allreduce per guard and one
+traversal per owner box, with no intermediate Field materialization."""
+refusal_set = "Existing scientific guards and checked-expression refusals remain, including their order and transaction; ineligible support, backend, additional readers and expression/effect shapes retain the general lowering"
+paths = [
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/program/program_context_owned_guard_fold.inc",
+  "include/pops/runtime/system.hpp",
+  "include/pops_headers.manifest",
+  "python/pops/codegen/program_emit_control.py",
+  "python/pops/codegen/program_emit_ops.py",
+  "python/pops/codegen/program_owned_guard_fold.py",
+  "src/runtime/system/system_embedded_boundary.cpp",
+]
+
+[[mechanism]]
+id = "uniform-mounted-exchange-incidence"
+issue = "ROM-93"
+rule = "CF15"
+pre_freeze = true
+what = """
+Proposed cold installation proof of external-trace production and ordered consumption, bound to
+the installed Uniform Program and its block routes. The exact same lowering decisions supply both
+the executable calls and the descriptor. An installed Program without sufficient evidence cannot
+provide this proof. No change to exchange archives, named restart, or the accepted ledger."""
+structures = [
+  { case = "M14", builder = "build_m14", structure = "Transport and Poisson coupling with two distinct charge destinations" },
+  { case = "M06", builder = "build_m06", structure = "SSPRK2 constitutive diffusion with stage-ordered heat accumulation" },
+]
+measurement = """
+Four public native mounts at def68439 with the qualified Dim2 serial SDK. M14 reassigns the four
+authored trace reads to the opposite declared recipients, preserving the face selectors; Stefan
+permutes the two stage pairs, preserving the four selectors and destination. Generated calls and
+loaded DSO identities distinguish both alterations. Neither original nor altered installed Program
+exposes a consumption proof. The acquired M14 archive's four keys also allow a false reassignment
+with different binary64 amounts; reversing the Stefan window's four reads leaves its binary64
+amount identical. Source evidence: ROM-93 incidence/causal-comparison.log and independent-replay.log.
+"""
+refusal_set = "Preserve existing named restart and projection refusals; the proposed proof refuses missing or unsupported consumption authority."
+paths = [
+  "python/pops/codegen/program_integral_transfers.py",
+  "python/pops/codegen/program_emit_control.py",
+  "include/pops/runtime/program/module_metadata.hpp",
+  "src/runtime/system/system_io.cpp",
 ]

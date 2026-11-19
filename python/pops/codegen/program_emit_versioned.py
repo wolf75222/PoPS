@@ -283,20 +283,20 @@ def emit_versioned_op(program, value, var, model, lines, prelude, block_idx, fie
     capacity = "ctx.continuation_byte_capacity()"
     if op in FOREST_OPS and forest is None:
         raise ValueError("AMR forest operation lacks its closed parent/child graph")
-    if op in ("continuation_source_topology", "continuation_target_topology"):
-        dimension = signature["dimension"]
-        field = signature["field_signature"]
-        if field.get("field_authority") is None:
-            owner = str(block_idx[field["block"]])
-        else:
-            from pops._structural_data import canonical_json
-            from pops.time.canonical_data import _json_ready
-            owner = json.dumps(canonical_json(_json_ready(field["field_authority"])))
-        lines.append('static_assert(pops::kNativeDimension == %d, "regrid topology dimension mismatch");' % dimension)
-        method = "continuation_source_topology" if op == "continuation_source_topology" else "continuation_target_topology"
-        expression = "ctx.%s(%s, %s, %s)" % (method, owner, args[1], args[0])
-        _checked(lines, token, finite_cpp_type(signature), [], expression,
-                 message="authenticated regrid topology view")
+    if op == "continuation_regrid_read":
+        # N10 lot 3: the read along the map the regrid issues; the runtime owns the copy.
+        owned = token + "_owned"
+        lines.append('static_assert(pops::kNativeDimension == %d, "regrid_read dimension mismatch");'
+                     % value.attrs["dimension"])
+        lines.append("const auto %s = ctx.regrid_read(%s, %s);" % (owned, args[0], args[1]))
+        lines.append('ctx.continuation_local_phase([&] { if (!%s) throw std::logic_error('
+                     '"regrid_read returned no owned storage"); }, "regrid_read storage validation");'
+                     % owned)
+        var[value.id] = "(*%s)" % owned
+        return
+    if op == "continuation_regrid_integral":
+        lines.append("const pops::Real %s = ctx.regrid_integral(%s, %d);"
+                     % (token, args[0], value.attrs["component"]))
         var[value.id] = token
         return
     if op == "continuation_regular_phase":

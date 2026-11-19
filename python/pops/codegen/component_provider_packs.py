@@ -126,6 +126,8 @@ def canonical_emitter_carrier_value(value: Any) -> Any:
             "producer": value.producer_kind, "restart": value.restart_policy,
             "regrid": value.regrid_policy, "boundary": value.boundary,
             "expression": value.expression.to_data(), "frame": value.frame.to_dict(),
+            **({"entity_coordinate_axis": value._entity_coordinate_axis}
+               if value._entity_coordinate_axis is not None else {}),
         })
     if isinstance(value, Mapping):
         return {
@@ -518,6 +520,8 @@ def auxiliary_provider_routes(
                 "expression": producer.options()["expression"],
                 "boundary": producer.boundary.to_data(),
             }
+            if isinstance(producer, AnalyticAux) and producer._entity_coordinate_axis is not None:
+                route_data["entity_coordinate_axis"] = producer._entity_coordinate_axis
         else:
             raise TypeError("unsupported auxiliary producer kind %r" % producer.producer_kind)
         routes[key] = route

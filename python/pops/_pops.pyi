@@ -7,6 +7,7 @@ from typing import Literal, TypedDict
 # are only the typed seam consumed by ``pops._bootstrap``.
 __all__ = (
     "StepAttemptRejected",
+    "StepTerminalFailure",
     "__version__",
     "__abi_version__",
     "__release_contract_sha256__",
@@ -82,6 +83,12 @@ class StepAttemptRejected(RuntimeError):
     disposition: Literal["retry", "reject"]
     reason_code: int
     failed_rank: int
+    typed_failure_schema: str
+    typed_failure_payload: bytes
+
+class StepTerminalFailure(RuntimeError):
+    typed_failure_schema: str
+    typed_failure_payload: bytes
 
 class _RuntimeEnvironmentReport(TypedDict):
     dimension: int
@@ -153,6 +160,7 @@ class _NativeWorldCommunicator:
     def broadcast_bytes(self, payload: bytes, root: int = 0) -> bytes: ...
     def allgather_bytes(self, payload: bytes) -> tuple[bytes, ...]: ...
     def gather_bytes(self, payload: bytes, root: int = 0) -> tuple[bytes, ...] | None: ...
+    def _agree_program_bind(self, program: bytes | None) -> int: ...
     def duplicate_observer_lane(self, identity: str) -> _NativeObserverMpiLane: ...
 
 class _NativeObserverMpiLane:

@@ -4,6 +4,7 @@
 
 #include "system_impl.hpp"
 #include "auxiliary_consumer_preparation.hpp"
+#include "auxiliary_checkpoint_projection.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -712,6 +713,12 @@ std::string System<Dim>::prepared_auxiliary_read_authority(std::string_view cons
 template <int Dim>
 runtime::system::AuxiliaryCheckpointAcceptedState<Dim>
 System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
+  return capture_auxiliary_checkpoint_(false);
+}
+
+template <int Dim>
+runtime::system::AuxiliaryCheckpointAcceptedState<Dim> System<Dim>::capture_auxiliary_checkpoint_(
+    bool positional) const {
   const ExecutionLane& lane = prepared_boundary_execution_lane();
   runtime::system::AuxiliaryCheckpointAcceptedState<Dim> result;
   std::vector<const MultiFab<Dim>*> carriers;
@@ -806,6 +813,12 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
   std::string collective_contract;
   std::exception_ptr finalization_error;
   try {
+    if (positional) {
+      if (!checkpoint_has_positional_state_authority())
+        throw std::logic_error("Uniform checkpoint has no installed positional authority");
+      const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+      result = projection.to_durable(result, cells);
+    }
     const auto bytes = runtime::system::serialize_auxiliary_checkpoint_state(result);
     ExactContractBuilder exact;
     exact.text("pops.uniform-exact-auxiliary-checkpoint")
@@ -826,6 +839,29 @@ System<Dim>::capture_auxiliary_checkpoint_accepted_state() const {
 }
 
 template <int Dim>
+bool System<Dim>::checkpoint_has_positional_state_authority() const {
+  return p_->program_.artifact_backed_ && !p_->program_.installed_hash_.empty() &&
+         program_block_map().size() == static_cast<std::size_t>(p_->blocks_.size()) &&
+         runtime::system::AuxiliaryCheckpointProjection<Dim>::available(p_->auxiliary_registry_);
+}
+
+template <int Dim>
+std::vector<std::uint8_t> System<Dim>::capture_positional_auxiliary_checkpoint() const {
+  return runtime::system::serialize_auxiliary_checkpoint_state(capture_auxiliary_checkpoint_(true));
+}
+
+template <int Dim>
+void System<Dim>::validate_positional_auxiliary_checkpoint(
+    std::span<const std::uint8_t> bytes) const {
+  const auto state = runtime::system::deserialize_auxiliary_checkpoint_state<Dim>(bytes, true);
+  if (!state.positional || !checkpoint_has_positional_state_authority())
+    throw std::invalid_argument(
+        "Uniform checkpoint has no matching positional auxiliary authority");
+  const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+  projection.validate_durable(state, domain_cells(p_->dom));
+}
+
+template <int Dim>
 std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity() const {
   const auto state = runtime::system::current_accepted_auxiliary_checkpoint_observation(
       p_->auxiliary_registry_, p_->dirty_auxiliary_providers_);
@@ -835,7 +871,14 @@ std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_auxiliary_capacity()
       throw std::overflow_error("System auxiliary checkpoint component capacity overflows size_t");
     components += group.component_count;
   }
-  return {runtime::system::serialize_auxiliary_checkpoint_state(state).size(), components};
+  auto capacity = runtime::system::serialize_auxiliary_checkpoint_state(state).size();
+  if (checkpoint_has_positional_state_authority()) {
+    const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+    const auto positional = projection.to_durable(state, 0);
+    capacity = std::max(capacity,
+                        runtime::system::serialize_auxiliary_checkpoint_state(positional).size());
+  }
+  return {capacity, components};
 }
 
 template <int Dim>
@@ -850,8 +893,14 @@ std::pair<std::size_t, std::size_t> System<Dim>::checkpoint_program_auxiliary_ca
     throw std::logic_error(
         "System future auxiliary capacity requires its installed Program clock owner");
   const auto current = checkpoint_auxiliary_capacity();
-  return {runtime::system::program_auxiliary_metadata_capacity(p_->auxiliary_registry_, manifest),
-          current.second};
+  auto capacity =
+      runtime::system::program_auxiliary_metadata_capacity(p_->auxiliary_registry_, manifest);
+  if (checkpoint_has_positional_state_authority()) {
+    const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+    capacity = std::max(capacity, runtime::system::program_auxiliary_metadata_capacity(
+                                      projection.durable_registry(), manifest));
+  }
+  return {capacity, current.second};
 }
 
 template <int Dim>
@@ -988,7 +1037,15 @@ void System<Dim>::restore_auxiliary_checkpoint_accepted_state_bytes(
   try {
     if (!payload)
       throw std::invalid_argument("System auxiliary checkpoint byte provider is empty");
-    candidate.emplace(runtime::system::deserialize_auxiliary_checkpoint_state<Dim>(payload()));
+    candidate.emplace(
+        runtime::system::deserialize_auxiliary_checkpoint_state<Dim>(payload(), true));
+    if (candidate->positional) {
+      if (!checkpoint_has_positional_state_authority())
+        throw std::invalid_argument(
+            "Uniform checkpoint has no matching positional auxiliary authority");
+      const runtime::system::AuxiliaryCheckpointProjection<Dim> projection(p_->auxiliary_registry_);
+      *candidate = projection.to_live(*candidate, domain_cells(p_->dom));
+    }
   } catch (...) {
     decode_error = std::current_exception();
   }
@@ -1063,6 +1120,11 @@ template std::string System<kNativeDimension>::prepared_auxiliary_read_authority
     std::string_view, std::size_t, std::uint64_t) const;
 template runtime::system::AuxiliaryCheckpointAcceptedState<kNativeDimension>
 System<kNativeDimension>::capture_auxiliary_checkpoint_accepted_state() const;
+template bool System<kNativeDimension>::checkpoint_has_positional_state_authority() const;
+template std::vector<std::uint8_t>
+System<kNativeDimension>::capture_positional_auxiliary_checkpoint() const;
+template void System<kNativeDimension>::validate_positional_auxiliary_checkpoint(
+    std::span<const std::uint8_t>) const;
 template std::pair<std::size_t, std::size_t>
 System<kNativeDimension>::checkpoint_auxiliary_capacity() const;
 template std::pair<std::size_t, std::size_t>

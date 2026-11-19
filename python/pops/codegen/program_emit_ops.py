@@ -53,6 +53,7 @@ from pops.codegen.program_emit_solve import (
     _emit_solve_linear,
 )
 from pops.codegen.program_emit_schedule import _emit_schedule_wrap
+from pops.codegen.program_solver_region import emit_axpy, emit_lincomb
 from pops.codegen.program_emit_field_routes import field_point_cpp, resolved_field_route
 from pops.identity import make_identity
 from pops._ir.data_model import field_role, is_field_leaf
@@ -430,11 +431,6 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
     if v.op in STRUCTURED_OPS:
         emit_structured_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
         return
-    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
-    if v.op in FIELD_REPRESENTATION_OPS:
-        from .program_emit_field_representation import emit_field_representation
-        emit_field_representation(program, v, var, model, lines, prelude, block_idx, field_plans, target)
-        return
     from .program_emit_versioned import VERSIONED_OPS, emit_versioned_op
     if v.op in VERSIONED_OPS:
         emit_versioned_op(program, v, var, model, lines, prelude, block_idx, field_plans, target)
@@ -462,7 +458,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             lines.extend("  ctx.require_program_field_access(%s);" % var[item.id] for item in reads)
             lines.append("}); // Program numerical Field input authority")
     from .program_emit_transform_obligation import emit_physical_input_guards
-    lines += emit_physical_input_guards(v, var)
+    physical_input_guards = emit_physical_input_guards(v, var)
+    owned_guard_result = var.get(("owned_guard_result", v.id))
+    if owned_guard_result and physical_input_guards:
+        lines += ["if (!%s) {" % owned_guard_result, *physical_input_guards, "}"]
+    else:
+        lines += physical_input_guards
     bidx = (_required_block_index(block_idx, v.block, "emit op %r" % v.name)
             if v.block is not None else None)
     if v.id in var.get(("moving_deferred_rates",), ()):
@@ -1163,8 +1164,10 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         from .program_emit_stencil_flux import emit_stencil_flux
         from .program_value_authority import delegated_output_boundaries
         from .program_models import model_for_node
+        from pops.codegen.program_emit_diffusion import program_reads_static_geometry
         publication = emit_stencil_flux(v, var, lines, block=bidx, target=target,
-                                        model=None if model is None else model_for_node(model, v))
+                                        model=None if model is None else model_for_node(model, v),
+                                        static_geometry=program_reads_static_geometry(model))
         output_setup_end, delegated_before_write = delegated_output_boundaries(
             v, var, lines, _profile_start, bidx, publication)
     elif v.op == "diffusive_rhs":
@@ -1283,8 +1286,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                                  % (source, int(v.id), var[state_in.id]))
                     lines.append("ctx.source_default_into(%d, %s, %s%s);"
                                  % (bidx, var[state_in.id], source, trace_suffix))
-                    lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);"
-                                 % (var[v.id], source))
+                    lines.append(emit_axpy(var, var[v.id], "static_cast<pops::Real>(1)", source))
             elif want_default_source:
                 # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
                 # bidx), the historical path: sources is None (legacy) or "default" is requested.
@@ -1368,7 +1370,7 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 provider_plans=provider_plans, consumer_qid=consumer_qid,
                 plan_exprs=plan_exprs,
             )
-            lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+            lines.append(emit_axpy(var, var[v.id], "static_cast<pops::Real>(1)", ssrc))
         if want_flux:
             from pops.codegen.program_partition_stability import emit_transport_frequency
             emit_transport_frequency(v, var, lines, model=node_model, block_index=bidx,
@@ -1389,9 +1391,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, 0, %s);"
                      % (var[v.id], int(v.id), var[state_in.id]))
         output_setup_end = len(lines)
-        lines.append(
-            "ctx.lincomb(%s, static_cast<pops::Real>(1), %s, static_cast<pops::Real>(0), %s);"
-            % (var[v.id], var[state_in.id], var[state_in.id]))
+        lines.append(emit_lincomb(var, var[v.id], "static_cast<pops::Real>(1)", var[state_in.id],
+                                  "static_cast<pops::Real>(0)", var[state_in.id]))
         outcome = "implicit_source_outcome_%d" % v.id
         report = "implicit_source_report_%d" % v.id
         lines.append(
@@ -1615,9 +1616,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         if target == "system":
             owner = _cartesian_generated_owner_index(
                 block_idx, v, where="preflight gradient %r" % v.name)
-            lines.append(
-                "ctx.require_cartesian_generated_operator(%d, %s);"
-                % (owner, json.dumps("gradient")))
+            # On static geometry arrays the slope reads their centroids (N17 L2b-2); the Cartesian
+            # guard refuses a System that carries them.
+            from pops.codegen.program_emit_diffusion import program_reads_static_geometry
+            guard = ("require_static_geometry_operator" if program_reads_static_geometry(model)
+                     else "require_cartesian_generated_operator")
+            lines.append("ctx.%s(%d, %s);" % (guard, owner, json.dumps("gradient")))
         lines.append("ctx.gradient(%s, %s);" % (_deref(var[o.id]), _deref(var[p.id])))
         var[v.id] = var[o.id]
     elif v.op == "divergence":
@@ -1652,6 +1656,25 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
             ),
             target=target,
         )
+    elif v.op == "matrix_free_operator" and v.attrs.get("apply_operand") == "state":
+        # A State-operand operator (IR26): its apply block is a declaration that the passes read;
+        # a reference realization applies it inside its own region, and a native solve of it is
+        # refused naming G10 (native_realization). No C++ lambda is emitted from it, and the
+        # source map records each node of the declaration with no statement.
+        from pops.codegen.program_source_map import operation
+        from pops.time._program.traversal import _STRUCTURED_BLOCK_KEYS
+
+        lines.append("// %s: the apply of a State-operand operator is a declaration (IR26)"
+                     % v.name)
+        pending = list(reversed(v.attrs["apply_block"]))
+        while pending:
+            node = pending.pop()
+            with operation(node, lines, channel="operator_declaration"):
+                pass
+            for key in reversed(_STRUCTURED_BLOCK_KEYS):
+                nested = node.attrs.get(key)
+                if isinstance(nested, (list, tuple)):
+                    pending.extend(reversed(nested))
     elif v.op == "matrix_free_operator":
         # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
         # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
@@ -1686,7 +1709,16 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
         emit_spatial_solve(program, v, base, var, model, lines, prelude, block_idx,
                            field_plans, target, emit_residual)
     elif v.op == "solve_linear":
-        _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
+        from pops.time.solve_outcome import solve_realization_kind
+
+        if solve_realization_kind(v) == "reference":
+            # SV12: the same solve, realized by its region (N9 lot « La référence sous les
+            # solves de relation », §3.2).
+            from .program_emit_solve import emit_reference_solve
+            emit_reference_solve(program, v, var, model, lines, prelude, block_idx, field_plans,
+                                 target)
+        else:
+            _emit_solve_linear(program, v, base, var, prelude, lines, target=target)
     elif v.op == "solve_evidence":
         # SV5: a read of the evidence of a consumed solve, a copy of its report (program_emit_solve).
         from .program_emit_solve import solve_evidence_cpp
@@ -1873,16 +1905,52 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 raise ValueError("a trial guard of a traced method rejects the attempt")
             phase = "trial" if site["retry_can_change"] else "trial_failure"
             message = "%s failed: %s" % (site["site"], site["variant"])
-        from pops.codegen.program_emit_structured_control import _uniform_int
-        _uniform_int(var[condition.id], lines, "acceptance guard differs across execution lane")
-        lines.append("if (!(%s)) {" % var[condition.id])
+        from pops.codegen.program_source_map import emission_program_hash
+        from pops.time._program.guard_failure_sites import SCHEMA, guard_failure_site
+
+        site = guard_failure_site(program, v, emission_program_hash(program))
+        token = var[condition.id]
+        payload_args = ""
+        if target == "system" and condition.vtype != "bool":
+            raise TypeError("acceptance_guard requires a scalar Bool condition")
+        if site is not None or target == "system":
+            observed = "guard_observed_%d" % v.id
+            lines.append("const bool %s = %s;" % (observed, token))
+            token = observed
+        if site is not None:
+            payload_args = ", %s, std::string(%s) + (%s ? '1' : '0')" % (
+                json.dumps(SCHEMA), json.dumps(site.payload_prefix()), token)
+        disagreement = "acceptance guard differs across execution lane"
+        if target == "system":
+            # ProgramContext includes ConsensusWords. Preserve both Bool extrema
+            # on the same lane and reuse the observed value after agreement.
+            lines.extend([
+                ("if (!%s) {" % owned_guard_result) if owned_guard_result else "{",
+                "  pops::ConsensusWords<2> guard_consensus;",
+                "  const auto slot = guard_consensus.agreement(static_cast<int>(%s));" % token,
+                "  guard_consensus.reduce(ctx.prepared_execution_lane());",
+                "  if (guard_consensus.differs(slot))",
+                "    throw pops::runtime::program::StepAttemptRejected("
+                "pops::SolveStatus::kInvalidEvaluation, \"structured_control\", %s);"
+                % json.dumps(disagreement),
+                "}",
+            ])
+        else:
+            from pops.codegen.program_emit_structured_control import _uniform_int
+
+            _uniform_int(token, lines, disagreement)
+        lines.append("if (!(%s)) {" % token)
         if type(action) is RejectAttempt:
             lines.append(
                 "  throw pops::runtime::program::StepAttemptRejected("
-                "pops::SolveStatus::kInvalidEvaluation, %s, %s);"
-                % (json.dumps(phase), json.dumps(message)))
+                "pops::SolveStatus::kInvalidEvaluation, %s, %s%s);"
+                % (json.dumps(phase), json.dumps(message), payload_args))
         elif type(action) is FailRun:
-            lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+            if site is None:
+                lines.append("  throw std::runtime_error(%s);" % json.dumps(message))
+            else:
+                lines.append("  throw pops::runtime::program::StepTerminalFailure(%s%s);"
+                             % (json.dumps(message), payload_args))
         else:  # guarded by Program.guard; defense in depth for a forged IR
             raise TypeError("acceptance_guard has an unsupported terminal action")
         lines.append("}")
@@ -2023,9 +2091,8 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                             if field_role(v) == "field" else ""))
             output_setup_end = len(lines)
             for inp, coeff in terms:
-                lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
-                             % (var[v.id], _coeff_cpp(coeff), var[inp.id],
-                                _coeff_metadata_cpp(coeff)))
+                lines.append(emit_axpy(var, var[v.id], _coeff_cpp(coeff), var[inp.id],
+                                       _coeff_metadata_cpp(coeff)))
             if "cell_field_projection" in v.attrs:
                 from pops.codegen.program_emit_stencil_inputs import emit_cell_sample_extension
                 emit_cell_sample_extension(v,var,lines,block=bidx,target=target)

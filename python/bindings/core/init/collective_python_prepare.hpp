@@ -4,6 +4,7 @@
 // enter MPI, return a lazy computation, or publish accepted state. Every rank calls the same method.
 #include <pybind11/pybind11.h>
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/consensus_words.hpp>
 
 #include <algorithm>
 #include <array>
@@ -78,6 +79,37 @@ py::object collective_prepare(const Communicator& owner, py::handle callback) {
       throw std::invalid_argument("collective preparation requires a callable");
     return py::reinterpret_borrow<py::function>(callback)();
   });
+}
+
+// One agreement over the exact Program digest and the status of local verification.
+// A missing digest carries a preparation failure that every participant observes.
+template <class Communicator>
+int agree_program_bind(const Communicator& owner, py::handle program) {
+  constexpr std::size_t size = 32;
+  std::array<unsigned char, size> digest{};
+  bool prepared = false;
+  if (PyBytes_CheckExact(program.ptr())) {
+    const auto bytes = exact_bytes(program);
+    if (bytes.size() == size) {
+      std::copy_n(bytes.begin(), size, digest.begin());
+      prepared = true;
+    }
+  }
+  ConsensusWords<1 + 2 * size> words;
+  const auto error = words.failure(!prepared);
+  std::array<std::size_t, size> program_slots{};
+  for (std::size_t byte = 0; byte < size; ++byte)
+    program_slots[byte] = words.agreement(digest[byte]);
+  const auto communicator = open_communicator(owner);
+  {
+    py::gil_scoped_release release;
+    words.reduce(communicator);
+  }
+  if (words.failed(error))
+    return 1;
+  const bool differs = std::any_of(program_slots.begin(), program_slots.end(),
+                                   [&](auto slot) { return words.differs(slot); });
+  return differs ? 2 : 0;
 }
 
 // Immutable Python bytes remain alive as binding arguments while the GIL is released. We borrow

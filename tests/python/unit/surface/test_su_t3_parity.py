@@ -233,8 +233,9 @@ def test_l1_provenance_names_the_line_of_the_surface_case(l1):
     full = json.loads(l1["resolved"].snapshot._canonical_json)
     operators = full["blocks"]["advection_diffusion"]["model"]["manifest"]["operators"]
     assert operators
+    # N11 lot 2b-i (CC2, C47): the artifact projection names the block by its position.
     assert all("provenance" not in operator for operator in _artifact(l1["resolved"])[
-        "payload"]["blocks"]["advection_diffusion"]["model"]["manifest"]["operators"])
+        "payload"]["blocks"]["$block0"]["model"]["manifest"]["operators"])
     for operator in operators:
         primary = operator["provenance"]["primary"]
         assert (primary["file"], int(primary["line"]["$scalar"]["value"])) == (
