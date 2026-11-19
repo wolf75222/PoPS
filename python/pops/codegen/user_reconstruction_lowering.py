@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+_FINITE_ACCUMULATOR = "reconstruction_finite"
+
 
 def prepare_user_reconstruction_carrier(emitter: Any, numerics: Any) -> Any:
     """Retain an authenticated method body on the private compiler view.
@@ -94,12 +96,9 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
     for offset in options["sample_offsets"]:
         spelling = "m%d" % -offset if offset < 0 else "p%d" % offset
         sample_bindings["pops_recon_sample_%s" % spelling] = "sample(%d)" % offset
-    expression_lines, rendered, observed = _cse_emit(
+    expression_lines, rendered = _cse_emit(
         [descriptor.expression], "pops::Real", "    ",
-        materialize_all=True, return_names=True, scalar_bindings=sample_bindings)
-    finite = " && ".join(
-        [*("std::isfinite(%s)" % item for item in observed),
-         "std::isfinite(%s)" % rendered[0]])
+        materialize_all=True, scalar_bindings=sample_bindings, finite_accumulator=_FINITE_ACCUMULATOR)
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",
@@ -113,8 +112,8 @@ def emit_user_reconstruction_policy(emitter: Any) -> str:
         "  template <class Sample>",
         "  POPS_HD pops::Real stencil_face_value(const Sample& sample) const {",
         *expression_lines,
-        "    return (%s) ? (%s) : std::numeric_limits<pops::Real>::quiet_NaN();"
-        % (finite, rendered[0]),
+        "    return (%s && std::isfinite(%s)) ? (%s) : std::numeric_limits<pops::Real>::quiet_NaN();"
+        % (_FINITE_ACCUMULATOR, rendered[0], rendered[0]),
         "  }",
         "};",
         "static_assert(pops::ReconstructionPolicy<UserReconstructionPolicy>);",
@@ -150,15 +149,15 @@ def _emit_joint_policy(impl, descriptor):
             offset,
             starts[row] + component,
         )
-    expression_lines, rendered, observed = _cse_emit(
+    expression_lines, rendered = _cse_emit(
         descriptor.expression,
         "pops::Real",
         "    ",
         materialize_all=True,
-        return_names=True,
         scalar_bindings=bindings,
+        finite_accumulator=_FINITE_ACCUMULATOR,
     )
-    finite = " && ".join("std::isfinite(%s)" % value for value in (*observed, *rendered))
+    finite = " && ".join([_FINITE_ACCUMULATOR, *("std::isfinite(%s)" % value for value in rendered)])
     lines = [
         "namespace pops_generated {",
         "struct UserReconstructionPolicy {",

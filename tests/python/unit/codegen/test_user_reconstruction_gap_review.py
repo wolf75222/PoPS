@@ -15,7 +15,7 @@ import pytest
 @pytest.fixture(scope="module")
 def compiled_user_policies(tmp_path_factory):
     from pops.codegen.user_reconstruction_lowering import emit_user_reconstruction_policy
-    from pops.math import minimum, maximum, where
+    from pops.math import maximum, minimum, sqrt, where
     from pops.numerics import reconstruction
     compiler = shutil.which("c++")
     if compiler is None:
@@ -24,6 +24,10 @@ def compiled_user_policies(tmp_path_factory):
         lambda sample: minimum(sample(0), sample(1)),
         lambda sample: maximum(sample(0), sample(1)),
         lambda sample: where(sample(0) > 0, lambda: sample(1), lambda: sample(2)),
+        lambda sample: where(minimum(sqrt(-sample(0)), 1.) > 0.,
+                             lambda: sample(1), lambda: sample(2)),
+        lambda sample: where(minimum(sqrt(-sample(0)), 1.) > 2.,
+                             lambda: sample(1), lambda: sample(2)),
     )
     source = ["#include <cmath>", "#include <limits>", "#define POPS_HD",
               "namespace Kokkos { using std::fmin; using std::fmax; }",
@@ -88,4 +92,11 @@ def test_where_false_branch_does_not_read_inactive_sample(compiled_user_policies
 
 def test_nonfinite_predicate_sample_cannot_choose_a_finite_branch(compiled_user_policies):
     value, _ = evaluate(compiled_user_policies[2], (float("nan"), 7., 9.))
+    assert math.isnan(value)
+
+
+@pytest.mark.parametrize("index,read_counts", [(3, (1, 1, 0)), (4, (1, 0, 1))])
+def test_invalid_intermediate_preserves_later_selected_read(compiled_user_policies, index, read_counts):
+    value, counts = evaluate(compiled_user_policies[index], (1., 7., 9.))
+    assert counts == read_counts
     assert math.isnan(value)

@@ -138,6 +138,7 @@ def _cse_emit(
     return_native_statuses: bool = False,
     scalar_bindings: Any = None,
     observe: Any = None,
+    finite_accumulator: str | None = None,
 ) -> Any:
     """Return (local_declaration_lines, [C++ per root]). Compound subexpressions seen >= 2 times
     become ``cseK_`` locals. roots: list of Expr.
@@ -146,6 +147,9 @@ def _cse_emit(
     including a non-finite intermediate that a later comparison or IEEE min/max could otherwise
     conceal. ``return_names`` additionally returns the local names in declaration order;
     ``observe``, a predicate on a materialized expression, keeps only the names it accepts.
+    With ``finite_accumulator`` the caller checks the final values and the accumulator.
+    Each observed declaration contributes in its own scope. Only the accumulator
+    is shared across guarded branches, and its value never gates their evaluation.
 
     With a ``literal_renderer``, scalar literals also acquire the local numeric type
     before any operation and share the scope of their use.
@@ -283,21 +287,26 @@ def _cse_emit(
                     neutral = (joint_neutral(expression, real) if joint_kind(expression)
                                else "std::numeric_limits<%s>::quiet_NaN()" % real)
                     value = "((%s) ? (%s) : %s)" % (prerequisite, value, neutral)
-                if conditional and observe_finite and not joint_kind(expression):
+                if conditional and observe_finite and finite_accumulator is None and not joint_kind(expression):
                     declarations.append("%s%s %s = 0;" % (indent, real, name))
                     lines.append("%s%s = %s;" % (indent, name, value))
                 else:
                     lines.append("%sconst %s %s = %s;" % (
                         indent, "auto" if joint_kind(expression) else real, name, value))
                 if not joint_kind(expression) and (observe is None or observe(expression)):
-                    observed_names.append(name)
+                    if finite_accumulator is None:
+                        observed_names.append(name)
+                    else:
+                        lines.append("%s%s &= std::isfinite(%s);" % (indent, finite_accumulator, name))
             cse_map[k] = name
         rendered = [_cpp_cse(r, cse_map, key_memo, guarded) for r in scope_roots]
         return lines, rendered
 
     lines, rendered = emit_scope(roots, {}, "", False)
     lines = declarations + lines
-    if controlled and not return_names:
+    if finite_accumulator is not None:
+        lines.insert(0, "%sbool %s = true;" % (indent, finite_accumulator))
+    elif controlled and not return_names:
         finite = " && ".join("std::isfinite(%s)" % name for name in observed_names) or "true"
         rendered = [value if joint_kind(root) else
                     "((%s) ? (%s) : std::numeric_limits<%s>::quiet_NaN())" % (finite, value, real)
