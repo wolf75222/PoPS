@@ -48,8 +48,11 @@ int main(int argc, char** argv) {
       else if (variant == "prepared_constitutive") {
         write_definitions(source, pops::test::fickian, "test-prepared-constitutive-amr");
         source << "#define POPS_TEST_PREPARED_CONSTITUTIVE_AMR\n";
+      } else if (variant == "empty_cadence") {
+        write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
+        source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
       } else
-        throw std::invalid_argument("unknown Forward Euler Program fixture");
+        throw std::invalid_argument("unknown AMR Program fixture");
       source << "#define POPS_TEST_EULER_SOLVE_DEFAULT "
              << (variant == "gravity" || variant == "riemann") << '\n';
       if (variant == "riemann")

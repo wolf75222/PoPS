@@ -13,6 +13,10 @@ constexpr int block_count = int(std::size(blocks));
 constexpr const char* primary_clock = pops::test::kPreparedConstitutiveAmrClock;
 constexpr const char* program_name = "test-prepared-constitutive-amr";
 constexpr std::uint64_t flux_bound = 2;
+#elif defined(POPS_TEST_EMPTY_AMR_CADENCE)
+constexpr const char* primary_clock = "test.clock.macro";
+constexpr const char* program_name = "test-empty-amr-cadence";
+constexpr std::uint64_t flux_bound = 0;
 #else
 constexpr const char* primary_clock = "test.clock.macro";
 constexpr const char* program_name = "test-forward-euler-amr";
@@ -57,7 +61,7 @@ extern "C" bool pops_program_has_dt_bound() {
   return false;
 }
 extern "C" bool pops_program_has_flux_expression() {
-  return true;
+  return flux_bound != 0;
 }
 extern "C" int pops_program_flux_expression_budget_count() {
   return block_count;
@@ -181,6 +185,8 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   context->configure_primary_clock(primary_clock);
 #if defined(POPS_TEST_PREPARED_CONSTITUTIVE_AMR)
   pops::test::install_prepared_constitutive_step(context);
+#elif defined(POPS_TEST_EMPTY_AMR_CADENCE)
+  context->install([](double) {}, context);
 #else
   pops::test::install_forward_euler_step(context, POPS_TEST_EULER_SOLVE_DEFAULT);
 #endif

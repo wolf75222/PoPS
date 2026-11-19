@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "explicit_amr_program.hpp"
 #include "standalone_amr_fixture_criterion.hpp"
 
@@ -381,11 +382,19 @@ TEST(test_amr_seed_no_refine, AcceptedCadencePublishesTagDerivedRegridOnlyWhenDu
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
   config.regrid_every = 2;
-  auto system = make_system(config, corner_bump(config.shape, false));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 0.5}});
-  system.install_program_step([](double) {});
+  const auto& criterion = pops::test::empty_cadence;
+  auto system =
+      make_system(config, corner_bump(config.shape, false), {}, criterion.state_for("tracer"));
+  criterion.install<Dim>(system);
+  EXPECT_FALSE(system.uses_runtime_engine());
+  system.install_program(POPS_TEST_EMPTY_CADENCE_PROGRAM_SO);
+  EXPECT_TRUE(system.uses_runtime_engine());
+  EXPECT_EQ(system.installed_program_hash(),
+            std::string("test-empty-amr-cadence/") + criterion.identity);
+  system.mark_bound();
 
   const std::vector<pops::AmrPatch<Dim>> initial = system.patch_boxes();
+  ASSERT_GT(system.n_levels(), 1);
   ASSERT_FALSE(initial.empty());
   system.set_conservative_state("tracer", corner_bump(config.shape, true));
 
