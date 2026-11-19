@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.codegen._plans import ResolvedSimulationPlan
 
 # The face of the transport flux that a generated ghost needs: the source-authored face of the
 # same package. The generated System block has no catalogue face route with a ghost policy.
@@ -84,7 +88,16 @@ def _policy_clock(ghosts: Any) -> str | None:
     return next(iter(clocks), None)
 
 
-def require_clocked_ghost_program(program: Any, blocks: Any, target: str) -> None:
+def require_clocked_ghost_plan(plan: ResolvedSimulationPlan) -> None:
+    require_clocked_ghost_program(
+        ((block.name, block.numerics) for block in plan.blocks),
+        lambda: (plan.time, plan.target),
+    )
+
+
+def require_clocked_ghost_program(
+    blocks: Iterable[tuple[str, Any]], read_program: Callable[[], tuple[Any, str]],
+) -> None:
     """Authenticate temporal boundary uses before compiling any native package."""
     from pops.numerics.stencil_flux import StencilFlux
     from pops.time._program.traversal import all_ops_with_ancestry
@@ -100,6 +113,7 @@ def require_clocked_ghost_program(program: Any, blocks: Any, target: str) -> Non
                 raise NotImplementedError("SourceGhost time requires an uncoupled Uniform boundary")
     if not clocks:
         return
+    program, target = read_program()
     if program is None or target != "system":
         raise NotImplementedError("SourceGhost time requires an exact Uniform Program Clock")
 

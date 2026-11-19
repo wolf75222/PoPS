@@ -245,11 +245,29 @@ def test_generated_boundary_refuses_foreign_clock_before_native_compilation(monk
 
     case, layout = _hand_case(laws, periodic_x=True)
     resolved = _resolved(case, layout)
+    resolved.verify()
     assert resolved.time.clock.name == foreign_clock.name
     assert resolved.time.clock.qualified_id != foreign_clock.qualified_id
     monkeypatch.setattr(_orchestration_compile, "compile_install_models", forbidden)
     with pytest.raises(ValueError, match="SourceGhost.*exact consuming Program Clock"):
         pops.compile(resolved)
+    with pytest.raises(ValueError, match="SourceGhost.*exact consuming Program Clock"):
+        _cpp(resolved)
+
+
+def test_time_independent_ghost_preflight_does_not_read_a_program_clock():
+    from pops.codegen.user_ghost_lowering import require_clocked_ghost_program
+
+    case, layout = _hand_case(_four_sides)
+    resolved = _resolved(case, layout)
+    resolved.verify()
+
+    def forbidden():
+        pytest.fail("a time-independent ghost policy read the Program clock")
+
+    require_clocked_ghost_program(
+        ((block.name, block.numerics) for block in resolved.blocks), forbidden,
+    )
 
 
 @pytest.mark.parametrize(("reads_ghosts", "declares_child"), [

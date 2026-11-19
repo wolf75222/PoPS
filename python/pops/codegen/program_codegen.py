@@ -269,9 +269,8 @@ def _emit_cpp_program_impl(
         from pops.codegen.user_ghost_lowering import require_clocked_ghost_program
 
         require_clocked_ghost_program(
-            program,
             model_graph._numerics_by_block.items(),
-            target,
+            lambda: (program, target),
         )
     # Even an RHS-only Program must cross the same authenticated provider boundary.
     # Otherwise no expression kernel calls ProgramProviderPlans.bind(), allowing a
