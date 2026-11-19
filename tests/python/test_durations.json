@@ -8130,12 +8130,21 @@
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
     "n11_20261119_sealed_canonical_form": {
-      "basis": "Scheduling estimate based on the full cold Mac source-only run with the stock pytest phase collector. Add ten percent to the observed 894.90 s process wall and round up to the next ten seconds. The phase sum and process wall are distinct. This is not a measured GitHub CI or native execution time. Replace from a complete CI per-file timing receipt.",
-      "source_commit": "fd4c2afa407db9e88f9aca3fd0ba3f3f892a5cce",
+      "basis": "Scheduling estimate from the full cold Mac source-only file runs with the stock pytest phase collector. The current source ran in 825.55 s process wall. Retain the existing 990 s estimate, which adds ten percent to the longer 894.90 s historical process wall and rounds up to the next ten seconds. The phase sum and process wall are distinct. These are not measured GitHub CI or native execution times. Replace from a complete CI per-file timing receipt.",
+      "source_commit": "28ba43bcb67d7abb28f0f8ea4e0e697764e5208e",
       "source_sha256": {
-        "tests/python/unit/time/test_program_canonical_form.py": "b801510587fc02b249c18954f8ad1c35acd5f24170ca9293b7db12767d5ea6af"
+        "tests/python/unit/time/test_program_canonical_form.py": "4e00739a4ca27065667316cc5dfc62401ece53644cdd145c88ef4c2ff80cfabc"
       },
       "local_receipts": {
+        "tests/python/unit/time/test_program_canonical_form.py": {
+          "cases": 96,
+          "passed": 96,
+          "reported_phase_seconds": 823.7674,
+          "process_wall_seconds": 825.55
+        }
+      },
+      "historical_receipt": {
+        "source_commit": "fd4c2afa407db9e88f9aca3fd0ba3f3f892a5cce",
         "tests/python/unit/time/test_program_canonical_form.py": {
           "cases": 87,
           "passed": 87,
