@@ -57,16 +57,23 @@ def _source_consumer(route, reading):
     (u,) = state
     flux = model.flux("flux", state=state, frame=frame, components={frame.x: (u,)},
                       waves={frame.x: (1.0,)})
-    if reading == "parameter":
+    if reading in ("parameter", "primitive_parameter"):
         coefficient = model.value(model.param(RuntimeParam("coefficient", default=2.0)))
     elif reading in ("auxiliary", "primitive_auxiliary"):
         # The auxiliary and the state component deliberately have the same spelling.
         coefficient = model.auxiliary("u", frame=frame.canonical_id)
     else:
         coefficient = 2.0
+    if reading in ("primitive_alias_state", "primitive_alias_parameter"):
+        recipe = (model.value(model.param(RuntimeParam("hidden", default=7.0)))
+                  if reading == "primitive_alias_parameter" else 3.0)
+        # The current generated kernel also materializes live primitives discovered after
+        # lowering the qualified state component to its native name.
+        model.primitive("u", recipe * u)
     density = coefficient * u
-    if reading in ("primitive", "primitive_auxiliary"):
-        density = model.primitive("local_density", density)
+    if reading in ("primitive", "primitive_auxiliary", "primitive_parameter"):
+        inner = model.primitive("inner_density", density)
+        density = model.primitive("local_density", inner + u)
     source = model.source("decay", on=state, value=(-density,))
     rate = model.rate("balance", equation=pm.ddt(state) == -pm.div(flux) + source)
     if reading in ("auxiliary", "primitive_auxiliary"):
@@ -107,6 +114,7 @@ def _source_consumer(route, reading):
 
 @pytest.mark.parametrize("route,reading", [
     ("rhs", "state"), ("source", "state"), ("selection", "state"), ("source", "primitive"),
+    ("source", "primitive_alias_state"), ("source", "primitive_alias_parameter"),
 ])
 def test_a_source_of_its_conservative_state_resolves_on_static_geometry(route, reading):
     case, layout = _source_consumer(route, reading)
@@ -120,6 +128,7 @@ def test_a_source_of_its_conservative_state_resolves_on_static_geometry(route, r
 @pytest.mark.parametrize("route,reading", [
     ("rhs", "parameter"), ("source", "parameter"), ("selection", "parameter"),
     ("rhs", "auxiliary"), ("source", "auxiliary"), ("source", "primitive_auxiliary"),
+    ("source", "primitive_parameter"),
 ])
 def test_a_source_reading_a_parameter_or_auxiliary_is_refused_on_static_geometry(route, reading):
     case, layout = _source_consumer(route, reading)
@@ -131,6 +140,31 @@ def test_a_source_reading_a_parameter_or_auxiliary_is_refused_on_static_geometry
     else:
         assert error.value.code == "static_geometry_consumer_unavailable"
         assert error.value.evidence == {"operation": route}
+
+
+def test_a_conservative_read_does_not_emit_an_unread_primitive_of_the_same_name():
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+
+    case, layout = _source_consumer("source", "primitive_alias_parameter")
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    model_graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    cpp = emit_cpp_program(resolved.time, model_graph=model_graph)
+    assert "params.get(" not in cpp
+
+
+def test_the_generated_source_keeps_both_live_primitive_recipes():
+    from pops.codegen.cpp_symbols import variable_identifier
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+
+    case, layout = _source_consumer("source", "primitive")
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    model_graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    cpp = emit_cpp_program(resolved.time, model_graph=model_graph)
+    inner = "const pops::Real " + variable_identifier("inner_density", "prim")
+    outer = "const pops::Real " + variable_identifier("local_density", "prim")
+    assert cpp.index(inner) < cpp.index(outer)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
