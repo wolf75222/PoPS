@@ -37,6 +37,11 @@ A row is a set of words:
     site proof checks their transitive dependence on the exact accepted State and the same point.
     An unmarked operation has no such proof for this use.
 
+``total-storage`` or ``total-density-rate``
+    the operation preserves cell-total storage or evaluates a rate on decoded density and returns
+    the encoded rate of that total. These facts only describe the operation. The resolved storage
+    owner, volume, geometry and step constraints still control when this route serves it.
+
 A row without words records an emitted operation for which lot L grants none of the checked
 capabilities. It makes no claim about the operation's runtime purity or placement.
 
@@ -48,9 +53,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Literal
 
 _WORDS = frozenset(("graph", "fails", "algorithm", "rendezvous", "region", "device", "ordered",
-                    "host-region", "accepted-state-inputs"))
+                    "host-region", "accepted-state-inputs", "total-storage",
+                    "total-density-rate"))
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,7 @@ class Effect:
     device: str | None
     host_region: bool
     accepted_state_inputs: bool = False
+    cell_total: Literal["storage", "density-rate"] | None = None
 
 
 def _row(words: str) -> Effect:
@@ -71,13 +79,17 @@ def _row(words: str) -> Effect:
         raise ValueError("malformed effect row: %r" % words)
     if {"algorithm", "rendezvous"} <= set(tokens) or {"device", "ordered"} <= set(tokens):
         raise ValueError("conflicting effect words: %r" % words)
+    if {"total-storage", "total-density-rate"} <= set(tokens):
+        raise ValueError("conflicting cell-total access words: %r" % words)
     if not {"fails", "algorithm", "rendezvous"}.isdisjoint(tokens) and "graph" not in tokens:
         raise ValueError("an effect word without a GraphFunction contract: %r" % words)
     collective = next((word for word in ("algorithm", "rendezvous") if word in tokens), None)
     device = next((word for word in ("device", "ordered") if word in tokens), None)
     return Effect(graph="graph" in tokens, fails="fails" in tokens, collective=collective,
                   region="region" in tokens, device=device, host_region="host-region" in tokens,
-                  accepted_state_inputs="accepted-state-inputs" in tokens)
+                  accepted_state_inputs="accepted-state-inputs" in tokens,
+                  cell_total=("storage" if "total-storage" in tokens else
+                              "density-rate" if "total-density-rate" in tokens else None))
 
 
 # The spatial operations already refused after synchronization. Their operation names and effect
@@ -153,7 +165,7 @@ _ROWS = {
     "continuation_working_value":          'graph fails rendezvous region',
     "coupled_rate":                         '',
     "coupled_rate_out":                     '',
-    "diffusive_rhs":                        '',
+    "diffusive_rhs":                        'total-density-rate',
     "distributed_balanced_domain":         'graph fails algorithm',
     "distributed_csr":                     'graph fails algorithm',
     "distributed_domain":                  'graph fails algorithm',
@@ -220,7 +232,7 @@ _ROWS = {
     "iteration_success":                   'graph fails rendezvous region',
     "layout_map_export":                    '',
     "layout_map_import":                    '',
-    "linear_combine":                      'graph region',
+    "linear_combine":                      'graph region total-storage',
     "linear_source":                        '',
     "local_transform":                      '',
     "logical_and":                          '',
@@ -248,7 +260,7 @@ _ROWS = {
     "result_payload":                      'graph region',
     "result_success":                      'graph fails rendezvous region',
     "reynolds_update":                      '',
-    "rhs":                                  '',
+    "rhs":                                  'total-density-rate',
     "rhs_jacvec":                           '',
     "scalar_expression":                   'graph fails rendezvous region device',
     "scalar_field":                        'region',
@@ -266,9 +278,9 @@ _ROWS = {
     "solve_outcome_component":             'graph fails algorithm region',
     "solve_spatial_field":                  '',
     "solve_spatial_nonlinear":              '',
-    "source":                               '',
+    "source":                               'total-density-rate',
     "spatial_interaction":                  '',
-    "state":                               'region',
+    "state":                               'region total-storage',
     # PreparedStencilFlux (and acceptance_guard) converges allocation, halo, kernel and validity
     # failures; a guarded capture keeps its exchanges across the region's lexical lifetime.
     "stencil_flux_divergence":             'graph fails algorithm region',
@@ -297,6 +309,12 @@ def effect(op: str) -> Effect:
         return EFFECTS[op]
     except KeyError:
         raise ValueError("Program operation has no row in the effect table: %s" % op) from None
+
+
+def cell_total_density_rate(op: str) -> bool:
+    """Whether the operation uses decoded density and returns an encodable rate."""
+    row = EFFECTS.get(op)
+    return row is not None and row.cell_total == "density-rate"
 
 
 def has_graph_contract(op: str) -> bool:

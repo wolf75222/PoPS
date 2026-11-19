@@ -104,11 +104,20 @@ def test_a_scheme_of_a_later_entity_names_its_lot():
             return None
 
 
-def test_a_cell_scheme_without_axis_names_its_lot():
-    with pytest.raises(surface.NotYetElaborated, match="CellValue, CellRate or CellResidual"):
-        @surface.scheme
-        def pointwise(cell, term):
-            return None
+def test_a_cell_scheme_without_axis_returns_a_cell_rate():
+    """A scheme over cell without axis covers a source and returns CellRate (N15 FaceFlux/CellRate
+    lot FC-1); another builder is refused with the builder to write."""
+    @surface.scheme
+    def wrong(cell, term):
+        return FaceFlux(0)
+
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("decay")
+    u = model.quantity("u", surface.Scalar(domain))
+    decay = model.source(of=u, value=-u)
+    model.balance(ddt(u) == decay)
+    with pytest.raises(surface.RealizationMismatch, match=r"Write CellRate\(value\)"):
+        surface.Numerics(represent={u: surface.CellAverage()}, schemes={decay: wrong()})
 
 
 def test_a_scheme_that_returns_the_wrong_builder_is_refused():

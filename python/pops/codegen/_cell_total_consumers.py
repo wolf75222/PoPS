@@ -15,9 +15,10 @@ serves it (note §4.3, §13, §14; driver's rulings of 12/11 23:00 and 23:05):
   the embedded fluid volume;
 - an initial value projected on the analytic route: the b6 ``ConservativeCellAverage`` gives
   averages; the projection by encode is N16 lot 2's (plan/routes_transitoires.md, line 4);
-- any Program operation other than the stored state, its linear combinations, the two rates
-  that read the decoded state (a stencil flux is refused until a case runs it under a total) and
+- any Program operation other than the stored state, its linear combinations, the three rates
+  that read the decoded state (rhs, diffusive_rhs and a named source) and
   the Advance assessment ``finite()`` of the stored candidate coefficients (``finite_guard_values``);
+  a stencil flux remains outside this set until a case runs it under a total;
 - a prepared boundary component of another block that reads a total through its bound state
   route, which is outside the shared-interface scheduler and still reads accepted storage;
 - a layout mapping that reads or overwrites total storage through a cell-average port;
@@ -29,13 +30,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._ir.effects import EFFECTS
 from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
 from pops.time._program.traced_method import NotYetElaborated
 from pops.time.solve_outcome import RejectAttempt
 
-# The operations that a Program of a total may hold: the state, its combinations, and the rates
-# that read the decoded density (program_emit_totals.TOTAL_RATE_OPS).
-CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs"})
+CELL_TOTAL_PROGRAM_OPS = frozenset(op for op, row in EFFECTS.items()
+                                   if row.cell_total is not None)
 
 # The owner of the projection of an initial value by the encode of its representation.
 _PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection of an initial value by the encode of its "

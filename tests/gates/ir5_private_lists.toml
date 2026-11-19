@@ -91,13 +91,6 @@ owner = "the outputs of an elaborated Advance (§5.2, T33)"
 removed_by = "unassigned: the record body of an Output reads the effect table"
 
 [[list]]
-module = "pops.codegen._cell_total_consumers"
-name = "CELL_TOTAL_PROGRAM_OPS"
-kind = "admission"
-owner = "G03 (consumers of cut-cell measures and physical cell totals)"
-removed_by = "capability-based admission for cell-total consumers"
-
-[[list]]
 module = "pops.codegen._static_geometry_consumers"
 name = "STATIC_GEOMETRY_PROGRAM_OPS"
 kind = "admission"
