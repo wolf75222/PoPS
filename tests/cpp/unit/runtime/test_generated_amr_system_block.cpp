@@ -3879,7 +3879,8 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
 }
 
 namespace {
-template <int Dim> pops::AmrSystemConfig<Dim> noop_history_config() {
+template <int Dim>
+pops::AmrSystemConfig<Dim> noop_history_config() {
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
@@ -3921,12 +3922,18 @@ TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
   EXPECT_EQ(authority,
             (std::tuple{0, -1, "tracer.U", "cell.conservative", "clock.macro", "dense.linear"}));
   const auto& prototype = system.prepared_amr_block_state(0, 0);
-  for (int slot = 0; slot < 2; ++slot) {
-    const auto& field = Access::history_slot(*context, "tracer.rate", 0, slot);
-    EXPECT_EQ(field.ghosts(), prototype.ghosts());
-    EXPECT_EQ(field.layout(), prototype.layout());
-    EXPECT_EQ(field.distribution(), prototype.distribution());
-  }
+  const auto layout = prototype.layout();
+  const auto distribution = prototype.distribution();
+  const auto ghosts = prototype.ghosts();
+  const auto local_rank = prototype.local_rank();
+  const auto expect_initial_storage = [&](const auto& field) {
+    EXPECT_EQ(field.layout(), layout);
+    EXPECT_EQ(field.distribution(), distribution);
+    EXPECT_EQ(field.ghosts(), ghosts);
+    EXPECT_EQ(field.local_rank(), local_rank);
+  };
+  for (int slot = 0; slot < 2; ++slot)
+    expect_initial_storage(Access::history_slot(*context, "tracer.rate", 0, slot));
 
   std::vector<double> before_last_slot0, before_last_slot1;
   std::vector<std::uint8_t> before_last_identity;
@@ -3964,12 +3971,17 @@ TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
   EXPECT_NE(sample_identity, before_last_identity);
   const double time_before = system.time();
   const int step_before = system.macro_step();
+  EXPECT_EQ(time_before, 0.);
+  EXPECT_EQ(step_before, 0);
 
   EXPECT_FALSE(system.regrid_from_prepared_tagging(0));
   EXPECT_EQ(system.time(), time_before);
   EXPECT_EQ(system.macro_step(), step_before);
   EXPECT_EQ(system.history_sample_identity("tracer.rate", 0), sample_identity);
   EXPECT_EQ(Access::history_authority(*context, "tracer.rate", 0), authority);
+  expect_initial_storage(system.prepared_amr_block_state(0, 0));
+  for (int slot = 0; slot < 2; ++slot)
+    expect_initial_storage(Access::history_slot(*context, "tracer.rate", 0, slot));
   EXPECT_EQ(system.block_level_state_global("tracer", 0), uniform);
   EXPECT_EQ(system.engine()->hierarchy().num_levels(), 1u);
   EXPECT_EQ(system.engine()->topology_epoch(), topology_before);
