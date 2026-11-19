@@ -151,3 +151,61 @@ def test_a_total_on_graded_cells_follows_the_numpy_assembly(
         np.testing.assert_allclose(members, oracle_members, rtol=0, atol=8*EPS)
         np.testing.assert_allclose(totals, oracle, rtol=0, atol=_bound(totals, STEPS))
     record_property("oracle", float(np.max(np.abs(totals - oracle))))
+
+
+@pytest.mark.parametrize("location", ["commit", "stage"])
+def test_rounded_cell_collapse_refuses_before_rate_or_commit(
+        location, isolated_native_cache, native_cxx, kokkos_root):
+    """A valid Euler width can round to zero while integrated V stays positive."""
+    from pathlib import Path
+
+    from examples.api_v02 import models_G03_moving_transport as fixture
+    from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
+
+    del isolated_native_cache, native_cxx, kokkos_root
+    fixture_path = Path(fixture.__file__)
+    source = fixture_path.read_text()
+    positional_rate = "node_rate=AMPLITUDE*sin(2*math.pi*x)*cos(2*math.pi*t)"
+    collapsing_rate = (
+        "node_rate=((-4+2**-49)*1024/255)*x*(1-x)*exp(-(2**20)*(x-17/32)*(x-17/32))")
+    assert source.count(positional_rate) == 1
+    source = source.replace(positional_rate, collapsing_rate)
+    source = source.replace("coordinate, cos, sin, time", "coordinate, cos, exp, sin, time")
+    source = source.replace("ADVECTION = 0.5", "ADVECTION = -0.5")
+    if location == "commit":
+        start = source.index("    point1 = program.stage(")
+        end = source.index("    program.step_strategy(", start)
+        source = source[:start] + """
+    program.commit_many({
+        totals.next: program.value("u_next", u0 + program.dt*ku0, at=totals.next.point),
+        geometry.next: program.value("m_next", m0 + program.dt*km0, at=geometry.next.point),
+    })
+""" + source[end:]
+    authored = {"__file__": str(fixture_path), "__name__": "moving_orientation_fixture"}
+    exec(compile(source, str(fixture_path), "exec"), authored)
+    dt = 1/128
+    scope = "G03 orientation at " + location
+    _, world = native_profile(dimension=1, scope=scope)
+    case, layout, values, _ = collective_call(world, lambda: authored["build_transport"](
+        law="advection", initial="constant", dt=dt))
+    resolved = collective_call(world, lambda: pops.resolve(pops.validate(case), layout=layout))
+    artifact = compile_profile_plan_once(world, resolved, route=scope, compile_artifact=pops.compile)
+    runtime = collective_call(world, lambda: pops.bind(
+        artifact, initial_values=values,
+        resources={"execution_context": artifact_execution_context(artifact)}))
+
+    def snapshot():
+        return tuple(collective_call(world, lambda: np.asarray(runtime.state_global(block)).tobytes())
+                     for block in ("line", "configuration"))
+
+    before = snapshot()
+
+    def rejected():
+        with pytest.raises(RuntimeError, match=rf"moving geometry {location} .* orientation") as error:
+            pops.run(runtime, t_end=dt, max_steps=1, console=False)
+        assert "NotAdmissible" in str(error.value)
+
+    collective_call(world, rejected)
+    with collective_check(world):
+        assert runtime.time() == 0 and runtime.macro_step() == 0
+    assert before == snapshot()
