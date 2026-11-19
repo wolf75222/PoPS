@@ -147,9 +147,13 @@ def euler(output, dimension):
         ("gravity", ("gas",), euler_state, "rho", 1.2),
         ("riemann", ("gas",), euler_state, "rho", 1.2),
         ("regrid_parity", ("a", "b"), ("n",), "n", 1.5),
+        ("magnetic", ("fluid",), euler_state, "rho", 1.5),
+        ("magnetic_union", ("ions", "electrons"), euler_state, "rho", 1.5),
+        ("fickian", ("heat",), ("scalar",), "scalar", 1.15),
     ):
         model = pops.Model(name)
-        state = model.state("U", components=variables)
+        roles = {field: Scalar()} if name == "fickian" else None
+        state = model.state("U", components=variables, roles=roles)
         case = pops.Case(name)
         handles = tuple(case.block(block, model, states=(state,))[state] for block in blocks)
         checked = pops.validate(case)

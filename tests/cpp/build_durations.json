@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "n12_bootstrap_program_build_estimate_source": "265.0 s is a scheduling estimate for test_amr_system_contract from ROMEO c021 job 830982 at 983e47056 (GCC 15.3.0, Dim2 double, Kokkos Serial, test-fast O0). Ninja records 57.982 s and 58.186 s for its two new Program DSOs, 135.381 s for its test TU, 3.409 s for link/discovery, and 5.721 s for shared fixture setup. The local edge sum is 260.679 s. Replace from a complete cold-CI timing artifact.",
     "tensor_diagonal_mg_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_tensor_diagonal_mg_preconditioner: 300.0 s copied from test_geometric_mg_nd because the native tensor diagonal multigrid preconditioner instantiates the same solver machinery. This repairs missing target inventory; it is not a measured cold-CI build duration. Replace from a complete CI timing artifact.",
     "amr_declared_history_ghost_estimate_source": "Unmeasured scheduling estimate added 2026-10-11 for test_amr_history_remap_collective: 302.32 s copied from test_amr_scalar_output_history. Both instantiate the compiled scalar AMR model, context and history/regrid/checkpoint machinery. This is not a measured cold-CI build duration; replace from a complete CI timing artifact.",
     "api040_external_field_backend_estimate_source": "Unmeasured scheduling estimate added 2026-10-08 for test_external_field_backend_preparation: 2.0 s copied from test_physical_support_transfer. Both are native memory-residence and Kokkos execution/inspection contract tests with real host paths and backend-conditional device cases; no provider DSO compilation is added by this target. This is not a measured build or CTest duration. Replace from a complete cold-CI/CTest timing artifact.",
@@ -23,6 +24,7 @@
       "test_amr_scalar_output_history",
       "test_amr_synchronized_continuation",
       "test_amr_synthetic_program_loader_transaction",
+      "test_amr_system_contract",
       "test_amr_transition_invariants",
       "test_box",
       "test_bundle_v14",
@@ -160,7 +162,7 @@
   "test_amr_seed_no_refine": 26.84,
   "test_amr_spatial_parity": 2.0,
   "test_amr_synthetic_program_loader_transaction": 720,
-  "test_amr_system_contract": 3.9,
+  "test_amr_system_contract": 265.0,
   "test_amr_system_twoblock": 310.5,
   "test_amr_tensor_fac_provider": 2.0,
   "test_amr_transition_invariants": 300.0,
