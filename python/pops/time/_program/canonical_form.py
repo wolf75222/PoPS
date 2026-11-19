@@ -1,7 +1,7 @@
 """One canonical form per frozen authoring Program (N11, F5).
 
 A frozen authoring Program projects its canonical form (``_serialize``) once per provenance
-variant and keeps the result here, outside the Program, together with a witness of everything
+variant and owns the result in a private slot, together with a witness of everything
 that projection read. Every later read checks the witness first, and projects again when it fails,
 so a read returns what a fresh projection would return.
 
@@ -23,20 +23,20 @@ from __future__ import annotations
 import json
 import threading
 from contextvars import ContextVar
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
-from types import MappingProxyType
-from typing import Any
-from weakref import WeakKeyDictionary
+from types import MappingProxyType, MethodType
+from typing import Any, cast
 
 # Private switch for the bit-for-bit test: False projects every read, as before this lot.
 _ENABLED = True
 
-_FORMS: WeakKeyDictionary[Any, _Form] = WeakKeyDictionary()
-# Forms are built outside the lock; the dictionary is read and written only under it. Two threads
-# that build the same form at once keep one of two equal forms.
+# A form is built and checked outside the lock. Only its attachment to its exact Program is
+# changed under the lock.
 _LOCK = threading.Lock()
+_FORM_SLOT = "_sealed_canonical_form"
 
 _SCALARS = frozenset({type(None), bool, int, float, complex, str, bytes, Fraction, Decimal})
 _IMMUTABLE_CLASSES: dict[type, bool] = {}
@@ -50,18 +50,17 @@ _AUTHORING_ONLY = frozenset({"_operator_apply_bodies"})
 _UNSET = object()
 
 
-class _Form:
-    __slots__ = ("texts", "ir_hash", "authorities", "registries", "objects", "trusted_scope")
+_ObjectWitness = tuple[Any, type, tuple[str, ...], tuple[Any, ...]]
 
-    def __init__(self) -> None:
-        self.texts: dict[bool, str] = {}
-        self.ir_hash = ""
-        self.authorities: tuple[tuple[Any, Any], ...] = ()
-        self.registries: tuple[Any, ...] = ()
-        self.objects: tuple[tuple[Any, tuple[str, ...], tuple[Any, ...]], ...] = ()
-        # The ir_identity_reuse scope that already checked this witness. Within that scope a
-        # read trusts it; the scope projects or checks every identity again when it ends.
-        self.trusted_scope: Any = None
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _Form:
+    texts: tuple[str, str]
+    ir_hash: str
+    authorities: tuple[tuple[Any, Any], ...]
+    registries: tuple[Any, ...]
+    objects: tuple[_ObjectWitness, ...]
+    registry_guards: tuple[tuple[Any, MethodType], ...]
 
 
 class _RecordingObserved(dict):
@@ -111,7 +110,12 @@ def ir_hash(program: Any) -> str:
 
 def has_form(program: Any) -> bool:
     with _LOCK:
-        return program in _FORMS
+        return _attached_form(program) is not None
+
+
+def _attached_form(program: Any) -> _Form | None:
+    form = getattr(program, _FORM_SLOT, None)
+    return form if type(form) is _Form and form.objects[0][0] is program else None
 
 
 def projected_ir_hash(program: Any) -> str:
@@ -125,75 +129,107 @@ def _current_form(program: Any) -> _Form | None:
     from .serialization import _IR_IDENTITY_REUSE
 
     with _LOCK:
-        form = _FORMS.get(program)
+        form = _attached_form(program)
     if form is None:
         return None
     scope = _IR_IDENTITY_REUSE.get()
-    if scope is not None and scope.applies() and form.trusted_scope is scope:
+    if scope is not None and not scope.applies():
+        scope = None
+    if scope is not None and form in scope.checked_forms:
         return form
     if not _witness_holds(program, form):
         with _LOCK:
-            if _FORMS.get(program) is form:
-                del _FORMS[program]
+            if _attached_form(program) is form:
+                object.__delattr__(program, _FORM_SLOT)
         return None
-    form.trusted_scope = scope if scope is not None and scope.applies() else None
+    if scope is not None:
+        scope.checked_forms.add(form)
     return form
 
 
 def _witness_holds(program: Any, form: _Form) -> bool:
-    if getattr(program, "_frozen", False) is not True:
+    if form.objects[0][0] is not program or getattr(program, "_frozen", False) is not True:
         return False
-    for registry in form.registries:
-        if getattr(registry, "_frozen", False) is not True:
+    return (
+        _keepable_registries(form.registries)
+        and _objects_hold(program, form)
+        and all(authority.fingerprint() == fingerprint
+                for authority, fingerprint in form.authorities)
+    )
+
+
+def _objects_hold(program: Any, form: _Form) -> bool:
+    for obj, kind, names, values in form.objects:
+        if type(obj) is not kind:
             return False
-    for obj, names, values in form.objects:
-        current_names, current_values = _state(obj)
+        current_names, current_values = _state(obj, omit_form=obj is program)
         if current_names != names or len(current_values) != len(values):
             return False
         for current, recorded in zip(current_values, values):
             if current is not recorded:
                 return False
-    for authority, fingerprint in form.authorities:
-        if authority.fingerprint() != fingerprint:
-            return False
-    return True
+    return all(_sealed_registry_guard(registry, guard)
+               for registry, guard in form.registry_guards)
 
 
 def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
     """Project ``program`` for variant ``first``; keep a form when everything allows it."""
+    from pops._structural_data import canonical_json_sha256
+    from pops.model import ownership
+
+    closure = _immutable_closure(program)
     authorities: dict[Any, Any] = {}
     registries: dict[int, Any] = {}
     data = _observed_projection(program, first, authorities, registries)
-    if not _keepable_registries(registries) or not _closed_json(data):
+    if closure is None or not _keepable_registries(registries.values()) or not _closed_json(data):
         return None, data
-    objects = _immutable_closure(program)
-    if objects is None:
-        return None, data
-    other = _observed_projection(program, not first, authorities, registries)
-    if not _keepable_registries(registries) or not _closed_json(other):
+    other_authorities: dict[Any, Any] = {}
+    other = _observed_projection(program, not first, other_authorities, registries)
+    if any(other_authorities[authority] != authorities[authority]
+           for authority in other_authorities.keys() & authorities.keys()):
+        raise ownership.UnresolvedOwnershipError(
+            "model definition changed during canonical projection")
+    authorities.update(other_authorities)
+    if not _keepable_registries(registries.values()) or not _closed_json(other):
         return None, data
     by_variant = {first: data, not first: other}
-    form = _Form()
     try:
-        for variant, value in by_variant.items():
-            text = json.dumps(value, sort_keys=False, separators=(",", ":"), allow_nan=False)
-            json.loads(text)  # an integer beyond the decoder's digit limit keeps no form
-            form.texts[variant] = text
+        without_provenance = _closed_text(by_variant[False])
+        with_provenance = _closed_text(by_variant[True])
     except (ValueError, RecursionError):
         return None, data
-    from pops._structural_data import canonical_json_sha256
+    objects, registry_guards = closure
+    form = _Form(
+        (without_provenance, with_provenance),
+        canonical_json_sha256(by_variant[False]),
+        tuple(authorities.items()),
+        tuple(registries.values()),
+        objects,
+        registry_guards,
+    )
+    # An inherited definition memo cannot authenticate publication. Re-read each definition at
+    # the boundary, including authorities that only one of the two variants reached.
+    token = ownership._FINGERPRINT_SCOPE.set(None)
+    try:
+        for authority, fingerprint in form.authorities:
+            if authority.fingerprint() != fingerprint:
+                raise ownership.UnresolvedOwnershipError(
+                    "model definition changed during canonical projection")
+    finally:
+        ownership._FINGERPRINT_SCOPE.reset(token)
+    if not _objects_hold(program, form) or not _keepable_registries(form.registries):
+        raise RuntimeError("Program IR identity changed during canonical projection")
 
-    form.ir_hash = canonical_json_sha256(by_variant[False])
-    form.authorities = tuple(authorities.items())
-    form.registries = tuple(registries.values())
-    form.objects = objects
     with _LOCK:
-        _FORMS[program] = form
-    from .serialization import _IR_IDENTITY_REUSE
-
-    scope = _IR_IDENTITY_REUSE.get()
-    form.trusted_scope = scope if scope is not None and scope.applies() else None
+        if _attached_form(program) is None:
+            object.__setattr__(program, _FORM_SLOT, form)
     return form, data
+
+
+def _closed_text(value: dict[str, Any]) -> str:
+    text = json.dumps(value, sort_keys=False, separators=(",", ":"), allow_nan=False)
+    json.loads(text)  # an integer beyond the decoder's digit limit keeps no form
+    return text
 
 
 def _observed_projection(
@@ -239,10 +275,10 @@ def _observed_projection(
                         "model definition changed during canonical projection")
 
 
-def _keepable_registries(registries: dict[int, Any]) -> bool:
+def _keepable_registries(registries: Any) -> bool:
     # One frozen registry means its whole Case graph is sealed: freeze_problem_graph freezes the
     # block, field, time, param and initial registries in one transaction (freeze_atomically).
-    return all(getattr(registry, "_frozen", False) is True for registry in registries.values())
+    return all(getattr(registry, "_frozen", False) is True for registry in registries)
 
 
 def _closed_json(value: Any) -> bool:
@@ -285,9 +321,11 @@ def _slot_names(kind: type) -> tuple[str, ...]:
     return names
 
 
-def _state(obj: Any) -> tuple[tuple[str, ...], tuple[Any, ...]]:
+def _state(obj: Any, *, omit_form: bool = False) -> tuple[tuple[str, ...], tuple[Any, ...]]:
     """The attribute names of ``obj`` and the objects bound to them."""
     slots = _slot_names(type(obj))
+    if omit_form:
+        slots = tuple(name for name in slots if name != _FORM_SLOT)
     values = [getattr(obj, name, _UNSET) for name in slots]
     names: tuple[str, ...] = slots
     attributes = getattr(obj, "__dict__", None)
@@ -331,7 +369,28 @@ def _immutable_class(kind: type, sample: Any) -> bool:
     return result
 
 
-def _immutable_closure(program: Any) -> tuple[tuple[Any, tuple[str, ...], tuple[Any, ...]], ...] | None:
+def _sealed_registry_guard(registry: Any, guard: MethodType) -> bool:
+    from pops.model._module_freeze import ModuleFreezable
+    from pops.model.module import Module
+    from pops.model.registry import OperatorRegistry
+    from pops.physics._freeze import _FROZEN_CLASSES
+
+    module = cast(Module, guard.__self__)
+    return (
+        type(registry) is _FROZEN_CLASSES.get(OperatorRegistry)
+        and type(module) is _FROZEN_CLASSES.get(Module)
+        and registry.frozen and module.frozen
+        and guard.__func__ is ModuleFreezable._guard_mutable
+        and module._registry is registry
+        and type(registry._by_name) is MappingProxyType
+        and type(registry._order) is tuple
+        and type(registry._aliases) is MappingProxyType
+    )
+
+
+def _immutable_closure(
+    program: Any,
+) -> tuple[tuple[_ObjectWitness, ...], tuple[tuple[Any, MethodType], ...]] | None:
     """Every object reachable from ``program``, with its attribute bindings, or None.
 
     None when anything reachable is of a kind outside the allowlist below: a mutable container,
@@ -344,8 +403,10 @@ def _immutable_closure(program: Any) -> tuple[tuple[Any, tuple[str, ...], tuple[
     from pops.model.handles import Handle
     from pops.model.ownership import _AuthoringAuthority
 
-    records = [(program, *_state(program))]
-    stack = [value for name, value in zip(records[0][1], records[0][2])
+    root_names, root_values = _state(program, omit_form=True)
+    records: list[_ObjectWitness] = [(program, type(program), root_names, root_values)]
+    registry_guards: list[tuple[Any, MethodType]] = []
+    stack = [value for name, value in zip(root_names, root_values)
              if name not in _AUTHORING_ONLY]
     seen: set[int] = {id(program)}
     while stack:
@@ -371,13 +432,17 @@ def _immutable_closure(program: Any) -> tuple[tuple[Any, tuple[str, ...], tuple[
         if not _immutable_class(kind, node):
             return None
         names, values = _state(node)
-        records.append((node, names, values))
+        records.append((node, kind, names, values))
         symbolic = isinstance(node, ImmutableSymbolic)
         for name, value in zip(names, values):
             if value is _UNSET or (symbolic and name == "prog"):
                 continue
+            if name == "_mutation_guard" and type(value) is MethodType \
+                    and _sealed_registry_guard(node, value):
+                registry_guards.append((node, value))
+                continue
             stack.append(value)
-    return tuple(records)
+    return tuple(records), tuple(registry_guards)
 
 
 __all__ = ["eligible", "has_form", "ir_hash", "projected_ir_hash", "serialize"]

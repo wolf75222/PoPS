@@ -245,14 +245,14 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
 def _counted_projections(monkeypatch):
     """Record each Program whose IR identity projection (``include_provenance=False``) runs."""
     projections = []
-    original = Program._serialize
+    original = Program._canonical_projection
 
     def counted(self, *args, **kwargs):
         if kwargs.get("include_provenance", True) is False:
             projections.append(self)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(Program, "_serialize", counted)
+    monkeypatch.setattr(Program, "_canonical_projection", counted)
     return projections
 
 

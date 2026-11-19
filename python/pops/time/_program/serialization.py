@@ -25,10 +25,11 @@ else:
     _ProgramBase = object
 
 class _IdentityReuse:
-    __slots__ = ("identities", "thread", "active")
+    __slots__ = ("identities", "checked_forms", "thread", "active")
 
     def __init__(self) -> None:
         self.identities: dict[int, tuple[Any, str]] = {}
+        self.checked_forms: set[Any] = set()
         self.thread = threading.get_ident()
         self.active = True
 
@@ -51,8 +52,8 @@ def ir_identity_reuse(operation: str) -> Iterator[None]:
     its IR and later reads reuse that identity; a read of a mutable Program always projects. When
     ``operation`` succeeds every identity is projected again outside the scope, so a definition
     changed during it, or an out-of-contract edit of a clone, still fails it with a RuntimeError
-    naming ``operation``. Nothing is retained on a Program, and a failed operation leaves no
-    witness. With or without an error, the graphs converted from the Programs read in the scope
+    naming ``operation``. The scope releases its authentication of kept forms when it ends.
+    With or without an error, the graphs converted from the Programs read in the scope
     leave the conversion cache when it ends (``_forget_scope_graphs``).
     """
     inherited = _IR_IDENTITY_REUSE.get()
@@ -67,6 +68,7 @@ def ir_identity_reuse(operation: str) -> Iterator[None]:
         reuse.active = False
         observed = tuple(reuse.identities.values())
         reuse.identities.clear()
+        reuse.checked_forms.clear()
         _IR_IDENTITY_REUSE.reset(token)
         _forget_scope_graphs(program for program, _identity in observed)
     from .canonical_form import has_form, projected_ir_hash

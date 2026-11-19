@@ -1,6 +1,12 @@
 """One canonical form per frozen authoring Program (N11, F5): bit for bit, and its witness."""
+import gc
 import json
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from copy import copy
+from threading import Barrier, get_ident
 from types import MappingProxyType
+from weakref import ref
 
 import pytest
 
@@ -160,13 +166,161 @@ def test_a_frozen_program_of_an_open_case_keeps_no_form():
 
 def test_a_changed_definition_gives_the_new_identity(monkeypatch):
     _spec, program, reference = _frozen_with_form()
-    form = canonical_form._FORMS[program]
+    form = canonical_form._attached_form(program)
+    assert form is not None
     assert form.authorities
     authority, fingerprint = form.authorities[0]
     changed = "test:sha256:" + "0" * 64
     assert fingerprint != changed
     monkeypatch.setattr(type(authority), "fingerprint", lambda self: changed)
     assert not canonical_form._witness_holds(program, form)
+
+
+def test_copy_and_rebuild_do_not_retain_the_source_form():
+    program = pops.Program("collected-form").freeze()
+    expected = _texts(program)
+    reference = ref(program)
+    form = canonical_form._attached_form(program)
+    assert form is not None
+    twin = copy(program)
+    rebuilt = program._rebuild(lambda _value: True)
+    assert not canonical_form.has_form(twin)
+    assert not canonical_form.has_form(rebuilt)
+    object.__setattr__(twin, "_sealed_canonical_form", form)
+    assert not canonical_form.has_form(twin)
+    assert not canonical_form._witness_holds(twin, form)
+    assert _texts(twin) == _texts(rebuilt) == expected
+    assert canonical_form._attached_form(twin) is not form
+    with ir_identity_reuse("pops.resolve"):
+        assert program._ir_hash() == expected[-1]
+        saved_context = copy_context()
+    del program, form
+    gc.collect()
+    assert reference() is None
+    assert saved_context.run(twin._ir_hash) == expected[-1]
+
+
+@pytest.mark.parametrize("include_provenance", [False, True])
+def test_projections_from_different_authorities_cannot_publish(monkeypatch, include_provenance):
+    from pops.model.ownership import UnresolvedOwnershipError, _AuthoringAuthority
+
+    authority = _AuthoringAuthority()
+    first = "test:sha256:" + "a" * 64
+    second = "test:sha256:" + "b" * 64
+    authority.bind_fingerprint(first, priority=1)
+    program = pops.Program("two-variants").freeze()
+
+    def projection(self, *, include_provenance: bool):
+        if include_provenance is not first_variant:
+            authority.bind_fingerprint(second, priority=1)
+        return {"authority": authority.fingerprint(), "provenance": include_provenance}
+
+    first_variant = include_provenance
+    monkeypatch.setattr(pops.Program, "_canonical_projection", projection)
+    with pytest.raises(UnresolvedOwnershipError, match="changed during canonical projection"):
+        program._serialize(include_provenance=first_variant)
+    assert not canonical_form.has_form(program)
+    assert program._serialize(include_provenance=first_variant)["authority"] == second
+    assert program._serialize(include_provenance=not first_variant)["authority"] == second
+
+
+def test_parallel_builds_attach_one_complete_form(monkeypatch):
+    program = pops.Program("parallel-forms").freeze()
+    original = pops.Program._canonical_projection
+    barrier = Barrier(2)
+
+    def simultaneous(self, *, include_provenance=True):
+        barrier.wait(timeout=10)
+        return original(self, include_provenance=include_provenance)
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=2) as workers:
+        patch.setattr(pops.Program, "_canonical_projection", simultaneous)
+        left = workers.submit(program._serialize, include_provenance=False)
+        right = workers.submit(program._serialize, include_provenance=True)
+        variants = left.result(), right.result()
+    form = canonical_form._attached_form(program)
+    assert form is not None
+    assert all(variant == json.loads(form.texts[index]) for index, variant in enumerate(variants))
+    assert _texts(program)[-1] == canonical_form.projected_ir_hash(program)
+
+
+def test_failed_witness_removes_only_the_observed_attachment(monkeypatch):
+    program = pops.Program("competing-attachment").freeze()
+    program._ir_hash()
+    old = canonical_form._attached_form(program)
+    assert old is not None
+    object.__delattr__(program, "_sealed_canonical_form")
+    program._ir_hash()
+    replacement = canonical_form._attached_form(program)
+    assert replacement is not None and replacement is not old
+    object.__setattr__(program, "_sealed_canonical_form", old)
+    original = canonical_form._witness_holds
+
+    def invalidate(value, observed):
+        if observed is old:
+            object.__setattr__(value, "_sealed_canonical_form", replacement)
+            return False
+        return original(value, observed)
+
+    monkeypatch.setattr(canonical_form, "_witness_holds", invalidate)
+    assert _texts(program)[-1] == replacement.ir_hash
+    assert canonical_form._attached_form(program) is replacement
+
+
+def test_exact_sealed_registry_guard_is_the_only_opaque_method():
+    from pops.model.registry import OperatorRegistry
+
+    _spec, program, _reference = _frozen_with_form()
+    form = canonical_form._attached_form(program)
+    assert form is not None and form.registry_guards
+    registry, guard = form.registry_guards[0]
+    module = guard.__self__
+    assert canonical_form._sealed_registry_guard(registry, guard)
+    assert not canonical_form._sealed_registry_guard(registry, module.freeze)
+    sealed_class = type(registry)
+    try:
+        object.__setattr__(registry, "__class__", OperatorRegistry)
+        assert not canonical_form._sealed_registry_guard(registry, guard)
+        assert not canonical_form._witness_holds(program, form)
+    finally:
+        object.__setattr__(registry, "__class__", sealed_class)
+    sealed_module_class = type(module)
+    try:
+        object.__setattr__(module, "__class__", sealed_module_class.__bases__[0])
+        assert not canonical_form._sealed_registry_guard(registry, guard)
+        assert not canonical_form._witness_holds(program, form)
+    finally:
+        object.__setattr__(module, "__class__", sealed_module_class)
+    object.__setattr__(registry, "_mutation_guard", module.freeze)
+    assert not canonical_form._witness_holds(program, form)
+    assert program._ir_hash() == canonical_form.projected_ir_hash(program)
+    assert not canonical_form.has_form(program)
+
+
+def test_copied_context_checks_a_kept_form_in_its_own_thread(monkeypatch):
+    program = pops.Program("thread-scoped-form").freeze()
+    expected = _texts(program)[0]
+    threads = []
+    original = canonical_form._witness_holds
+
+    def checked(value, form):
+        threads.append(get_ident())
+        return original(value, form)
+
+    monkeypatch.setattr(canonical_form, "_witness_holds", checked)
+    author_thread = get_ident()
+    with ir_identity_reuse("pops.resolve"), ThreadPoolExecutor(max_workers=1) as worker:
+        assert json.dumps(program._serialize()) == expected
+        assert json.dumps(program._serialize()) == expected
+        saved_context = copy_context()
+        reader, data = worker.submit(
+            saved_context.run, lambda: (get_ident(), program._serialize())
+        ).result()
+        assert reader != author_thread
+        assert json.dumps(data) == expected
+        assert threads == [author_thread, reader]
+    assert json.dumps(saved_context.run(program._serialize)) == expected
+    assert threads == [author_thread, reader, author_thread]
 
 
 def test_a_reuse_scope_trusts_a_checked_form_until_it_ends():
