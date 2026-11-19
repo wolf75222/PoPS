@@ -97,8 +97,6 @@ def test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart(t
     example = _load_example()
 
     evidence = example.run_manual_and_restart(tmp_path / "final-scalar-acceptance")
-    preset = example.run_preset_parity(
-        tmp_path / "final-scalar-preset", evidence.continuous)
 
     assert evidence.hdf5_path.is_file()
     assert evidence.paraview_path.is_file()
@@ -123,8 +121,6 @@ def test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart(t
         "reflux",
         "average_down",
     )
-    assert preset.macro_step == evidence.continuous.macro_step
-    assert preset.program_hash == evidence.continuous.program_hash
     from pops.output import read_paraview
 
     reopened = read_paraview(evidence.paraview_path)
@@ -137,3 +133,28 @@ def test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart(t
         "min",
         "max",
     }
+
+
+def test_scalar_advection_final_preset_matches_explicit_continuation(tmp_path):
+    example = _load_example()
+    root = tmp_path / "final-scalar-acceptance"
+    target, artifact = example.compile_final_case(
+        program_builder=example.explicit_ssprk2, output_root=root / "accepted",
+    )
+    simulation = example._bind_artifact(
+        artifact, params=example.build_bind_params(target.authoring),
+    )
+    controls = dict(target.authoring.run_controls)
+    first = pops.run(simulation, **controls)
+    second = pops.run(
+        simulation,
+        t_end=2.0 * float(controls["t_end"]),
+        max_steps=int(controls["max_steps"]),
+        output_dir=root / "continuous",
+    )
+    assert first.accepted_steps > 0 and second.accepted_steps > 0
+    continuous = example._snapshot(simulation)
+
+    preset = example.run_preset_parity(tmp_path / "final-scalar-preset", continuous)
+    assert preset.macro_step == continuous.macro_step
+    assert preset.program_hash == continuous.program_hash
