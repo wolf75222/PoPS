@@ -551,11 +551,12 @@ class _SystemIO(_System):
         advance_segment = None
         grid = temporal.controller_state.get("fixed_dt_grid")
         if grid is not None and self._s._advance_max_attempts() > 0:
-            installed = self._temporal_restart_state.fixed_dt()
-            if installed is None or installed != temporal.fixed_dt():
+            from pops.time._step.strategy import FixedDt
+            installed = self._step_strategy
+            if type(installed) is not FixedDt or installed.dt != temporal.fixed_dt():
                 raise ValueError("restart: compiled FixedDt grid differs from the installed strategy")
             advance_segment = (
-                installed, float.fromhex(grid["origin"]), grid["steps"],
+                installed.dt, float.fromhex(grid["origin"]), grid["steps"],
                 float.fromhex(grid["time"]), grid["macro_step"],
             )
         cells = spatial.cells_at_level(0)

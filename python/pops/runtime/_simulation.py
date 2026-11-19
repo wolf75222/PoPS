@@ -51,7 +51,7 @@ from typing import Any
 
 from pops.time._program.control import AdvanceControl, FaceFrequencyStop, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
-from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
+from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound, FixedDt
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
 from pops.time.solve_outcome import solve_status_variant
@@ -490,8 +490,10 @@ class Simulation:
                              _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
         temporal = runtime._executor._temporal_restart_state
+        installed_strategy = runtime._executor._step_strategy
         project_fixed = (
-            rule is None and cells is None and dt == self._control.first_dt == temporal.fixed_dt()
+            type(installed_strategy) is FixedDt and rule is None and cells is None
+            and dt == self._control.first_dt == installed_strategy.dt == temporal.fixed_dt()
             and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
         )
         try:
