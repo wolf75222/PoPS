@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._expr import Arith, text, walk
+from ._expr import Arith, is_number, text, walk
 from ._refusal import AmbiguousElaboration, NotYetElaborated, Site
 
 _N16_LOT_2 = "N16 lot 2, with the point-dependent builder values of 4.3"
@@ -94,6 +94,9 @@ def _shape(node: Any) -> bool:
     if isinstance(node, Arith) and node.op in ("+", "-"):
         left, right = (_shape(arg) for arg in node.args)
         if left != right:
+            density = node.args[1] if left else node.args[0]
+            if is_number(density) and density == 0:
+                return True
             raise _Mixed(node, "a sum of loads, cell.load(e1) + cell.load(e2), or the value read "
                                "at the centre alone")
         return True

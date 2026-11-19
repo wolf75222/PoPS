@@ -22,7 +22,7 @@ from pops.lib.quadrature import GaussLegendre
 from pops.lib.representations import CellAverage
 from pops.lib.time.methods import forward_euler
 from pops.surface.discrete import CellRate
-from pops.surface.math import ddt, pi, sin
+from pops.surface.math import ddt, pi, sin, sqrt, where
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -47,6 +47,16 @@ def at_centre(cell, term):
     return CellRate(-X * cell.value(q))
 
 
+@surface.scheme
+def gated_centre(cell, term):
+    return CellRate(where(X > 1, 2, 0))
+
+
+@surface.scheme
+def gated_loads(cell, term):
+    return CellRate(sum([cell.load(where(X > 1, sqrt(X - 1), 0)), cell.load(X * X)]))
+
+
 def _case(name):
     model = surface.Model("cell_load_" + name)
     u = model.quantity("u", surface.Scalar(DOMAIN))
@@ -57,11 +67,20 @@ def _case(name):
     elif name == "centre":
         source = model.source(of=u, value=-u)
         scheme, representation = at_centre(), CellAverage()
+    elif name == "conditional":
+        heat = model.source(of=u, value=where(X > 1, 2, 0))
+        source = model.source(of=u, value=where(X > 1, sqrt(X - 1), 0) + X * X)
+        scheme, representation = gated_loads(), CellAverage(quadrature=GaussLegendre(2))
     else:
         source = model.source(of=u, value=-X * u)
         scheme, representation = pointwise(), CellAverage()
-    model.balance(ddt(u) == source)
-    numerics = surface.Numerics(represent={u: representation}, schemes={source: scheme})
+    schemes = {source: scheme}
+    if name == "conditional":
+        schemes[heat] = gated_centre()
+        model.balance(ddt(u) == heat + source)
+    else:
+        model.balance(ddt(u) == source)
+    numerics = surface.Numerics(represent={u: representation}, schemes=schemes)
     program = surface.Program(advance=surface.Advance(forward_euler(rate=model), dt=DT),
                               initial={u: u0})
     case = surface.Case(model=model, numerics=numerics, program=program,
@@ -78,7 +97,7 @@ def artifacts(tmp_path_factory, native_cxx, kokkos_root):
         patch.setenv("POPS_CACHE_DIR", str(cache))
         patch.setenv("POPS_NATIVE_CACHE_DIR", str(cache))
         patch.chdir(REPO_ROOT)
-        for name in ("load", "centre", "law"):
+        for name in ("load", "centre", "law", "conditional"):
             case, u, u0 = _case(name)
             rows[name] = (surface.compile(case, target=surface.OpenMP()), u, u0)
     return rows
@@ -120,3 +139,23 @@ def test_a_coordinate_read_by_a_cell_rate_is_the_centre_of_the_cell(artifacts):
 
 def test_the_law_of_a_source_under_pointwise_reads_the_centre_as_the_cell_rate(artifacts):
     np.testing.assert_array_equal(_run(artifacts, "law"), _run(artifacts, "centre"))
+
+def test_conditional_forcing_reads_the_centre_and_lazy_gauss_nodes(artifacts):
+    nodes, weights = np.polynomial.legendre.leggauss(2)
+    centres = _centres()
+    points = centres[:, None] + (LENGTH / CELLS / 2) * nodes[None, :]
+    heating = np.where(centres > 1, 2, 0)
+    forcing = np.zeros_like(points)
+    positive = points > 1
+    forcing[positive] = np.sqrt(points[positive] - 1)
+    source = heating + ((forcing + points**2) * (weights / 2)).sum(axis=1)
+    straddles = (points[:, 0] < 1) & (1 < points[:, 1])
+    assert straddles.sum() == 1 and heating[straddles].item() == 2
+    assert source[straddles].item() != (heating + np.sqrt(np.maximum(centres - 1, 0))
+                                       + centres**2)[straddles].item()
+    expected = _initial()
+    for _ in range(STEPS):
+        expected = expected + DT * source
+    run = _run(artifacts, "conditional")
+    assert np.isfinite(run).all() and not np.allclose(run, _initial())
+    np.testing.assert_allclose(run, expected, rtol=1e-13, atol=1e-15)

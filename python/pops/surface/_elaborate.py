@@ -63,7 +63,7 @@ from ._scheme import FaceFlux, StencilRealization, UserScheme
 
 _LATER = "a later lot of N15"
 # The words of pops.math that b6's analytic expressions have (pops.analytic), for initial values.
-_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs")
+_ANALYTIC_WORDS = ("exp", "log", "sqrt", "sin", "cos", "erf", "erfc", "abs", "where")
 # The words of a node function of pops.Graded and of a chart (``MAP_WORDS``): those of the analytic
 # programs that generate the static geometry arrays at bind, without erf and erfc.
 _NODE_WORDS = MAP_WORDS
@@ -216,22 +216,36 @@ def _sampled(value: Any) -> Any:
         return Arith(value.op, tuple(_sampled(arg) for arg in value.args))
     if isinstance(value, Call):
         return Call(value.word, tuple(_sampled(arg) for arg in value.args))
+    if isinstance(value, Predicate):
+        return Predicate(value.op, *(_sampled(arg) for arg in value.args))
     return value
 
 
 def _coordinates(value: Any) -> list:
     """The coordinates that ``value`` reads outside its loads, one per axis, by axis."""
     found: dict = {}
-    stack = [value]
-    while stack:
-        node = stack.pop()
+    for node in walk(value, descend=lambda part: getattr(part, "key", None) != ("load",)):
         if isinstance(node, Coordinate):
             found.setdefault(node.index, node)
-        elif getattr(node, "key", None) == ("load",):
-            continue
-        elif isinstance(node, (Arith, Call)):
-            stack.extend(node.args)
     return [found[index] for index in sorted(found)]
+
+
+def _lower_predicate(value: Predicate, lower: Any, *, where: str) -> Any:
+    """Lower the surface predicate through the comparison algebra of its consumer."""
+    # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
+    # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
+    if value.op in ("all_of", "any_of", "none_of"):
+        items = [lower(arg) for arg in value.args]
+        result = items[0]
+        for item in items[1:]:
+            result = result & item if value.op == "all_of" else result | item
+        return ~result if value.op == "none_of" else result
+    if value.op not in ("<", "<=", ">", ">=", "equal"):
+        raise NotYetElaborated("%s in %s" % (text(value), where), _LATER)
+    left, right = (lower(arg) for arg in value.args)
+    return {"<": lambda: left < right, "<=": lambda: left <= right,
+            ">": lambda: left > right, ">=": lambda: left >= right,
+            "equal": lambda: left == right}[value.op]()
 
 
 def _is_cell_total(definition: Any) -> bool:
@@ -543,20 +557,8 @@ class _Elaboration:
         if pair is not None:
             return inputs[("speeds", pair)]
         if isinstance(value, Predicate):
-            # N3 lot 2 (P4): equal(a, b) is b6 ==, all_of and any_of the left folds of & and |,
-            # and none_of([p, q, ...]) is ~(p | q | ...), ~p for one predicate.
-            if value.op in ("all_of", "any_of", "none_of"):
-                items = [self.lower(arg, inputs) for arg in value.args]
-                result = items[0]
-                for item in items[1:]:
-                    result = result & item if value.op == "all_of" else result | item
-                return ~result if value.op == "none_of" else result
-            if value.op not in ("<", "<=", ">", ">=", "equal"):
-                raise NotYetElaborated("%s in the body of a scheme" % text(value), _LATER)
-            left, right = (self.lower(arg, inputs) for arg in value.args)
-            return {"<": lambda: left < right, "<=": lambda: left <= right,
-                    ">": lambda: left > right, ">=": lambda: left >= right,
-                    "equal": lambda: left == right}[value.op]()
+            return _lower_predicate(value, lambda arg: self.lower(arg, inputs),
+                                    where="the body of a scheme")
         if isinstance(value, Call) and value.word == "where":
             predicate, then, otherwise = value.args
             then_value, otherwise_value = self.lower(then, inputs), self.lower(otherwise, inputs)
@@ -581,6 +583,13 @@ class _Elaboration:
                 return spelled[("coordinate", value.name)]
         if isinstance(value, Quantity):
             return "%s[0]" % value.name
+        if isinstance(value, Predicate):
+            args = [self.code(arg, spelled) for arg in value.args]
+            if value.op in ("all_of", "any_of", "none_of"):
+                fold = (" & " if value.op == "all_of" else " | ").join(args)
+                return ("~" if value.op == "none_of" else "") + "(%s)" % fold
+            op = "==" if value.op == "equal" else value.op
+            return "(%s %s %s)" % (args[0], op, args[1])
         if isinstance(value, Call):
             word = value.word if value.word == "abs" else "pm." + value.word
             return "%s(%s)" % (word, ", ".join(self.code(arg, spelled) for arg in value.args))
@@ -1388,6 +1397,9 @@ class _Elaboration:
                 return left ** float(_number(exponent))
             return {"+": lambda: left + right, "-": lambda: left - right,
                     "*": lambda: left * right, "/": lambda: left / right}[value.op]()
+        if isinstance(value, Predicate):
+            return _lower_predicate(value, lambda arg: self.analytic(arg, frame, point, bounds),
+                                    where="an analytic expression")
         if isinstance(value, Call) and value.word in _ANALYTIC_WORDS:
             args = [self.analytic(arg, frame, point, bounds) for arg in value.args]
             return getattr(an, value.word)(*args)

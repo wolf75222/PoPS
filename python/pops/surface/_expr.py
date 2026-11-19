@@ -17,6 +17,7 @@ A handle hashes by identity, so a dictionary or a set keyed by handles compares 
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
@@ -329,11 +330,11 @@ class Predicate(_Symbolic):
     __hash__ = object.__hash__
 
 
-def walk(value: Any) -> Any:
+def walk(value: Any, *, descend: Callable[[Any], bool] | None = None) -> Any:
     """Every node of an expression, the root first, each node once: a node that several others
     share (a Python variable read twice, as the body of ``weno5`` reads its subexpressions) is
     visited at its first occurrence only, so that the walk is linear in the nodes and not in the
-    unfolded tree (N3 lot 3)."""
+    unfolded tree (N3 lot 3). A visitor can make selected nodes leaves with ``descend``."""
     stack = [value]
     seen: set = set()
     while stack:
@@ -343,6 +344,8 @@ def walk(value: Any) -> Any:
                 continue
             seen.add(id(node))
         yield node
+        if descend is not None and not descend(node):
+            continue
         if isinstance(node, Expr):
             stack.extend(reversed(node.children()))
         elif isinstance(node, Predicate):

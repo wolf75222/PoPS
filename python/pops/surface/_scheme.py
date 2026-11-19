@@ -39,7 +39,7 @@ from typing import Any
 from pops._source_origin import code_origin
 
 from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, operand, text, walk
-from ._geometry import Coordinate, MathConstant
+from ._geometry import Coordinate, FrameCoordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
 from ._model import (
     BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Source, Term,
@@ -1359,7 +1359,14 @@ class UserScheme(SchemeValue):
         reads ``cell.value`` of the key's quantity, numbers, constants, parameters, the
         coordinates of the support at the centre of the cell and ``cell.load(e)`` (FC-1, FC-2)."""
         ran = self._run({"cell": RateCell(key), "term": TermEntity(key)}, key)
+        support = key.quantity.support
         for node in walk(ran.value):
+            if (isinstance(node, (Coordinate, FrameCoordinate))
+                    and node.support is not support and node.support is not support._box):
+                raise SupportMismatch(
+                    "%s reads coordinate %s of another support in the CellRate of %s"
+                    % (self, node.name, key.quantity),
+                    write="coordinates of the support of %s" % key.quantity, site=ran.site)
             if isinstance(node, Call) and node.word == "grad":
                 raise NotYetElaborated(
                     "the scheme %s under %s, whose CellRate reads %s" % (self, key, text(node)),

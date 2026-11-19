@@ -24,7 +24,7 @@ from pops.lib.quadrature import GaussLegendre
 from pops.lib.representations import CellAverage, CellTotal, PointValue
 from pops.lib.time.methods import ssprk2
 from pops.surface.discrete import CellRate
-from pops.surface.math import ddt, div, pi, sin
+from pops.surface.math import ddt, div, pi, sin, where
 
 HERE = os.path.abspath(__file__)
 LENGTH = 3.0
@@ -131,6 +131,46 @@ def load_under_sin(cell, term):
     return CellRate(sin(cell.load(X)))
 
 
+@surface.scheme
+def conditional_centre(cell, term):
+    return CellRate(where(X > 1, 2, 0))
+
+
+@surface.scheme
+def conditional_load(cell, term):
+    return CellRate(cell.load(where(X > 1, 2, 0)))
+
+
+@surface.scheme
+def builtin_sum(cell, term):
+    return CellRate(sum([cell.load(X), cell.load(X * X)]))
+
+
+@surface.scheme
+def two_loads_multiplied(cell, term):
+    return CellRate(cell.load(X) * cell.load(X * X))
+
+
+@surface.scheme
+def load_at_denominator(cell, term):
+    return CellRate(2 / cell.load(X))
+
+
+@surface.scheme
+def foreign_coordinate(cell, term, *, mode):
+    # Distinct even when the support has the same bounds, name and axis index.
+    other = surface.Box(x=surface.Periodic(0, LENGTH)).x
+    if mode == "centre":
+        value = other
+    elif mode == "load":
+        value = cell.load(other)
+    elif mode == "predicate":
+        value = where(other > 1, 2, 0)
+    else:
+        value = cell.load(where(other > 1, 2, 0))
+    return CellRate(value)  # <- foreign-coordinate
+
+
 # --- what is served --------------------------------------------------------------------------------
 
 def test_a_load_under_a_rule_is_the_mean_of_its_integrand_an_auxiliary_input():
@@ -186,6 +226,36 @@ def test_a_coordinate_at_the_centre_is_served_under_every_constant_mode(represen
     _resolved(_elaborated(at_centre(), representation=representation))
 
 
+def test_conditional_reads_are_centres_or_quadrature_nodes():
+    centre = _elaborated(conditional_centre(), flux=False)
+    load = _elaborated(conditional_load(), flux=False)
+    row, choices = _row(centre)
+    assert "Var('coordinate_x', 'aux')" in row.elaborated
+    assert "at the centre" in choices["x"]
+    assert set(centre.elaborated.model.module.aux()) == {"coordinate_x"}
+    row, choices = _row(load)
+    assert "the mean of where" in choices["source_u_load_1"]
+    assert "Var('source_u_load_1', 'aux')" in row.elaborated
+    assert set(load.elaborated.model.module.aux()) == {"source_u_load_1"}
+    _resolved(centre)
+    _resolved(load)
+
+
+def test_builtin_sum_keeps_the_load_classification():
+    case = _elaborated(builtin_sum(), flux=False)
+    row, choices = _row(case)
+    assert choices["kind of value"].startswith("a load")
+    assert "source_u_load_1" in row.elaborated and "source_u_load_2" in row.elaborated
+    _resolved(case)
+
+
+@pytest.mark.parametrize("mode", ("centre", "load", "predicate", "load_predicate"))
+def test_cellrate_refuses_foreign_coordinates_in_every_position(mode):
+    with pytest.raises(surface.SupportMismatch, match="coordinate x of another support") as caught:
+        _elaborated(foreign_coordinate(mode=mode), flux=False)
+    assert _at(caught.value, "foreign-coordinate")
+
+
 # --- SU-T2 -----------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("representation", [CellAverage(), CellTotal(), PointValue()])
@@ -203,6 +273,8 @@ def test_a_load_under_a_representation_without_a_rule_is_ambiguous(representatio
     (load_and_value, "a sum of loads"),
     (varying_factor, "cell.load(x * e)"),
     (load_under_sin, "cell.load(e) at the top of the value"),
+    (two_loads_multiplied, "one load"),
+    (load_at_denominator, "the factor inside the load"),
 ])
 def test_a_load_that_is_not_a_sum_of_scaled_loads_is_ambiguous(scheme, hint):
     chosen = scheme()  # <- mixed
@@ -238,7 +310,10 @@ def test_a_coordinate_in_a_flux_keeps_its_owner():
     numerics = surface.Numerics(represent={u: CellAverage()}, schemes={transport: upwind()})
     program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
                               initial={u: u0})
-    with pytest.raises(surface.NotYetElaborated, match="coordinate fields of G03"):
+    with pytest.raises(
+            surface.NotYetElaborated,
+            match="N15/G03 entity coordinates on a periodic Uniform CellAverage layout, "
+                  "using constant traces and a fixed step"):
         surface.Case(model=model, numerics=numerics, program=program,
                      layout={DOMAIN: surface.Uniform(cells=16)})
 
