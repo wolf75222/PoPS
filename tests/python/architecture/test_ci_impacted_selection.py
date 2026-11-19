@@ -31,6 +31,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPTS = REPO_ROOT / "scripts"
+M1_SMOKE_FILE = "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py"
 
 
 def _load(name):
@@ -184,11 +185,12 @@ def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
     assert 0 < count < total, "leaf change must be a strict subset"
     assert "import-closure" in outputs["python_why"]
     assert "tests/python/unit/runtime/test_diagnostics_typed.py" in selected
-    for smoke in (
-        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
-        "tests/python/unit/runtime/test_capabilities.py",
-    ):
-        assert smoke in selected
+    assert "tests/python/unit/runtime/test_capabilities.py" in selected
+    assert {unit for unit in selected if unit.partition("::")[0] == M1_SMOKE_FILE} == {
+        f"{M1_SMOKE_FILE}::test_scalar_advection_completes_typed_phase_pipeline",
+        f"{M1_SMOKE_FILE}::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart",
+        f"{M1_SMOKE_FILE}::test_scalar_advection_final_preset_matches_explicit_continuation",
+    }
 
 
 def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
@@ -253,7 +255,7 @@ def test_plan_python_direct_test_avoids_unrelated_native_smoke(tmp_path):
     assert outputs["python_mode"] == "subset"
     assert edited in selected
     assert "tests/python/unit/codegen/test_dsl_compose.py" in selected
-    assert "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py" not in selected
+    assert all(unit.partition("::")[0] != M1_SMOKE_FILE for unit in selected)
     assert "tests/python/unit/runtime/test_capabilities.py" not in selected
 
 
