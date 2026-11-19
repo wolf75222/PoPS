@@ -155,8 +155,6 @@ include/pops/core/state/variables.hpp:54 variable-role N3 | VariableRoleKind
 include/pops/core/state/variables.hpp:54 variable-role N3 | VariableRoleKind
 include/pops/core/state/variables.hpp:54 velocity N3 | Velocity
 include/pops/core/state/variables.hpp:55 variable-role N3 | VariableRoleKind
-include/pops/core/state/variables.hpp:67 variable-role N3 | VariableRoleKind
-include/pops/core/state/variables.hpp:70 variable-role N3 | VariableRoleKind
 include/pops/core/state/variables.hpp:74 `Density` N3 | Density
 include/pops/core/state/variables.hpp:74 variable-role N3 | VariableRoleKind
 include/pops/core/state/variables.hpp:74 variable-semantic N3 | VariableSemantic
