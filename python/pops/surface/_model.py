@@ -112,6 +112,13 @@ class Symbol(Expr):
         return self.name
 
 
+class _ModelTime(Symbol):
+    """Physical time of the model at the point of application of a relation."""
+
+    def _text(self, precedence: int) -> str:
+        return "%s.time" % self.model.name
+
+
 class Quantity(Symbol):
     """A quantity of the model, ``model.quantity("u", pops.Scalar(Ω))`` (Q1, Q2)."""
 
@@ -763,7 +770,9 @@ class Model:
                         raise NotYetElaborated(
                             "model.on(..., %s == %s), boundary data read from the datum %s"
                             % (quantity, text(data), node), _BOUNDARY)
-                    if not isinstance(node, (Arith, ModelConstant, Parameter, MathConstant)) \
+                    if isinstance(node, _ModelTime) and node.model is not self:
+                        raise ValueError("model.on: the time belongs to another model")
+                    if not isinstance(node, (Arith, ModelConstant, Parameter, MathConstant, _ModelTime)) \
                             and not is_number(node):
                         raise NotYetElaborated(
                             "model.on(..., %s == %s), boundary data that read %s"
@@ -784,8 +793,8 @@ class Model:
         return self._later("model.wave_speeds, declared wave speeds (R9)")
 
     @property
-    def time(self) -> Any:
-        raise NotYetElaborated("model.time, the time in a model value", _LATER_MODEL)
+    def time(self) -> Expr:
+        return _ModelTime(self, "time", user_site(2))
 
 
 # --- the forms that a model recognizes ------------------------------------------------------------

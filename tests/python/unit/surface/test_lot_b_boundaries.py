@@ -203,6 +203,52 @@ def test_a_value_and_no_data_are_the_generated_ghosts_of_their_policy():
     _assert_same(_case(parts), _hand_case(_four_sides))
 
 
+def test_generated_boundary_uses_the_actual_program_clock_and_param():
+    from pops.codegen.user_ghost_lowering import emit_user_ghost_policy
+
+    parts = _parts(periodic_x=True)
+    g = parts.model.parameter("g", default=0.125)
+    parts.model.on(parts.sides.y_min, parts.u == g + parts.model.time)
+    parts.model.on(parts.sides.y_max, outflow(parts.u))
+    elaborated = _case(parts).elaborated
+    resolved = _resolved(elaborated.case, elaborated.layout)
+    graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    (emitter,) = graph.models_by_block.values()
+    source = emit_user_ghost_policy(emitter)
+    clock = elaborated.advance.program.clock.qualified_id
+
+    assert 'evaluation_clock = "%s"' % clock in source
+    assert " = physical_time;" in source
+    assert "params.get(" in source and "inner(1, 0)" in source
+    assert "AnalyticProgram" not in source
+    assert clock in _cpp(resolved)
+
+
+def test_generated_boundary_refuses_foreign_clock_before_native_compilation(monkeypatch):
+    from pops.analytic import time
+    from pops.codegen import _orchestration_compile
+
+    foreign_clock = pops.Program("foreign-boundary").clock
+
+    def laws(boundaries, state, value):
+        return {
+            boundaries.y_min: SourceGhost(
+                state=state, body=lambda inner, k: (value + time(foreign_clock),), depth=1),
+            boundaries.y_max: _copy(state),
+        }
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an unauthenticated provider reached native compilation")
+
+    case, layout = _hand_case(laws, periodic_x=True)
+    resolved = _resolved(case, layout)
+    assert resolved.time.clock.name == foreign_clock.name
+    assert resolved.time.clock.qualified_id != foreign_clock.qualified_id
+    monkeypatch.setattr(_orchestration_compile, "compile_install_models", forbidden)
+    with pytest.raises(ValueError, match="SourceGhost.*exact consuming Program Clock"):
+        pops.compile(resolved)
+
+
 def test_the_data_of_a_value_may_read_a_constant_of_the_model():
     parts = _parts()
     g = parts.model.constant("g", value=0.125)

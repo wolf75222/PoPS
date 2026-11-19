@@ -835,13 +835,30 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
 
+  const auto qualify_ghost = [](Ghost& staged, const auto* point) {
+    if constexpr (requires { Ghost::evaluation_clock; }) {
+      if (point == nullptr || point->clock != Ghost::evaluation_clock)
+        throw std::invalid_argument("SourceGhost time requires its exact consuming Program Clock");
+      const Real time = static_cast<Real>(point->physical_time);
+      if (!std::isfinite(time))
+        throw std::invalid_argument("SourceGhost requires a finite physical evaluation time");
+      staged.physical_time = time;
+    }
+  };
+  using EvaluationPoint = runtime::multiblock::BoundaryEvaluationPoint;
   auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                        provider_plan, geometry, topology, ghosts, ghost](
-                           MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
+                        provider_plan, geometry, topology, ghosts, ghost, qualify_ghost](
+                           MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+                           const EvaluationPoint* point = nullptr) {
+    Ghost staged = ghost;
     if (boundary != nullptr) {
       boundary->template require_model_qualified_characteristic_provider<Model>();
       if (boundary->has_characteristic_no_inflow())
         throw std::logic_error("characteristic no-inflow requires the prepared boundary transport");
+      if constexpr (requires { Ghost::evaluation_clock; }) {
+        boundary->template require_source_ghost_policy<Ghost>(geometry.domain(), state.ghosts());
+        qualify_ghost(staged, point);
+      }
     }
     const auto state_schedule = HaloSchedule<Dim>(
         state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
@@ -853,7 +870,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     }
     if (boundary != nullptr) {
       if constexpr (Ghost::present)
-        boundary->fill_physical_model_qualified(state, geometry, model, ghost);
+        boundary->fill_physical_model_qualified(state, geometry, model, staged);
       else
         boundary->fill_physical_model_qualified(state, geometry, model);
     }
@@ -861,15 +878,22 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
 
   auto prepare_state_with_transport =
       [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
-       geometry, ghost](const runtime::multiblock::BoundaryEvaluationPoint& point,
-                        MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
-                        const ExecutionLane& lane,
-                        const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+       geometry, ghost, qualify_ghost](
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
+          const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
+          const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+        Ghost staged = ghost;
         prepared_boundary_collective_phase(
             lane,
             [&] {
-              if (boundary != nullptr)
+              if (boundary != nullptr) {
                 boundary->template require_model_qualified_characteristic_provider<Model>();
+                if constexpr (requires { Ghost::evaluation_clock; }) {
+                  boundary->template require_source_ghost_policy<Ghost>(geometry.domain(),
+                                                                        state.ghosts());
+                  qualify_ghost(staged, &point);
+                }
+              }
             },
             "generated prepared boundary model authentication failed collectively");
         prepared_boundary_collective_phase(
@@ -892,7 +916,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
                 transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
                   if constexpr (Ghost::present)
                     boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
-                                                            ghost,
+                                                            staged,
                                                             static_cast<Real>(point.physical_time));
                   else
                     boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
@@ -1201,9 +1225,9 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.closures.prepare_generated_state_at_point =
       [prepare_state](const auto&, MultiFab<Dim>& state) { prepare_state(state, nullptr); };
   result.closures.prepare_generated_state_at_point_prepared =
-      [prepare_state](const auto&, MultiFab<Dim>& state,
+      [prepare_state](const auto& point, MultiFab<Dim>& state,
                       const PreparedHyperbolicBoundary<Dim>& boundary) {
-        prepare_state(state, &boundary);
+        prepare_state(state, &boundary, &point);
       };
   result.closures.prepare_generated_state_with_transport_prepared =
       [prepare_state_with_external](
