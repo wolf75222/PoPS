@@ -144,6 +144,14 @@ class BoundaryTopology {
 
   bool has_identifications() const noexcept { return has_identifications_; }
 
+  /// Every face receives its trace from the installed halo topology.
+  bool is_closed() const noexcept {
+    for (const auto& face : faces_)
+      if (face.kind == BoundaryFaceKind::physical)
+        return false;
+    return true;
+  }
+
   const std::array<BoundaryFaceRecord<Dim>, face_count>& faces() const noexcept { return faces_; }
 
   const BoundaryFaceRecord<Dim>& at(Face<Dim> face) const noexcept {

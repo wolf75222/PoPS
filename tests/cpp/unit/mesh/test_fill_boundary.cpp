@@ -84,6 +84,70 @@ TEST(test_fill_boundary, ordinary_periodic_halos_are_exact_in_1d_2d_and_3d) {
   expect_periodic_halo<3>();
 }
 
+TEST(test_fill_boundary, wrapped_tangential_shift_imports_both_ghost_layers) {
+  const auto domain = cube<2>(0, 7);
+  const auto layout = BoxArray<2>::from_domain(domain, Extent<2>{8, 4});
+  const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
+  HostMultiFab<2> fields(layout, distribution, Index<2>{}, 1, Extent<2>{2, 2});
+  fill_valid_encoded(fields, Real{-777});
+  const VariableSet variables{VariableKind::Conservative, {"q"}, 1, {VariableRole::Scalar}};
+  const auto topology =
+      BoundaryTopology<2>::uniform_identifications({false, true}, {{0, 1, {0, 1}, {1, 1}, {8, 2}}});
+  const auto schedule =
+      prepare_halo_schedule(fields, domain, topology, HaloLayoutCoverage::full_domain,
+                            halo_budget<2>(layout.size(), 128), &variables);
+  fill_boundary(fields, schedule);
+  EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<2>{8, 1}), encoded_value(Index<2>{0, 7}));
+  EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<2>{8, -1}), encoded_value(Index<2>{0, 5}));
+  EXPECT_DOUBLE_EQ(value_at(fields, 0, Index<2>{9, -2}), encoded_value(Index<2>{1, 4}));
+}
+
+TEST(test_fill_boundary, polar_families_and_scalars_use_the_same_composed_ghost_image) {
+  const auto domain = cube<2>(0, 7);
+  const auto layout = BoxArray<2>::from_domain(domain, Extent<2>{8, 4});
+  const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
+  HostMultiFab<2> fields(layout, distribution, Index<2>{}, 6, Extent<2>{2, 2});
+  fill_valid_encoded(fields, Real{-777});
+  const VariableSet variables{
+      VariableKind::Conservative,
+      {"s", "a1", "b0", "t", "b1", "a0"},
+      6,
+      {VariableRole::Scalar, VariableRole::momentum(1), VariableRole::velocity(0),
+       VariableRole::Scalar, VariableRole::velocity(1), VariableRole::momentum(0)}};
+  const auto topology = BoundaryTopology<2>::uniform_identifications(
+      {false, false}, {{0, 3, {1, 0}, {1, -1}, {7, 8}}, {2, 1, {1, 0}, {-1, 1}, {8, 7}}});
+  const auto schedule =
+      prepare_halo_schedule(fields, domain, topology, HaloLayoutCoverage::full_domain,
+                            halo_budget<2>(layout.size(), 128), &variables);
+
+  // Reject a conflicting corner before any field can be changed.
+  const auto conflicting = BoundaryTopology<2>::uniform_identifications(
+      {false, false}, {{0, 3, {1, 0}, {1, 1}, {0, 8}}, {2, 1, {1, 0}, {-1, 1}, {8, 7}}});
+  const auto before = snapshot(fields);
+  EXPECT_THROW(prepare_halo_schedule(fields, domain, conflicting, HaloLayoutCoverage::full_domain,
+                                     halo_budget<2>(layout.size(), 128), &variables),
+               std::invalid_argument);
+  EXPECT_EQ(snapshot(fields), before);
+
+  fill_boundary(fields, schedule);
+  const Index<2> ghost{8, 5};
+  const Index<2> donor{2, 0};
+  const std::array<int, 6> source_components{0, 5, 4, 3, 2, 1};
+  const std::array<int, 6> signs{1, -1, 1, 1, -1, 1};
+  for (int component = 0; component < fields.ncomp(); ++component)
+    EXPECT_DOUBLE_EQ(value_at(fields, 1, ghost, component),
+                     signs[component] * encoded_value(donor, source_components[component]));
+  for (int depth : {1, 2}) {
+    const Index<2> corner{-depth, -depth};
+    const Index<2> donor_corner{depth - 1, depth - 1};
+    for (int component = 0; component < fields.ncomp(); ++component) {
+      const int sign = variables.roles[component].has_axis() ? -1 : 1;
+      EXPECT_DOUBLE_EQ(value_at(fields, 0, corner, component),
+                       sign * encoded_value(donor_corner, component));
+    }
+  }
+}
+
 TEST(test_fill_boundary, remote_schedule_refuses_before_local_mutation) {
   const Box<1> domain{Index<1>{0}, Index<1>{3}};
   const BoxArray<1> layout = BoxArray<1>::from_domain(domain, Extent<1>{2});

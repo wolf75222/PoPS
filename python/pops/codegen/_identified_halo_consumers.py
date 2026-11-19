@@ -5,7 +5,6 @@ from typing import Any
 
 from pops.codegen._static_geometry_consumers import STATIC_GEOMETRY_PROGRAM_OPS
 from pops.codegen.program_lowerability import all_ops
-from pops.numerics.spatial import FiniteVolume
 from pops.time._step.strategy import FixedDt
 
 
@@ -25,6 +24,8 @@ def validate_identified_halo_consumers(plan: Any) -> None:
             "G09 I1 identified halos have no qualified field, solver or external component consumer")
     if type(plan.time._step_strategy) is not FixedDt:
         raise NotImplementedError("G09 I1 identified halos serve the fixed-time-step flux route")
+    from pops.numerics.spatial import FiniteVolume
+
     for block in plan.blocks:
         numerics = block.numerics
         if (numerics.boundaries or numerics.interfaces or numerics.fields or

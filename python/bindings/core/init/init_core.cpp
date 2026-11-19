@@ -877,29 +877,45 @@ void init_core(py::module_& m) {
       .def_property(
           "identifications",
           [](const NativeSystemConfig& config) {
-            std::vector<std::vector<int>> rows;
-            for (const auto& identification : config.identifications) {
-              std::vector<int> row{identification.source_face, identification.target_face};
-              row.insert(row.end(), identification.permutation.begin(),
-                         identification.permutation.end());
-              row.insert(row.end(), identification.signs.begin(), identification.signs.end());
-              row.insert(row.end(), identification.target_offsets.begin(),
-                         identification.target_offsets.end());
-              rows.push_back(std::move(row));
+            py::tuple rows(config.identifications.size());
+            for (std::size_t i = 0; i < config.identifications.size(); ++i) {
+              const auto& identification = config.identifications[i];
+              py::tuple row(2 + 3 * kNativeDimension);
+              row[0] = identification.source_face;
+              row[1] = identification.target_face;
+              for (int axis = 0; axis < kNativeDimension; ++axis) {
+                row[2 + axis] = identification.permutation[axis];
+                row[2 + kNativeDimension + axis] = identification.signs[axis];
+                row[2 + 2 * kNativeDimension + axis] = identification.target_offsets[axis];
+              }
+              rows[i] = row;
             }
             return rows;
           },
-          [](NativeSystemConfig& config,
-             const std::vector<std::array<int, 2 + 3 * kNativeDimension>>& rows) {
+          [](NativeSystemConfig& config, const py::handle& value) {
+            if (!PyTuple_CheckExact(value.ptr()))
+              throw py::type_error("SystemConfig.identifications must be an exact tuple");
+            const auto rows = py::reinterpret_borrow<py::tuple>(value);
             std::vector<PeriodicIdentification<kNativeDimension>> identifications;
             for (const auto& row : rows) {
+              constexpr int row_size = 2 + 3 * kNativeDimension;
+              if (!PyTuple_CheckExact(row.ptr()) || py::len(row) != row_size)
+                throw py::type_error("SystemConfig.identification row must match the native rank");
+              const auto values = py::reinterpret_borrow<py::tuple>(row);
+              std::array<int, row_size> words{};
+              for (int i = 0; i < row_size; ++i) {
+                if (!PyLong_CheckExact(values[i].ptr()))
+                  throw py::type_error(
+                      "SystemConfig.identification entries must be exact integers");
+                words[i] = py::cast<int>(values[i]);
+              }
               PeriodicIdentification<kNativeDimension> identification;
-              identification.source_face = row[0];
-              identification.target_face = row[1];
+              identification.source_face = words[0];
+              identification.target_face = words[1];
               for (int axis = 0; axis < kNativeDimension; ++axis) {
-                identification.permutation[axis] = row[2 + axis];
-                identification.signs[axis] = row[2 + kNativeDimension + axis];
-                identification.target_offsets[axis] = row[2 + 2 * kNativeDimension + axis];
+                identification.permutation[axis] = words[2 + axis];
+                identification.signs[axis] = words[2 + kNativeDimension + axis];
+                identification.target_offsets[axis] = words[2 + 2 * kNativeDimension + axis];
               }
               identification.validate(true);
               identifications.push_back(identification);

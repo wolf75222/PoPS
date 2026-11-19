@@ -14,7 +14,7 @@ from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.numerics import upwind
 from pops.lib.time.methods import ssprk2
-from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.mesh import CartesianGrid, NativeSpatialLayout, PeriodicAxes
 from pops.mesh.boundaries import (
     BoundaryHandle,
     BoundaryOrientation,
@@ -46,11 +46,11 @@ from tests.python.support.public_native_profile import compile_profile_plan_once
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
 
-def build_g09_twisted_transport(*, identified=True):
+def build_g09_twisted_transport(*, identified=True, shift=Fraction(1, 4)):
     if identified:
         box = surface.Box(x=(2, 3), y=surface.Periodic(-2, -1))
         domain = box.identify(box.boundary.x_min, box.boundary.x_max,
-                              by={box.y: box.y + Fraction(1, 4)})
+                              by={box.y: box.y + shift})
     else:
         domain = surface.Box(x=surface.Periodic(2, 3), y=surface.Periodic(-2, -1))
     model = surface.Model("offset_scalar_transport")
@@ -107,7 +107,14 @@ def build_g09_quarter_euler(*, identified=True):
 
 def test_shifted_scalar_consumes_the_wrapped_tangential_trace(tmp_path):
     case, tracer, datum = build_g09_twisted_transport()
-    native_profile(dimension=2, scope="G09 shifted scalar transport")
+    native, _ = native_profile(dimension=2, scope="G09 shifted scalar transport")
+    config = native.SystemConfig()
+    (row,) = case.elaborated.layout.mesh.native_spatial_data()["identifications"]
+    config.identifications = (tuple(row),)
+    assert config.identifications == (tuple(row),)
+    with pytest.raises(TypeError, match="entries must be exact integers"):
+        config.identifications = ((True, *row[1:]),)
+    assert config.identifications == (tuple(row),)
     artifact = surface.compile(case, target=surface.OpenMP())
     simulation = surface.bind(artifact, data={datum: twisted_initial()}, directory=tmp_path)
     result = simulation.run(until=TWIST_DT)
@@ -117,6 +124,27 @@ def test_shifted_scalar_consumes_the_wrapped_tangential_trace(tmp_path):
     assert actual[-1, 1] == 1.125
     assert float(actual.sum()) == float(twisted_initial().sum())
     assert result.time == TWIST_DT and result.steps == 1 and result.rejections == 0
+
+
+def test_mapped_layout_identity_includes_the_exact_resolved_offsets():
+    def layout(**options):
+        authored, _, _ = build_g09_twisted_transport(**options)
+        elaborated = authored.elaborated
+        plan = pops.resolve(pops.validate(elaborated.case), layout=elaborated.layout)
+        (normalized,) = plan.layout_plan.layouts
+        assert normalized.native_spatial_layout is not None
+        return normalized.native_spatial_layout
+
+    ordinary, first, second = layout(identified=False), layout(), layout(shift=Fraction(1, 8))
+    assert first.shape == second.shape == ordinary.shape
+    assert first.periodicity == second.periodicity == (False, True)
+    assert "identifications" not in ordinary.to_data()
+    assert first.identifications == ((0, 1, 0, 1, 1, 1, 8, 2),)
+    assert second.identifications == ((0, 1, 0, 1, 1, 1, 8, 1),)
+    assert len({ordinary.identity, first.identity, second.identity}) == 3
+    assert NativeSpatialLayout.from_data(first.to_data()).identity == first.identity
+    with pytest.raises(ValueError, match="tangential identification offset"):
+        layout(shift=Fraction(1, 5))
 
 
 def test_quarter_euler_consumes_density_and_both_oriented_moments():

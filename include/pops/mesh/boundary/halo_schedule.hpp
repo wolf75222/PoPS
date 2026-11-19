@@ -10,6 +10,8 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
 
+#include <Kokkos_Core.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -23,47 +25,88 @@
 
 namespace pops {
 
+namespace halo_schedule_detail {
+
+/// Use the exact declared component roles to build a signed inverse action on storage slots.
+/// Each complete polar family is discovered from its typed axis-independent identity.
 template <int Dim>
-struct HaloComponentRoles {
-  std::array<int, Dim> momentum;
-  std::array<int, Dim> velocity;
-
-  HaloComponentRoles() {
-    momentum.fill(-1);
-    velocity.fill(-1);
-  }
-
-  explicit HaloComponentRoles(const VariableSet& variables) : HaloComponentRoles() {
+class ComponentGatherTable {
+ public:
+  explicit ComponentGatherTable(const VariableSet& variables) : components_(variables.size) {
     if (variables.roles.size() != static_cast<std::size_t>(variables.size))
       throw std::invalid_argument("identified halo requires the exact declared field roles");
-    for (int i = 0; i < variables.size; ++i) {
-      const auto role = variables.roles[i];
+    for (int component = 0; component < components_; ++component) {
+      const auto role = variables.roles[component];
       role.template validate_for_dimension<Dim>();
-      if (role.kind == VariableRoleKind::Custom || role.kind == VariableRoleKind::Axial)
+      if (!role.has_cartesian_value_action())
         throw std::invalid_argument("identified halo has an unserved field component role");
-      if (!role.is_vector())
+      if (!role.has_axis())
         continue;
-      auto& slots = role.kind == VariableRoleKind::Momentum ? momentum : velocity;
-      if (slots[role.axis] != -1)
+      const int role_family = static_cast<int>(role.kind);
+      const auto family =
+          std::find_if(groups_.begin(), groups_.end(),
+                       [role_family](const auto& group) { return group.family == role_family; });
+      auto& group = family == groups_.end() ? groups_.emplace_back(role_family) : *family;
+      if (group.components[role.axis] != -1)
         throw std::invalid_argument("identified halo repeats a vector component axis");
-      slots[role.axis] = i;
+      group.components[role.axis] = component;
     }
-    for (const auto& slots : {momentum, velocity}) {
-      const auto absent = std::count(slots.begin(), slots.end(), -1);
-      if (absent != 0 && absent != Dim)
+    for (const auto& group : groups_) {
+      if (std::find(group.components.begin(), group.components.end(), -1) != group.components.end())
         throw std::invalid_argument("identified halo requires every axis of its polar vector");
     }
   }
 
-  bool operator==(const HaloComponentRoles&) const = default;
+  std::size_t add(const mesh::SignedPermutation<Dim>& permutation) {
+    const auto existing = std::find(permutations_.begin(), permutations_.end(), permutation);
+    if (existing != permutations_.end())
+      return static_cast<std::size_t>(existing - permutations_.begin()) * components_;
+
+    const std::size_t offset = rows_.size();
+    permutations_.push_back(permutation);
+    // A signed one-based component index represents either identity or reversal, including
+    // component zero. Share the table between all jobs with this signed permutation.
+    for (int component = 0; component < components_; ++component)
+      rows_.push_back(component + 1);
+    for (const auto& group : groups_) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        const auto source = group.components[permutation.target_axes()[axis]];
+        rows_[offset + group.components[axis]] = permutation.signs()[axis] * (source + 1);
+      }
+    }
+    return offset;
+  }
+
+  Kokkos::View<const int*, Kokkos::SharedSpace> prepare() const {
+    Kokkos::View<int*, Kokkos::SharedSpace> device_rows(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, "pops_halo_component_gathers"),
+        rows_.size());
+    std::copy(rows_.begin(), rows_.end(), device_rows.data());
+    return device_rows;
+  }
+
+ private:
+  struct Group {
+    explicit Group(int role_family) : family(role_family) { components.fill(-1); }
+
+    int family;
+    std::array<int, Dim> components{};
+  };
+
+  int components_;
+  std::vector<Group> groups_;
+  std::vector<mesh::SignedPermutation<Dim>> permutations_;
+  std::vector<int> rows_;
 };
+
+}  // namespace halo_schedule_detail
 
 template <int Dim>
 struct OrientedHaloGather {
   std::array<int, Dim> source_axis{};
   std::array<int, Dim> signs{};
   std::array<std::int64_t, Dim> source_offsets{};
-  HaloComponentRoles<Dim> roles;
+  std::size_t component_offset = 0;
 
   POPS_HD Index<Dim> index(const Index<Dim>& destination) const {
     Index<Dim> source{};
@@ -75,15 +118,10 @@ struct OrientedHaloGather {
     return source;
   }
 
-  POPS_HD Real value(const FieldView<const Real, Dim>& source, const Index<Dim>& image,
-                     int component) const {
-    for (int axis = 0; axis < Dim; ++axis) {
-      if (component == roles.momentum[axis])
-        return signs[axis] * source(image, roles.momentum[source_axis[axis]]);
-      if (component == roles.velocity[axis])
-        return signs[axis] * source(image, roles.velocity[source_axis[axis]]);
-    }
-    return source(image, component);
+  POPS_HD static Real value(const FieldView<const Real, Dim>& source, const Index<Dim>& image,
+                            int signed_component) {
+    return signed_component < 0 ? -source(image, -signed_component - 1)
+                                : source(image, signed_component - 1);
   }
 
   bool operator==(const OrientedHaloGather&) const = default;
@@ -336,6 +374,9 @@ class HaloSchedule {
   const std::vector<job_type>& local_jobs() const noexcept { return local_; }
   const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
   const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
+  const int* component_gather(const OrientedHaloGather<Dim>& image) const noexcept {
+    return component_gathers_.data() + image.component_offset;
+  }
   std::size_t local_elements() const noexcept { return local_elements_; }
   std::size_t send_elements() const noexcept { return send_elements_; }
   std::size_t receive_elements() const noexcept { return receive_elements_; }
@@ -399,7 +440,7 @@ class HaloSchedule {
   }
 
   std::vector<job_type> identified_jobs_(const VariableSet* field_roles,
-                                         const HaloScheduleBudget& budget) const {
+                                         const HaloScheduleBudget& budget) {
     if (coverage_ != HaloLayoutCoverage::full_domain)
       throw std::invalid_argument("identified halo requires full Cartesian Uniform coverage");
     if (field_roles == nullptr || field_roles->size != ncomp_)
@@ -408,7 +449,7 @@ class HaloSchedule {
       if (ghosts_[axis] < 0 || ghosts_[axis] > domain_.length(axis))
         throw std::invalid_argument("identified halo depth exceeds image extent on axis " +
                                     std::to_string(axis));
-    const HaloComponentRoles<Dim> roles{*field_roles};
+    halo_schedule_detail::ComponentGatherTable<Dim> component_gathers(*field_roles);
     const auto crossings = identified_halo_detail::prepare_crossings(topology_, domain_);
     std::size_t intersections = 0;
     std::vector<job_type> jobs;
@@ -423,7 +464,8 @@ class HaloSchedule {
           const auto source_image = gather.apply(image.destination);
           const auto& permutation = gather.signed_permutation();
           const OrientedHaloGather<Dim> oriented{permutation.target_axes(), permutation.signs(),
-                                                 gather.target_offsets(), roles};
+                                                 gather.target_offsets(),
+                                                 component_gathers.add(permutation)};
           halo_schedule_detail::checked_add(intersections, layout_.size(), budget.box_image_pairs,
                                             "identified halo box-image work budget exceeded");
           for (std::size_t source = 0; source < layout_.size(); ++source) {
@@ -444,6 +486,7 @@ class HaloSchedule {
         }
       }
     }
+    component_gathers_ = component_gathers.prepare();
     return jobs;
   }
 
@@ -515,6 +558,7 @@ class HaloSchedule {
   BoundaryTopology<Dim> topology_{};
   int ncomp_ = 0;
   HaloLayoutCoverage coverage_ = HaloLayoutCoverage::full_domain;
+  Kokkos::View<const int*, Kokkos::SharedSpace> component_gathers_;
   std::vector<job_type> canonical_jobs_{};
   std::vector<job_type> local_{};
   std::vector<peer_plan_type> send_{};

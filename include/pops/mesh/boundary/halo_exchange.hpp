@@ -407,6 +407,7 @@ class HaloExchange {
     FieldView<const Real, Dim> source{};
     KernelJob job{};
     OrientedHaloGather<Dim> gather{};
+    const int* component_gather = nullptr;
 
     POPS_HD void operator()(execution_index_type element) const {
       const int component = static_cast<int>(element / job.cells_per_component);
@@ -419,7 +420,7 @@ class HaloExchange {
         cell /= job.destination_extent[axis];
       }
       const auto image = gather.index(destination);
-      buffer(job.offset + element) = gather.value(source, image, component);
+      buffer(job.offset + element) = gather.value(source, image, component_gather[component]);
     }
   };
 
@@ -476,7 +477,8 @@ class HaloExchange {
       const KernelJob lowered = lower_job_(job);
       if (job.oriented)
         Kokkos::parallel_for("pops_halo_pack_oriented", execution_policy(0, lowered.elements),
-                             PackOrientedKernel{buffer, source, lowered, *job.oriented});
+                             PackOrientedKernel{buffer, source, lowered, *job.oriented,
+                                                schedule_->component_gather(*job.oriented)});
       else
         Kokkos::parallel_for("pops_halo_pack", execution_policy(0, lowered.elements),
                              PackKernel{buffer, source, lowered});
@@ -609,9 +611,10 @@ class HaloExchange {
           append_i64_(bytes, job.oriented->source_axis[axis]);
           append_i64_(bytes, job.oriented->signs[axis]);
           append_i64_(bytes, job.oriented->source_offsets[axis]);
-          append_i64_(bytes, job.oriented->roles.momentum[axis]);
-          append_i64_(bytes, job.oriented->roles.velocity[axis]);
         }
+        const auto* components = schedule_->component_gather(*job.oriented);
+        for (int component = 0; component < schedule_->ncomp(); ++component)
+          append_i64_(bytes, components[component]);
       }
     }
     return bytes;
