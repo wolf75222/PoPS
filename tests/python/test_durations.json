@@ -9804,6 +9804,14 @@
         "tests/python/integration/runtime/test_cell_step_rule_n8_native.py": "cd46abbae3a5d32133d006ece50b20722bfba715e158d69890dcde01bedbaf3c"
       }
     },
+    "n15_20261119_faceflux_cellrate_fc3": {
+      "basis": "Cold CI scheduling estimates for ROM-98 FC-3. The N16 native file gains two separate graded compilations, named source and flux under the total and the average, and retains its historical flux-only probes. The surface CellRate native file gains one graded source-only compilation and retains its five uniform cases. Budget the next native tiers, 1200 s and 600 s respectively. The static geometry unit file gains source-dependency resolution probes within its existing 60 s tier. The full manifest at 176 shards has a maximum of 1885 s across multi-file shards.",
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_n16_three_words_native.py": 1200,
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": 600,
+        "tests/python/unit/mesh/test_static_geometry_reading.py": 60
+      }
+    },
     "n15_20261113_faceflux_cellrate_fc1": {
       "basis": "Unmeasured CI scheduling estimates for N15 FaceFlux/CellRate lot FC-1 (ROM-98): model.source, CellRate and pointwise() at the surface. The native file compiles five surface cases once in a module fixture (a source under CellAverage(), CellTotal() and PointValue(), - S, and a source alone by forward Euler): 300 s, the tier of one module of compiles, as its analogue test_surface_n16_three_words_native.py. The unit file elaborates, resolves and emits the C++ of about twenty surface and b6 cases without compiling: 60 s, the upper source-only tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.01 Serial, native module of rank one, the native session contended by a concurrent unit run); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
       "analogues": {
@@ -11749,7 +11757,7 @@
   "tests/python/unit/surface/test_solver_region_cost_n9.py": 30,
   "tests/python/unit/amr/test_refinement_criterion_model_parameters.py": 27,
   "tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py": 325,
-  "tests/python/integration/runtime/test_n16_three_words_native.py": 900,
+  "tests/python/integration/runtime/test_n16_three_words_native.py": 1200,
   "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 300,
   "tests/python/unit/numerics/test_n16_three_words_rows.py": 60,
   "tests/python/integration/runtime/test_g03_cell_totals_native.py": 600,
@@ -11773,7 +11781,7 @@
   "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
   "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
   "tests/python/unit/surface/test_n15_face_coordinates.py": 2,
-  "tests/python/integration/runtime/test_surface_n15_sources_native.py": 300,
+  "tests/python/integration/runtime/test_surface_n15_sources_native.py": 600,
   "tests/python/unit/surface/test_n15_sources.py": 60,
   "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 300,
   "tests/python/unit/surface/test_n15_cell_load.py": 30,
