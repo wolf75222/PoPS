@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "amr_fixture_tag_mask_oracle.hpp"
 #include "amr_tagging_test_authority.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include "field_rhs_value_program_fixture.hpp"
@@ -3942,8 +3944,9 @@ TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
 }
 
-TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
-  constexpr int Dim = pops::kNativeDimension;
+namespace {
+template <int Dim>
+void exercise_mixed_storage_cfl(bool contrast) {
   pops::AmrSystemConfig<Dim> config;
   config.regrid_every = 0;
   for (int axis = 0; axis < Dim; ++axis) {
@@ -3954,7 +3957,14 @@ TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/cfl-mixed-capabilities");
   system.set_temporal_relations({1}, {1}, {"integral_only"});
-  system.install_block_state_route("tracer", "state/tracer");
+  const auto& tagging_field = pops::test::mixed_cfl.fields.front();
+  const auto tracer_schema = decltype(advection_model<Dim>())::conservative_vars();
+  ASSERT_STREQ(tagging_field.block, "tracer");
+  ASSERT_STREQ(tagging_field.variable, "u");
+  ASSERT_EQ(tagging_field.component, 0);
+  ASSERT_EQ(tracer_schema.names.at(0), tagging_field.variable);
+  ASSERT_EQ(tracer_schema.roles.at(0), pops::VariableRole::Scalar);
+  system.install_block_state_route("tracer", tagging_field.state);
   system.install_block_state_route("storage", "state/storage");
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
   system.install_prepared_amr_block(pops::prepare_compiled_amr_system_block<Dim>(
@@ -3963,29 +3973,76 @@ TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
   const std::vector<double> data(cell_count(config.shape), 1.0);
   system.set_conservative_state("tracer", data);
   system.set_conservative_state("storage", data);
-  pops::test::install_prepared_threshold_union(
-      system, {{"tracer", "u", 1.5, pops::test::PreparedThresholdRelation::Above, "state/tracer"}},
-      "tests.generated-amr/cfl-mixed-tagging@1");
-  ASSERT_NE(system.engine(), nullptr);
+  constexpr char clock[] = "clock.macro";
+  pops::test::mixed_cfl.install<Dim>(system, clock);
+  ASSERT_FALSE(system.uses_runtime_engine());
+  system.install_program(POPS_TEST_MIXED_CFL_PROGRAM_SO);
+  ASSERT_TRUE(system.uses_runtime_engine());
+  ASSERT_EQ(system.program_block_map(), (std::vector<int>{0, 1}));
   ASSERT_EQ(system.n_levels(), 1);
+  EXPECT_EQ(system.time(), 0.);
+  EXPECT_EQ(system.macro_step(), 0);
+  system.mark_bound();
+
+  // The installed runtime owns the image. Reopening it resolves only its private observation.
+  const pops::dynlib::UniqueHandle image(pops::dynlib::open(POPS_TEST_MIXED_CFL_PROGRAM_SO));
+  ASSERT_TRUE(pops::dynlib::valid(image.get()));
+  const auto primary_clock = reinterpret_cast<const char* (*)()>(
+      pops::dynlib::sym(image.get(), "pops_program_checkpoint_primary_clock_identity"));
+  ASSERT_NE(primary_clock, nullptr);
+  EXPECT_STREQ(primary_clock(), clock);
+  const auto invocations = reinterpret_cast<int (*)(pops::AmrSystem<Dim>*)>(
+      pops::dynlib::sym(image.get(), "pops_test_mixed_cfl_invocations"));
+  ASSERT_NE(invocations, nullptr);
+  EXPECT_EQ(invocations(&system), 0);
   // The facade must publish the same refined topology for BOTH block storages.
   // Publishing only into the primary engine leaves the peer hierarchy unmaterialized.
   auto tagged = data;
+  auto peer = data;
+  std::vector<bool> expected_refine(data.size());
   for (std::size_t cell = 0; cell < tagged.size(); ++cell) {
     std::size_t quotient = cell;
-    bool selected = true;
+    bool inside_original = true, high = true, equal = true, storage_only = true;
     for (int axis = 0; axis < Dim; ++axis) {
       const auto coordinate = quotient % static_cast<std::size_t>(config.shape[axis]);
-      selected = selected && coordinate >= 2 && coordinate < 6;
       quotient /= static_cast<std::size_t>(config.shape[axis]);
+      inside_original = inside_original && coordinate >= 2 && coordinate < 6;
+      high = high && coordinate == 3;
+      equal = equal && coordinate == 1;
+      storage_only = storage_only && coordinate == 6;
     }
-    if (selected)
-      tagged[cell] = 2.0;
+    expected_refine[cell] = contrast ? high : inside_original;
+    if (expected_refine[cell])
+      tagged[cell] = 2.;
+    if (contrast && equal)
+      tagged[cell] = 1.5;
+    if (contrast && storage_only)
+      peer[cell] = 2.;
   }
   system.set_conservative_state("tracer", tagged);
-  (void)system.execute_prepared_tagging(0);
+  system.set_conservative_state("storage", peer);
+  ASSERT_EQ(system.block_level_state_global("tracer", 0), tagged);
+  ASSERT_EQ(system.block_level_state_global("storage", 0), peer);
+  const auto marks = system.execute_prepared_tagging(0);
+  EXPECT_EQ(pops::test::expect_fixture_tag_mask(marks.refine, config.shape,
+                                                [&](std::size_t i) { return expected_refine[i]; }),
+            data.size());
+  EXPECT_EQ(pops::test::expect_fixture_tag_mask(marks.coarsen, config.shape,
+                                                [](std::size_t) { return false; }),
+            data.size());
   ASSERT_TRUE(system.regrid_from_prepared_tagging(0));
   ASSERT_EQ(system.n_levels(), 2);
+  EXPECT_EQ(invocations(&system), 0);
+  EXPECT_EQ(system.time(), 0.);
+  EXPECT_EQ(system.macro_step(), 0);
+  const auto& patches = system.engine()->hierarchy().layout(1).patches().boxes();
+  if (contrast) {
+    ASSERT_EQ(patches.size(), 1u);
+    for (int axis = 0; axis < Dim; ++axis) {
+      EXPECT_EQ(patches[0].lo[axis], 6);
+      EXPECT_EQ(patches[0].hi[axis], 7);
+    }
+  }
   const auto fine_shape = system.engine()->hierarchy().layout(1).domain().extent();
   const std::vector<double> fine_data(cell_count(fine_shape), 1.0);
   auto expected_fine = fine_data;
@@ -3996,7 +4053,6 @@ TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
       index[axis] = static_cast<int>(quotient % static_cast<std::size_t>(fine_shape[axis]));
       quotient /= static_cast<std::size_t>(fine_shape[axis]);
     }
-    const auto& patches = system.engine()->hierarchy().layout(1).patches().boxes();
     expected_fine[cell] = std::any_of(patches.begin(), patches.end(),
                                       [&](const auto& box) { return box.contains(index); })
                               ? 1.0
@@ -4008,11 +4064,25 @@ TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
     EXPECT_EQ(system.block_level_state_global(block, 0), data);
     EXPECT_EQ(system.block_level_state_global(block, 1), expected_fine);
   }
-  int calls = 0;
-  system.install_program_step([&](double) { ++calls; });
-  EXPECT_NEAR(system.step_cfl(.4), .4 / (16. * Dim), 1.e-12);
+  const double dt = system.step_cfl(.4);
+  EXPECT_NEAR(dt, .4 / (16. * Dim), 1.e-12);
   EXPECT_EQ(system.last_dt_bound(), "transport:tracer");
-  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(invocations(&system), 1);
+  EXPECT_EQ(system.time(), dt);
+  EXPECT_EQ(system.macro_step(), 1);
+  for (const std::string block : {"tracer", "storage"}) {
+    EXPECT_EQ(system.block_level_state_global(block, 0), data);
+    EXPECT_EQ(system.block_level_state_global(block, 1), expected_fine);
+  }
+}
+}  // namespace
+
+TEST(GeneratedAmrSystemBlock, CflComposesTransportWithProgramOnlyStorage) {
+  exercise_mixed_storage_cfl<pops::kNativeDimension>(false);
+}
+
+TEST(GeneratedAmrSystemBlock, CflComposesTransportWithAsymmetricTagControl) {
+  exercise_mixed_storage_cfl<pops::kNativeDimension>(true);
 }
 
 TEST(GeneratedAmrSystemBlock, CflProgramStorageRequiresAnActualFiniteBound) {

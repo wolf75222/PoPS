@@ -3,7 +3,7 @@
 #include "prepared_constitutive_amr_program.hpp"
 #endif
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM)
+#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
 #include <unordered_map>
 #endif
 
@@ -20,6 +20,10 @@ constexpr std::uint64_t flux_bound = 2;
 #elif defined(POPS_TEST_EMPTY_AMR_CADENCE)
 constexpr const char* primary_clock = "test.clock.macro";
 constexpr const char* program_name = "test-empty-amr-cadence";
+constexpr std::uint64_t flux_bound = 0;
+#elif defined(POPS_TEST_MIXED_CFL)
+constexpr const char* primary_clock = "clock.macro";
+constexpr const char* program_name = "test-mixed-cfl-amr";
 constexpr std::uint64_t flux_bound = 0;
 #elif defined(POPS_TEST_MIXED_NORM)
 constexpr const char* primary_clock = "tests.norm2.mixed-level/clock@1";
@@ -243,7 +247,7 @@ extern "C" const char* pops_module_field_space_owner(int) {
   return "";
 }
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM)
+#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
 namespace pops::runtime::program::detail {
 template <int Dim>
 struct AmrInteractionHistorySnapshotTestAccess {
@@ -268,17 +272,11 @@ using ControlAccess = pops::runtime::program::detail::AmrInteractionHistorySnaps
 struct ContextControl {
   std::weak_ptr<ControlledContext> context;
   std::uint64_t generation;
+  std::weak_ptr<int> invocations{};
 };
 std::unordered_map<ControlledSystem*, ContextControl> installed_contexts;
-}  // namespace
 
-#if defined(POPS_TEST_MIXED_NORM)
-#define POPS_TEST_CONTEXT_EXPORT pops_test_mixed_norm_context
-#else
-#define POPS_TEST_CONTEXT_EXPORT pops_test_history_context
-#endif
-extern "C" void POPS_TEST_CONTEXT_EXPORT(ControlledSystem* system,
-                                         std::shared_ptr<ControlledContext>* result) {
+std::shared_ptr<ControlledContext> require_fixture_context(ControlledSystem* system) {
   const auto found = installed_contexts.find(system);
   if (found == installed_contexts.end())
     throw std::logic_error("fixture control lacks its exact installed system");
@@ -288,9 +286,29 @@ extern "C" void POPS_TEST_CONTEXT_EXPORT(ControlledSystem* system,
       system->installed_program_hash() != pops_program_hash() ||
       !ControlAccess::artifact_backed(*context))
     throw std::logic_error("fixture control lost its authenticated installed context");
-  *result = std::move(context);
+  return context;
 }
-#undef POPS_TEST_CONTEXT_EXPORT
+}  // namespace
+
+#if defined(POPS_TEST_MIXED_CFL)
+extern "C" int pops_test_mixed_cfl_invocations(ControlledSystem* system) {
+  const auto context = require_fixture_context(system);
+  const auto calls = installed_contexts.at(system).invocations.lock();
+  if (!calls)
+    throw std::logic_error("CFL fixture lost its installed invocation counter");
+  return *calls;
+}
+#elif defined(POPS_TEST_MIXED_NORM)
+extern "C" void pops_test_mixed_norm_context(ControlledSystem* system,
+                                             std::shared_ptr<ControlledContext>* result) {
+  *result = require_fixture_context(system);
+}
+#else
+extern "C" void pops_test_history_context(ControlledSystem* system,
+                                          std::shared_ptr<ControlledContext>* result) {
+  *result = require_fixture_context(system);
+}
+#endif
 #endif
 
 extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>* system) {
@@ -300,6 +318,12 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   pops::test::install_prepared_constitutive_step(context);
 #elif defined(POPS_TEST_EMPTY_AMR_CADENCE) || defined(POPS_TEST_MIXED_NORM)
   context->install([](double) {}, context);
+#elif defined(POPS_TEST_MIXED_CFL)
+  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
+  const auto calls = std::make_shared<int>(0);
+  context->install([calls](double) { ++*calls; }, context);
+  installed_contexts.insert_or_assign(
+      system, ContextControl{context, ControlAccess::generation(*context), calls});
 #elif defined(POPS_TEST_SCALAR_HISTORY)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK,
                                   POPS_TEST_SCALAR_HISTORY_RATIO);
@@ -318,7 +342,8 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
 #endif
 #if defined(POPS_TEST_MIXED_NORM)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
-#elif defined(POPS_TEST_EULER_FINE_CLOCK) && !defined(POPS_TEST_SCALAR_HISTORY)
+#elif defined(POPS_TEST_EULER_FINE_CLOCK) && !defined(POPS_TEST_SCALAR_HISTORY) && \
+    !defined(POPS_TEST_MIXED_CFL)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
 #endif
 }
