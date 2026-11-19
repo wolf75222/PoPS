@@ -25,7 +25,7 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time._program.api import Program as _Builder
 from pops.time._program.control import AdvanceControl
@@ -35,6 +35,9 @@ from pops.time._program.traced_method import (
 )
 from pops.time._step.strategy import FixedDt
 from pops.time._step.transaction import ensure_step_strategy
+
+if TYPE_CHECKING:
+    from pops.time._step.bound import StepBound
 
 
 class Proposal:
@@ -152,7 +155,7 @@ class Elaboration:
 
     __slots__ = ("advance", "proposal", "program", "trace", "control")
 
-    def __init__(self, advance: Advance, proposal: Proposal | StepRule, program: Any,
+    def __init__(self, advance: Advance, proposal: Proposal | StepRule | StepBound, program: Any,
                  trace: MethodTrace, control: AdvanceControl) -> None:
         self.advance = advance
         self.proposal = proposal
@@ -198,30 +201,38 @@ def _lower_memory(program: Any, method: Any, trace: MethodTrace) -> tuple:
 def _trial_failures(program: Any, trace: MethodTrace) -> tuple:
     """The failure sites of the trace (T38): for each field request its solve, classified, and the
     field_evaluation guards of its load, coefficients and reads, listed unclassified; then each
-    admissibility guard of the body (IR4), classified."""
+    admissibility guard of the body (IR4), classified.
+
+    ``variant`` lists the variants of T39 that the site can report (N9 « La référence sous les
+    solves de relation » §3.6): a solve site ``BudgetExhausted`` or ``SolveFailed``, which the run
+    chooses from the rejected status through the table of solve failures; an admissibility guard
+    ``NotAdmissible``; an unclassified site none."""
+    from pops.time.solve_outcome import SOLVE_SITE_VARIANTS
+
     rows = []
     for request in trace.requests:
         retry = not request.fixed
         for guard in ("load", "coefficients"):
             rows.append({"site": "%s/%s" % (request.site, guard), "guard": "field_evaluation",
-                         "variant": None, "retry_can_change": retry, "classified": False,
+                         "variant": [], "retry_can_change": retry, "classified": False,
                          "lot": _GUARD_LOT})
-        rows.append({"site": request.site + "/solve", "guard": "solve", "variant": "SolveFailed",
-                     "retry_can_change": retry, "classified": True, "lot": None})
+        rows.append({"site": request.site + "/solve", "guard": "solve",
+                     "variant": list(SOLVE_SITE_VARIANTS), "retry_can_change": retry,
+                     "classified": True, "lot": None})
         for _, unknown in request.reads:
             rows.append({"site": "%s/read:%s" % (request.site, unknown.name),
-                         "guard": "field_evaluation", "variant": None, "retry_can_change": retry,
+                         "guard": "field_evaluation", "variant": [], "retry_can_change": retry,
                          "classified": False, "lot": _GUARD_LOT})
     for site in trace.solves:
-        rows.append({"site": site.site, "guard": "solve", "variant": "SolveFailed",
+        rows.append({"site": site.site, "guard": "solve", "variant": list(SOLVE_SITE_VARIANTS),
                      "retry_can_change": not site.fixed, "classified": True, "lot": None})
     for guard in trace.guards:
-        rows.append({"site": guard.site, "guard": "admissibility", "variant": "NotAdmissible",
+        rows.append({"site": guard.site, "guard": "admissibility", "variant": ["NotAdmissible"],
                      "retry_can_change": not guard.fixed, "classified": True, "lot": None})
     return tuple(rows)
 
 
-def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | StepRule,
+def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Any,
               name: str | None = None, outputs: Any = (), realization: Any = None) -> Elaboration:
     """Elaborate ``advance`` for the block-qualified ``state`` of ``case``, from ``proposal``.
 
@@ -238,9 +249,11 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     """
     if not isinstance(advance, Advance):
         raise TypeError("elaborate(advance): an Advance, got %r" % (advance,))
-    if not isinstance(proposal, (Proposal, StepRule)):
-        raise TypeError("elaborate(proposal=...): the first Proposal of the run or a StepRule, "
-                        "got %r" % (proposal,))
+    from pops.time._step.bound import StepBound
+
+    if not isinstance(proposal, (Proposal, StepRule, StepBound)):
+        raise TypeError("elaborate(proposal=...): the first Proposal of the run, a StepRule or a "
+                        "StepBound, got %r" % (proposal,))
     if isinstance(proposal, StepRule) and proposal.strategy is None:
         raise TypeError("elaborate(proposal=StepRule(...)): the rule names no strategy; pops.run "
                         "on the artifact takes StepRule(..., strategy=...)")
@@ -272,7 +285,19 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     if regions:
         program._set_advance_outputs(regions)
     memory = _lower_memory(program, advance.method, trace)
-    if isinstance(proposal, StepRule):
+    step_bound = None
+    if isinstance(proposal, StepBound):
+        # dt= as a function of cell (N8, D2): the Program generates the bound; Simulation.run takes
+        # the cells rule, pops.run on the artifact the CellStepBound strategy (D4).
+        from pops.time._step.bound import resolve_step_bound
+        from pops.time._step.strategy import CellStepBound
+
+        resolved = resolve_step_bound(proposal, state=state)
+        program._set_advance_step_bound(resolved)
+        program.step_strategy(CellStepBound(resolved.fraction, resolved.qualified_id))
+        first_dt, step_rule = None, None
+        step_bound = (resolved.fraction, resolved.qualified_id)
+    elif isinstance(proposal, StepRule):
         # pops.run on the artifact takes the strategy the rule's library word gives; Simulation.run
         # takes the rule.
         program.step_strategy(proposal.strategy)
@@ -285,7 +310,7 @@ def elaborate(advance: Advance, *, case: Any, state: Any, proposal: Proposal | S
     control = AdvanceControl(assessments=(("finite", "default"),),
                              max_attempts=advance.retry.max_attempts,
                              max_transforms=advance.retry.max_transforms, first_dt=first_dt,
-                             step_rule=step_rule,
+                             step_rule=step_rule, step_bound=step_bound,
                              outputs=tuple(region.schedule_data() for region in regions),
                              memory=memory, trial_failures=_trial_failures(program, trace))
     program._set_advance_control(control)

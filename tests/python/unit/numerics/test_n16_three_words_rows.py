@@ -9,8 +9,8 @@ review of #803, R1).
   without a row (MG1). Their initial value is bound as data; the analytic route, which projects
   cell averages, is refused before any C++ with N16 lot 2 (the projection by encode), as for a
   total.
-- The acceptance test ``finite()`` of the surface reads the same on a total as on its density, so
-  the total's lowering serves exactly that test, and no other reduction of a total.
+- The Advance assessment ``finite()`` reads the exact candidate's stored coefficients. The total's
+  lowering serves only the reduction and predicate reserved for that assessment.
 
 The native oracle tests are in ``tests/python/integration/runtime/test_n16_three_words_native.py``.
 """
@@ -28,7 +28,9 @@ from pops.numerics.plan import served_representation
 from pops.representations.definition import (
     RepresentationDefinition, cell_average, cell_total, coefficients, point_value,
 )
+from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
 from pops.time._program.traced_method import NotYetElaborated
+from pops.time.solve_outcome import FailRun, RejectAttempt
 
 from examples.api_v02.models_N16_three_words import REPRESENTATIONS, build_words
 
@@ -121,7 +123,7 @@ def test_each_row_resolves_bound_as_data_on_both_layouts(represent, layout):
     assert len(numerics.representations) == (0 if represent is None else 1)
 
 
-def _surface_total_case(accept_finite=True):
+def _surface_total_case():
     import pops.surface as surface
     from pops.lib.numerics import upwind
     from pops.lib.representations import CellTotal
@@ -152,24 +154,89 @@ def test_the_acceptance_test_finite_is_served_on_a_total():
     guards = finite_guard_values(values)
     assert sorted(value.op for value in values if value.id in guards) == [
         "acceptance_guard", "reduce", "scalar_isfinite"]
+    (guard,) = (value for value in values if value.op == "acceptance_guard")
+    candidate, condition = guard.inputs
+    (reduction,) = condition.inputs
+    assert guard.attrs["assessment"] == ADVANCE_ASSESSMENT_CONTRACT
+    assert type(guard.attrs["action"]) is RejectAttempt
+    assert reduction.inputs[0] is candidate
     assert len(plan.blocks[0].numerics.cell_total_states()) == 1
+
+
+@pytest.mark.parametrize("test_candidate", [False, True], ids=["accepted_state", "candidate"])
+def test_a_program_guard_named_finite_is_not_the_advance_assessment(test_candidate):
+    from pops import math as pm
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid
+    from pops.projection import ConservativeCellAverage
+    from pops.time._step.strategy import FixedDt
+
+    from examples.api_v02.models_G03_totals import _finite_volume
+
+    frame = CartesianDomain("line", (0.0,), (4.0,)).frame(Cartesian1D())
+    (x,) = frame.axes
+    model = pops.Model("advection", frame=frame)
+    u = model.state("u", components=("u",))
+    (field,) = u
+    flux = model.flux("flux", state=u, frame=frame, components={x: (field,)}, waves={x: (1.0,)})
+    rate = model.rate("advection", equation=pm.ddt(u) == -pm.div(flux))
+    case = pops.Case("finite_dependency")
+    block = case.block("line", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, _finite_volume(flux, u))
+    numerics.representations.add(u, cell_total(1))
+    case.numerics(numerics, block=block)
+    case.initials.add(InitialCondition(state=block[u], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    program = pops.Program("finite_dependency")
+    state = program.state(block[u])
+    candidate = program.value("doubled", 2 * state.n, at=state.next.point)
+    tested = candidate if test_candidate else state.n
+    condition = program.isfinite(program.norm_inf_all(tested))
+    program.commit(state.next, program.guard("finite", candidate, condition, action=RejectAttempt()))
+    program.step_strategy(FixedDt(1.0))
+    case.program(program)
+    layout = Uniform(CartesianGrid(frame=frame, cells=(4,)))
+
+    with pytest.raises(CellTotalNotYetElaborated) as refused:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert refused.value.reason == "cell_total_operation"
 
 
 def test_a_reduction_of_a_total_read_by_another_value_is_not_the_finite_test():
     """A norm read by the finite test and by anything else is a diagnostic of U: not served."""
 
     class Value:
-        def __init__(self, ident, op, inputs=(), **attrs):
-            self.id, self.op, self.inputs, self.attrs = ident, op, tuple(inputs), attrs
+        def __init__(self, ident, op, vtype, inputs=(), **attrs):
+            self.id, self.op, self.vtype, self.inputs, self.attrs = ident, op, vtype, tuple(inputs), attrs
 
-    state = Value(0, "state")
-    norm = Value(1, "reduce", (state,), kind="norm_inf_all")
-    test = Value(2, "scalar_isfinite", (norm,))
-    guard = Value(3, "acceptance_guard", (state, test), guard="finite")
+    state = Value(0, "state", "state")
+    norm = Value(1, "reduce", "scalar", (state,), kind="norm_inf_all",
+                 component_contract="pops.program.norm-inf-all@1")
+    test = Value(2, "scalar_isfinite", "bool", (norm,))
+    guard = Value(3, "acceptance_guard", "state", (state, test), guard="finite",
+                  assessment=ADVANCE_ASSESSMENT_CONTRACT, action=RejectAttempt())
     assert finite_guard_values([state, norm, test, guard]) == {1, 2, 3}
-    other = Value(4, "linear_combine", (norm,))
-    assert finite_guard_values([state, norm, test, guard, other]) == frozenset()
-    maximum = Value(1, "reduce", (state,), kind="max")
-    test = Value(2, "scalar_isfinite", (maximum,))
-    guard = Value(3, "acceptance_guard", (state, test), guard="finite")
-    assert finite_guard_values([state, maximum, test, guard]) == frozenset()
+    for other in (Value(4, "scalar_isfinite", "bool", (norm,)),
+                  Value(4, "acceptance_guard", "state", (state, test), **guard.attrs)):
+        assert finite_guard_values([state, norm, test, guard, other]) == frozenset()
+    original = norm.attrs.copy()
+    norm.attrs["kind"] = "max"
+    assert finite_guard_values([state, norm, test, guard]) == frozenset()
+    norm.attrs = original
+    norm.attrs.pop("component_contract")
+    assert finite_guard_values([state, norm, test, guard]) == frozenset()
+    norm.attrs["component_contract"] = "pops.program.norm-inf-all@1"
+    guard.attrs["action"] = FailRun()
+    assert finite_guard_values([state, norm, test, guard]) == frozenset()
+    guard.attrs["action"] = RejectAttempt()
+    guard.attrs["trial_site"] = {"site": "finite"}
+    assert finite_guard_values([state, norm, test, guard]) == frozenset()
+    guard.attrs.pop("trial_site")
+    other_state = Value(4, "linear_combine", "state", (state,))
+    guard.inputs = (other_state, test)
+    assert finite_guard_values([state, norm, test, guard, other_state]) == frozenset()

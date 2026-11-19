@@ -15,6 +15,7 @@ def truncated_carrier_archive(source,destination):
         semantic=_identity_from_json(manifest["semantic_identity"]),
         artifact=_identity_from_json(manifest["artifact_identity"]),
         bind=_identity_from_json(manifest["bind_identity"]),
+        program=_identity_from_json(manifest["program_id"]),
         run=_identity_from_json(manifest["run_identity"]),origin=manifest.get("origin"))
     # Same DEFLATED member contract as the genuine repository checkpoint writers.
     with open(destination,"xb") as stream:np.savez_compressed(stream,**payload)

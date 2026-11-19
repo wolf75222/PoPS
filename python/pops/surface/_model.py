@@ -22,7 +22,7 @@ from fractions import Fraction
 from typing import Any
 
 from ._expr import Arith, Call, Expr, Relation, is_number, operand, text, walk
-from ._geometry import Box, MathConstant
+from ._geometry import MathConstant, Support
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ContradictsDerivation, LevelMismatch, NotDiffusive,
     NotYetElaborated, ReservedName, Site, SpellingRefusal, SupportMismatch, SymbolNotInSurface,
@@ -71,9 +71,9 @@ class Scalar:
     __slots__ = ("support", "admissible", "site")
 
     def __init__(self, support: Any = None, *, admissible: Any = None) -> None:
-        if not isinstance(support, Box):
-            raise TypeError("pops.Scalar(Ω) takes the support of the field, a pops.Box, got %r"
-                            % (support,))
+        if not isinstance(support, Support):
+            raise TypeError("pops.Scalar(Ω) takes the support of the field, a pops.Box or a "
+                            "charted support, got %r" % (support,))
         if admissible is not None:
             raise NotYetElaborated("pops.Scalar(Ω, admissible=...), the admissible set of a "
                                    "quantity (S5)", "a later lot of N15 with the supports of G03")
@@ -122,7 +122,7 @@ class Quantity(Symbol):
         self.space = space
 
     @property
-    def support(self) -> Box:
+    def support(self) -> Support:
         return self.space.support
 
     def at(self, *args: Any, **kwargs: Any) -> Any:

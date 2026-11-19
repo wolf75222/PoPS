@@ -354,6 +354,13 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             install_plan=plan,
             initial_sources=_uniform_initial_sources(plan),
         )
+        from pops.runtime._uniform_checkpoint_projection import describe_uniform_checkpoint
+
+        # This System is still private to the bind transaction. The returned snapshot stays
+        # immutable and the named bind identity does not include the optional O3 descriptor.
+        snapshot = engine.bound_snapshot
+        object.__setattr__(snapshot, "_uniform_checkpoint_projection",
+                           describe_uniform_checkpoint(engine, plan, snapshot))
         return engine
 
 
@@ -391,6 +398,7 @@ def _install_adaptive_native_engine(plan: Any) -> Any:
         hierarchy=plan.resolved_hierarchy,
         tagging=plan.resolved_tagging,
         native_layout=normalized_layout.native_spatial_layout,
+        layout_identity=artifact.layout_plan.qualified_id,
     )
     config.runtime_parameter_byte_capacity = plan.runtime_parameter_storage["byte_capacity"]
     engine = AmrSystem(config)

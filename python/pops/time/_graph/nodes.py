@@ -229,10 +229,12 @@ class Solve(_Node):
     name: str
     attrs: CanonicalData
     initial: ValueRef | None
+    body: Any
 
     def __init__(self, node_id: int, unknown: ValueRef, operator: ValueRef, rhs: ValueRef,
                  clock: Clock, point: TimePoint | StagePoint, *, name: str = "solve",
-                 attrs: Any = None, initial: ValueRef | None = None) -> None:
+                 attrs: Any = None, initial: ValueRef | None = None,
+                 body: Any = None) -> None:
         object.__setattr__(self, "node_id", _node_id(node_id))
         for label, value in (("unknown", unknown), ("operator", operator), ("rhs", rhs)):
             if type(value) is not ValueRef:
@@ -246,10 +248,20 @@ class Solve(_Node):
         if initial is not None and type(initial) is not ValueRef:
             raise TypeError("Solve initial must be an exact ValueRef or explicit zero initialization")
         object.__setattr__(self, "initial", initial)
+        # The region of a reference realization (SV12), as a Capture holds its body; checked by
+        # name, since control.py imports this module.
+        if body is not None and (type(body).__name__ != "Region"
+                                 or type(body).__module__ != "pops.time._graph.control"):
+            raise TypeError("Solve body must be an exact immutable Region")
+        object.__setattr__(self, "body", body)
 
     def references(self) -> tuple[ValueRef, ...]:
         refs = (self.unknown, self.operator, self.rhs)
-        return refs if self.initial is None else (*refs, self.initial)
+        refs = refs if self.initial is None else (*refs, self.initial)
+        if self.body is None:
+            return refs
+        return refs + tuple(capture.value for capture in self.body.captures
+                            if capture.value not in refs)
 
     def to_data(self) -> dict[str, Any]:
         data = _node_data(
@@ -257,6 +269,8 @@ class Solve(_Node):
             rhs=self.rhs.to_data(), name=self.name, attrs=self.attrs.to_data())
         if self.initial is not None:
             data["initial"] = self.initial.to_data()
+        if self.body is not None:
+            data["body"] = self.body.to_data()
         return data
 
 @dataclass(frozen=True, slots=True, init=False)

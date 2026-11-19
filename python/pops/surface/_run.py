@@ -40,6 +40,8 @@ from typing import Any
 
 import numpy as _np
 
+from pops.time._program.control import FaceFrequencyStop as _NativeFaceFrequencyStop
+
 from ._model import Datum, Model, Parameter, Quantity
 from ._refusal import (
     AmbiguousElaboration, NotYetElaborated, SupportMismatch, surface_entry, user_site,
@@ -411,17 +413,23 @@ def require_published_under(array: Any, expected: Any, where: str) -> None:
     if written is None or written == expected:
         return
     if written.space.support != expected.space.support:
+        written_support, expected_support = _support_text(written), _support_text(expected)
+        if written_support == expected_support:
+            written_support += " (identity %s)" % written.identity
+            expected_support += " (identity %s)" % expected.identity
         raise SupportMismatch(
             "%s gives an array that a run published on the support %s, as the datum of a "
             "quantity on the support %s; equal shapes do not make supports interchangeable"
-            % (where, _support_text(written), _support_text(expected)),
+            % (where, written_support, expected_support),
             write="the array on the support of the datum, or a pops.Map between the supports")
     expected.require_same(written, where=where)
 
 
 def _support_text(representation: Any) -> str:
-    return " x ".join("%s in %s" % (name, domain)
-                      for name, domain in representation.space.support.coordinates)
+    coordinates = representation.support_presentation
+    if coordinates is None:
+        coordinates = representation.space.support.coordinates
+    return " x ".join("%s in %s" % (name, domain) for name, domain in coordinates)
 
 
 @surface_entry
@@ -515,6 +523,15 @@ class BudgetExhausted(RunFailed):
 
 class SolveFailed(RunFailed):
     """A solve of the trial failed at a fixed failure site (T39)."""
+
+
+class FaceFrequencyStop(RunFailed, _NativeFaceFrequencyStop):
+    """A compiled step rule has no further correction at the frequency the faces recorded."""
+
+    def __init__(self, result: RunResult, message: str, frequency: float) -> None:
+        RuntimeError.__init__(self, message)
+        self.result = result
+        self.frequency = frequency
 
 
 _VARIANTS = {"BudgetExhausted": BudgetExhausted, "SolveFailed": SolveFailed}
@@ -622,11 +639,14 @@ class Simulation:
         failure_error = None
         try:
             result = self._simulation.run(until, max_steps=steps)
-        except _n8.RunFailed as error:
+        except (_n8.RunFailed, _n8.FaceFrequencyStop) as error:
             failure_error = error
             result = error.result
         surface = self._result(result, start, until)
         self._write()
+        if isinstance(failure_error, _n8.FaceFrequencyStop):
+            raise FaceFrequencyStop(surface, str(failure_error),
+                                    failure_error.frequency).with_traceback(None) from failure_error
         if failure_error is not None:
             variant = _VARIANTS.get(type(failure_error).__name__, RunFailed)
             raise variant(surface, str(failure_error)).with_traceback(None) from failure_error

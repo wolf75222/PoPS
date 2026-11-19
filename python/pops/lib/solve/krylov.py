@@ -201,3 +201,11 @@ def cg(problem, region, preconditioner=None, max_iterations=2000):
     result = region.iterate(start=start, step=step, stop=stop, max_steps=max_iterations)
     return problem.candidate(result.x, iterations=result.iterations,
                              residual_norm=result.confirmed)
+
+
+# What a relation solve of a traced method reads of cg() (N15 lot « solves », §5.5): the property
+# of the operator that it needs, checked against the claims of the components before the solve is
+# lowered, and its description; the solve runs this body as the region of its node (N9 lot « La
+# référence sous les solves de relation », §3.8).
+cg.declare_relation(requires=("symmetric_positive_definite",),
+                    description="the reference conjugate gradient of pops.lib.solve (SV9)")

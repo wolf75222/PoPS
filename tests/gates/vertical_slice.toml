@@ -1,0 +1,15 @@
+schema_version = 1
+gate = "vertical-slice"
+# The vertical slice of the exit of phase 1 (OD31; tranche/note_tranche_verticale.md): master's
+# tutorial 02 written in the surface, with its upwind flux and its SSPRK2 written in the case file.
+# Each [[piece]] is a construct of the case file that PoPS does not run yet, in the order in which
+# the file meets it: the statement of the file, the refusal that it raises (its type and the start
+# of its message, exactly), and the owner that lifts it. tests/python/integration/surface/
+# test_vertical_slice_t02.py runs the file and checks that it stops on the first piece, at its
+# statement, with its refusal. The list only shrinks (MG6): scripts/vertical_slice.py check
+# --check-base fails when it records a piece that the base does not. It is empty at the exit of
+# phase 1 (S1 to S6 of the note, section 5); the test then runs the file to its end.
+case = "examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py"
+
+# Empty since #799 (N3, ROM-87): pops.lib.numerics re-exports ghosts(), and the file runs to its
+# end. A [[piece]] added here fails the check against the base.

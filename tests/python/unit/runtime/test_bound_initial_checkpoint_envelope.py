@@ -12,7 +12,10 @@ import numpy as np
 import pytest
 
 from pops.identity import make_identity
-from pops.output._checkpoint_collective import _require_manifest_restart_identity, _manifest_character_budget
+from pops.output._checkpoint_collective import (
+    _manifest_character_budget, _maximal_manifest, _require_manifest_restart_identity,
+)
+from pops.output._checkpoint_contract import CHECKPOINT_MANIFEST_KEYS
 from pops.runtime._checkpoint_manifest import (
     IDENTITY_KEY, MANIFEST_KEY, _seal_checkpoint_payload_with_identities,
     CHECKPOINT_SCHEMA_VERSION, BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
@@ -29,9 +32,10 @@ from pops.time import AdaptiveCFL, Program
 class _Owner(_LifecycleMixin):
     def __init__(self):
         identities = tuple(make_identity(domain, {"fixture": "bound-initial"})
-                           for domain in ("semantic", "artifact", "bind"))
+                           for domain in ("semantic", "artifact", "bind", "program"))
         self._bound_snapshot = SimpleNamespace(**dict(zip(
-            ("semantic_identity", "artifact_identity", "bind_identity"), identities, strict=True)))
+            ("semantic_identity", "artifact_identity", "bind_identity", "program_id"), identities,
+            strict=True)))
         self._last_run_identity = self._last_run_manifest = self._restart_lineage_identity = None
         self._time, self._step = 0., 0
         self._temporal_restart_state = TemporalRestartState()
@@ -55,6 +59,28 @@ def _wire(payload):
     stream = BytesIO()
     np.savez(stream, **payload)
     return stream.getvalue()
+
+
+def test_uniform_checkpoint_artifact_refusal_reports_only_observed_member_mismatch(monkeypatch):
+    original = _Owner()
+    original._bound_snapshot.block_names = lambda: ("tracer",)
+    payload = _payload(original)
+    payload["state_tracer"] = payload.pop("state")
+    restart = seal_checkpoint_payload(original, payload, runtime_kind="uniform")
+    descriptors = ModuleType("pops.runtime._engine_descriptors")
+    descriptors.abi_key = lambda: "unit-abi"
+    monkeypatch.setitem(sys.modules, descriptors.__name__, descriptors)
+    assert authenticate_checkpoint_payload(original, payload, runtime_kind="uniform") == restart
+
+    alternate = _Owner()
+    alternate._bound_snapshot.artifact_identity = make_identity("artifact", {"optflags": "-O2"})
+    alternate._bound_snapshot.block_names = lambda: ("tracer",)
+    with pytest.raises(ValueError, match=r"^checkpoint artifact_identity does not match the bound runtime$"):
+        authenticate_checkpoint_payload(alternate, payload, runtime_kind="uniform")
+
+    alternate._bound_snapshot.block_names = lambda: ("renamed",)
+    with pytest.raises(ValueError, match=r"no member state_renamed; .*N11 lot 2c-ii"):
+        authenticate_checkpoint_payload(alternate, payload, runtime_kind="uniform")
 
 
 @pytest.mark.parametrize("kind", ("uniform", "amr"))
@@ -96,6 +122,13 @@ def test_initial_wire_authenticates_bound_origin_and_restart_then_real_run(monke
     assert "origin" not in json.loads(after[MANIFEST_KEY])
 
 
+def test_manifest_character_budget_covers_every_manifest_key():
+    # The budget is an upper bound only if its maximal manifest has every key that the integrity
+    # checks require, origin included (N11 lot 2b-ii added program_id).
+    assert set(_maximal_manifest(("state_u",))) == CHECKPOINT_MANIFEST_KEYS | {"origin"}
+    assert _maximal_manifest(("state_u",))["program_id"]["domain"] == "program"
+
+
 def test_legacy_run_envelope_and_identity_remain_exactly_unchanged():
     owner = _Owner()
     request = begin_run(owner, t_end=.1, step_transaction=owner._temporal_restart_state.strategy,
@@ -104,7 +137,8 @@ def test_legacy_run_envelope_and_identity_remain_exactly_unchanged():
     old_route = deepcopy(payload)
     semantic, artifact, bind = owner._checkpoint_identities()
     old_identity = _seal_checkpoint_payload_with_identities(old_route, runtime_kind="uniform",
-        semantic=semantic, artifact=artifact, bind=bind, run=request.run_identity)
+        semantic=semantic, artifact=artifact, bind=bind, program=owner._checkpoint_program_id(),
+        run=request.run_identity)
     identity = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
     assert identity == old_identity and payload[MANIFEST_KEY] == old_route[MANIFEST_KEY]
     assert checkpoint_run_identity(payload) == request.run_identity
@@ -119,7 +153,8 @@ def _public_owner(executor):
     owner._executor = executor
     semantic, artifact, bind = executor._checkpoint_identities()
     owner._install_plan = SimpleNamespace(
-        artifact=SimpleNamespace(semantic_identity=semantic, artifact_identity=artifact),
+        artifact=SimpleNamespace(semantic_identity=semantic, artifact_identity=artifact,
+                                 program_id=executor._checkpoint_program_id()),
         bind_identity=bind,
     )
     return owner

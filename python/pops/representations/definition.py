@@ -768,8 +768,10 @@ class ElaboratedRepresentation:
 
     space: Any
     definition: RepresentationDefinition
+    support_presentation: tuple[tuple[str, str], ...] | None
 
-    def __init__(self, space: Any, definition: RepresentationDefinition) -> None:
+    def __init__(self, space: Any, definition: RepresentationDefinition, *,
+                 support_presentation: tuple[tuple[str, str], ...] | None = None) -> None:
         from pops.model.spaces import Space
         if not isinstance(space, Space):
             raise TypeError("an elaborated representation takes a Space, got %r" % (space,))
@@ -777,6 +779,7 @@ class ElaboratedRepresentation:
             raise TypeError("an elaborated representation takes a RepresentationDefinition")
         object.__setattr__(self, "space", space)
         object.__setattr__(self, "definition", definition)
+        object.__setattr__(self, "support_presentation", support_presentation)
 
     def to_data(self) -> dict[str, Any]:
         return {"contract": CONTRACT, "space": self.space.to_data(),

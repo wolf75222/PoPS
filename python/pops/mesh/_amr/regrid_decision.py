@@ -38,6 +38,7 @@ from typing import Any
 
 from pops._ir.expr import BooleanAnd, BooleanNot, BooleanOr, Compare, Const, Expr, Var
 from pops._ir.handle_expr import ValueExpr
+from pops._ir.values import RuntimeParamRef
 from pops._ir.visitors import _children, _key
 from pops.model import Handle, ParamHandle
 
@@ -57,18 +58,15 @@ class RegridBodyError(TypeError):
     """A ``when`` body of ``Regrid`` reads outside what T33 allows, or does not return a Bool."""
 
 
-def _not_a_predicate(self: Any, context: Any, *, action: str) -> Any:
-    raise TypeError("%s belongs to the when body of a Regrid, not to a Tag or Coarsen rule"
-                    % type(self).__name__)
-
-
 class EveryAcceptedSteps(Expr):
     """``B.steps % k == 0``: true after every k-th accepted step of the run (5.11, ``every``)."""
 
+    # A when body reads it as a Boolean. A region that holds it is refused by the criterion,
+    # since it is neither a cell read, a width nor a parameter.
+    __pops_ir_boolean__ = True
+
     def __init__(self, k: int) -> None:
         self.k = k
-
-    resolve_for_amr_predicate = _not_a_predicate
 
     def __pops_ir_children__(self) -> tuple:
         return ()
@@ -263,6 +261,14 @@ def _leaves(roots: tuple[Expr, ...]) -> list[Expr]:
     return found
 
 
+def _refuse_model_parameter(leaf: RuntimeParamRef, where: str) -> None:
+    raise RegridBodyError(
+        "%s reads the runtime parameter %r of a model; a when body and its indicators read the "
+        "parameters of the case in this lot: declare the threshold with case.param and read it "
+        "with case.value (Q4). Reading a model parameter there is a named follow-up of N12 "
+        "(model parameter in a Regrid when body)" % (where, leaf.name))
+
+
 def _check_body_leaves(expression: Expr) -> None:
     for leaf in _leaves((expression,)):
         if isinstance(leaf, (Const, EveryAcceptedSteps, AcceptedTime)):
@@ -272,6 +278,8 @@ def _check_body_leaves(expression: Expr) -> None:
             continue
         if isinstance(leaf, ValueExpr) and isinstance(leaf.handle, ParamHandle):
             continue
+        if type(leaf) is RuntimeParamRef:
+            _refuse_model_parameter(leaf, "a when body")
         if isinstance(leaf, (CellRead, CellWidth)):
             raise RegridBodyError(
                 "a when body reads cells through largest_cells(f) or smallest_cells(f) only")
@@ -296,6 +304,8 @@ def _check_indicator_leaves(indicator: CellIndicator) -> None:
             continue
         if isinstance(leaf, ValueExpr) and isinstance(leaf.handle, ParamHandle):
             continue
+        if type(leaf) is RuntimeParamRef:
+            _refuse_model_parameter(leaf, "the indicator %s_cells(f)" % indicator.kind)
         if isinstance(leaf, (EveryAcceptedSteps, AcceptedTime, CellIndicator)):
             raise RegridBodyError("an indicator is a function of cell; it reads neither B nor "
                                   "another indicator")
@@ -355,16 +365,11 @@ class Regrid:
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        from pops.amr.authoring import AMRTagging, Buffer
-        from .refinement_criterion import RefinementRegion
+        from pops.amr.authoring import AMRTagging
 
+        # Every Tag and Coarsen predicate is a region of cell, generated into the Program (DM13b).
         if type(self.criterion) is not AMRTagging:
             raise TypeError("Regrid(criterion, when): the criterion is an AMRTagging")
-        if any(type(rule.predicate) is not RefinementRegion
-               for rule in self.criterion.rules if type(rule) is not Buffer):
-            raise TypeError(
-                "Regrid(criterion, when): the criterion writes every Tag and Coarsen predicate "
-                "as a function of cell, generated into the Program (DM13b)")
         object.__setattr__(self, "when", RegridWhen.trace(self.when))
 
     def to_data(self) -> dict[str, Any]:

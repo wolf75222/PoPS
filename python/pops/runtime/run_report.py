@@ -50,6 +50,8 @@ class RunReport:
     execution_identity: Identity
     artifact_identity: Identity
     field_providers: tuple[Any, ...] = ()
+    # The name-free program identity (spec 0.3 CC2, CN9; N11 lot 2b), when the artifact has one.
+    program_id: Identity | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -80,6 +82,9 @@ class RunReport:
                 name,
                 _identity(getattr(self, name), domain=domain, where=name),
             )
+        if self.program_id is not None:
+            object.__setattr__(
+                self, "program_id", _identity(self.program_id, domain="program", where="program_id"))
         if not isinstance(self.field_providers, (list, tuple)):
             raise TypeError("field_providers must be an ordered report sequence")
         object.__setattr__(
@@ -100,6 +105,7 @@ class RunReport:
             "bind_identity": self.bind_identity.to_data(),
             "execution_identity": self.execution_identity.to_data(),
             "artifact_identity": self.artifact_identity.to_data(),
+            **({} if self.program_id is None else {"program_id": self.program_id.to_data()}),
             "field_providers": thaw_data(self.field_providers),
         }
 

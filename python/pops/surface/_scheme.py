@@ -36,6 +36,8 @@ import inspect as _inspect
 from fractions import Fraction
 from typing import Any
 
+from pops._source_origin import code_origin
+
 from ._expr import Arith, Call, Expr, Predicate, Relation, is_number, operand, text, walk
 from ._geometry import Coordinate, MathConstant
 from ._method import ENTITY_PARAMETERS
@@ -43,6 +45,7 @@ from ._model import (
     BoundaryRelation, DiffusiveFlux, Flux, ModelConstant, Parameter, Quantity, Source, Term,
 )
 from ._numerics import SchemeValue, TermView
+from pops._ir.elaboration import elaborating
 from ._refusal import (
     AmbiguousElaboration, NotAPopsOperation, NotYetElaborated, RealizationMismatch,
     SupportMismatch, user_site,
@@ -498,7 +501,14 @@ def spectral_radius(term: Any, value: Any, normal: Any) -> Any:
 
     At a bare trace, ``face.left(u)`` or ``face.right(u)``, it is a read of the face, which lowers
     to that expansion; and ``largest`` of the radii at the two traces is the face input ``s`` of
-    ``riemann.User``, the larger spectral radius that b6 generates from the same waves."""
+    ``riemann.User``, the larger spectral radius that b6 generates from the same waves.
+
+    On the physical normal of a charted support (N17 L2a) that input is not the exact radius: b6
+    serves the bound sum_k |n_k| rho(A_k) of the axis radii, equal to it on an axis normal, larger
+    off it and without bound near a face tangent to the flow. It is a transitional route of the
+    native face (DN31), removed by lot L2d of N17, which generates the exact radius on a physical
+    normal; ``pops.inspect`` names it on the row of the scheme. A scheme that wants the exact
+    normal speed of a known velocity states it, ``upwind(speed=dot(v, face.normal))``."""
     radius = abs(_wave(term, value, normal, "spectral_radius"))
     if isinstance(value, SchemeLeaf) and value.key[0] == "trace":
         side = value.key[1]
@@ -1234,7 +1244,8 @@ class UserScheme(SchemeValue):
                             "term": BoundaryTermEntity(relation), "depth": k}
                 arguments = {name: entities[name] for name in self.scheme.entities}
                 arguments.update(self.options)
-                result = self.scheme.body(**arguments)
+                with elaborating(self.scheme, name="@pops.scheme " + self.scheme.name):
+                    result = self.scheme.body(**arguments)
                 if not isinstance(result, Ghost):
                     raise RealizationMismatch(
                         "the boundary policy %s returns %r under %r, which Ghost covers"
@@ -1253,7 +1264,8 @@ class UserScheme(SchemeValue):
     def _run(self, entities: dict, key: Term) -> Any:
         arguments = {name: entities[name] for name in self.scheme.entities}
         arguments.update(self.options)
-        result = self.scheme.body(**arguments)
+        with elaborating(self.scheme, name="@pops.scheme " + self.scheme.name):
+            result = self.scheme.body(**arguments)
         if result is None:
             raise TypeError("the scheme %s returns no builder; a scheme returns one builder of "
                             "pops.discrete, such as FaceFlux(value)" % self.scheme.name)
@@ -1277,17 +1289,30 @@ class UserScheme(SchemeValue):
         builder = self.traced(key).builder
         return reads_speed_pair(builder.value, builder.speed)
 
+    def reads_radius(self, key: Term) -> bool:
+        """Whether the face of the key reads the face input ``s``, the larger spectral radius of
+        R9 at the two traces: as its speed when it states none, or in its value or its speed. On
+        the physical normal of a chart b6 serves the bound sum_k |n_k| rho(A_k) for it (DN31)."""
+        if self.scheme.is_cell or isinstance(key, DiffusiveFlux):
+            return False
+        builder = self.traced(key).builder
+        return builder.speed is None or any(
+            isinstance(node, SchemeLeaf) and node.key[0] == "radius"
+            for value in (builder.value, builder.speed) if value is not None
+            for node in walk(value))
+
     def traced(self, key: Term) -> Traced:
         """The builder that the scheme gives under ``key``, run once per key (SU5), and for a face
-        scheme once per axis of the support, ``face.axis`` being Python data."""
+        scheme once per logical axis of the support (S6: the axes of a box, the logical axes of
+        a charted support), ``face.axis`` being Python data."""
         for known, traced in self._traced:
             if known is key:
                 return traced
-        axes = key.quantity.support.axes
         if self.scheme.is_cell_rate:
             traced = Traced(self._traced_rate(key), None)
             self._traced.append((key, traced))
             return traced
+        axes = key.quantity.support._logical_axes
         if self.scheme.is_cell:
             builder = None
             for axis in axes:
@@ -1468,7 +1493,8 @@ class UserScheme(SchemeValue):
         return FiniteVolume(flux=view.elaborated, variables=variables.Conservative(view.state),
                             reconstruction=recon,
                             riemann=riemann.User(body=body, state=view.state,
-                                                 stability=stability))
+                                                 stability=stability,
+                                                 origin=code_origin(self.scheme.body)))
 
     def describe(self) -> str:
         """The b6 builder, for ``pops.inspect``; the options are in the repr of the value."""
@@ -1597,7 +1623,7 @@ def realize_reconstruction(value: Any, traced: Traced, view: TermView) -> Any:
         return (lower(expression, inputs),)
 
     return reconstruction.User(body, state=view.state, formal_order=formal_order(expression),
-                               name=value.word)
+                               name=value.word, origin=code_origin(value.scheme.body))
 
 
 def face_function(function: Any, view: TermView, where: str, reconstructed: bool = False) -> Any:
@@ -1608,7 +1634,7 @@ def face_function(function: Any, view: TermView, where: str, reconstructed: bool
     check_plain_function(function, where)
     key = view.term
     value = None
-    for axis in key.quantity.support.axes:
+    for axis in key.quantity.support._logical_axes:
         ran = function(FaceEntity(key, axis))
         _expression(ran, "the value of %s" % where)
         _reads(ran, ("trace", "normal", "cell"), where, "face", site=user_site(2))

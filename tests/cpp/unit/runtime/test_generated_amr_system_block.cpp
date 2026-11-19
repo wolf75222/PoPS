@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include "field_rhs_value_program_fixture.hpp"
 #include <pops/runtime/dynamic/dynlib.hpp>
@@ -1617,11 +1618,14 @@ TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSo
     }
     pops::AmrSystem<Dim> system(config);
     pops::test::install_amr_runtime_authority(system, "tests.generated-amr/sparse-parent-transfer");
-    system.install_block_state_route("tracer", "state/tracer");
+    const pops::test::StandaloneFixtureCriterion criterion{
+        pops::test::standalone_sparse_parent, POPS_TEST_standalone_sparse_parent_DSO,
+        POPS_TEST_standalone_sparse_parent_RECEIPT};
+    system.install_block_state_route("tracer", criterion.criterion.state);
     pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
     if (injection)
       system.register_bootstrap_transfer_route(
-          "tests.generated-amr/sparse-parent/injection", {"state/tracer"},
+          "tests.generated-amr/sparse-parent/injection", {criterion.criterion.state},
           "tests.generated-amr/sparse-parent/injection@1", "cell", "cell", "conservative", "dense",
           "prolongation", "conservative_injection", 1, pops::Extent<Dim>{},
           config.transition_ratios.front());
@@ -1629,8 +1633,7 @@ TEST(GeneratedAmrSystemBlock, SparseParentRegridRequiresOnlyChildInterpolationSo
     for (std::size_t cell = 0; cell < initial.size(); ++cell)
       initial[cell] = 1.0 + (static_cast<double>(cell % config.shape[0]) + 0.5) / 32.0;
     system.set_conservative_state("tracer", initial);
-    pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 1.5}},
-                                                 "tests.generated-amr/sparse-parent/tagging@1");
+    criterion.install(system);
 
     auto* engine = system.engine();
     ASSERT_NE(engine, nullptr);
@@ -2579,7 +2582,10 @@ TEST(GeneratedAmrSystemBlock, CompositeFieldInstallsCoverageAwareNullspaceOnEver
 
 TEST(GeneratedAmrSystemBlock, BootstrapRecomputeHelmholtzAfterCreateLevel) {
   constexpr int Dim = pops::kNativeDimension;
-  constexpr const char* state_route = "tests.generated-amr/bootstrap-helmholtz/state";
+  const pops::test::StandaloneFixtureCriterion criterion{pops::test::standalone_helmholtz,
+                                                         POPS_TEST_standalone_helmholtz_DSO,
+                                                         POPS_TEST_standalone_helmholtz_RECEIPT};
+  const char* state_route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 2;
   config.regrid_every = 0;
@@ -2619,9 +2625,7 @@ TEST(GeneratedAmrSystemBlock, BootstrapRecomputeHelmholtzAfterCreateLevel) {
         }
         Kokkos::fence();
       });
-  pops::test::install_prepared_threshold_union(
-      system, {{"tracer", "u", 1.08, pops::test::PreparedThresholdRelation::Above, state_route}},
-      "tests.generated-amr/bootstrap-helmholtz/tagging@1");
+  criterion.install(system);
   system.bind_bootstrap_subject(state_route, "tracer", "bound_level_zero");
   const std::size_t cells = cell_count(config.shape);
   std::vector<double> initial(cells, 1.0);
@@ -4314,7 +4318,10 @@ TEST(GeneratedAmrSystemBlock, CflAuthenticatesRequestsAndBoundOrderBeforeCallbac
 
 TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) {
   constexpr int Dim = pops::kNativeDimension;
-  constexpr const char* route = "tests.generated-amr/exact-constant/state";
+  const pops::test::StandaloneFixtureCriterion criterion{pops::test::standalone_constant,
+                                                         POPS_TEST_standalone_constant_DSO,
+                                                         POPS_TEST_standalone_constant_RECEIPT};
+  const char* route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 3;
   config.transition_ratios.assign(2, pops::runtime_config_detail::filled_extent<Dim>(2));
@@ -4330,9 +4337,7 @@ TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) 
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/exact-constant-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  pops::test::install_prepared_threshold_union(
-      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
-      "tests.generated-amr/exact-constant-tagging@1");
+  criterion.install(system);
   system.bind_bootstrap_subject(route, "tracer", "constant_field");
   system.stage_bootstrap_analytic_state(route, "tracer", "cell", "cell",
                                         "conservative_cell_average", {{"constant"}}, {{2.0}});
@@ -4356,7 +4361,10 @@ TEST(GeneratedAmrSystemBlock, ConstantBootstrapReprojectionPreservesExactValue) 
 TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant) {
   using Real = pops::Real;
   constexpr int Dim = pops::kNativeDimension;
-  constexpr const char* route = "tests.generated-amr/exact-cell-integral/state";
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_cell_integral, POPS_TEST_standalone_cell_integral_DSO,
+      POPS_TEST_standalone_cell_integral_RECEIPT};
+  const char* route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 2;
   config.regrid_every = 0;
@@ -4370,9 +4378,7 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapReprojectionPreservesConstant
       install_amr_authority_with_lane(system, "tests.generated-amr/exact-cell-integral-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  pops::test::install_prepared_threshold_union(
-      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
-      "tests.generated-amr/exact-cell-integral-tagging@1");
+  criterion.install(system);
   system.bind_bootstrap_subject(route, "tracer", "analytic_expression");
   const pops::analytic::AnalyticOpcodeRows opcodes{{"constant", "input", "mul"}};
   const pops::analytic::AnalyticLiteralRows literals{{1.0, double(2 * Dim), 0.0}};
@@ -4516,7 +4522,10 @@ TEST(GeneratedAmrSystemBlock, CellIntegralBootstrapRejectsMpiProgramMismatchBefo
 TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutrality) {
   using Real = pops::Real;
   constexpr int Dim = pops::kNativeDimension;
-  constexpr const char* route = "tests.generated-amr/exact-gaussian/state";
+  const pops::test::StandaloneFixtureCriterion criterion{pops::test::standalone_gaussian,
+                                                         POPS_TEST_standalone_gaussian_DSO,
+                                                         POPS_TEST_standalone_gaussian_RECEIPT};
+  const char* route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config;
   config.level_count = 2;
   config.regrid_every = 0;
@@ -4530,9 +4539,7 @@ TEST(GeneratedAmrSystemBlock, GaussianBootstrapReprojectionPreservesExactNeutral
       install_amr_authority_with_lane(system, "tests.generated-amr/exact-gaussian-runtime");
   system.install_block_state_route("tracer", route);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  pops::test::install_prepared_threshold_union(
-      system, {{"tracer", "u", .5, pops::test::PreparedThresholdRelation::Above, route}},
-      "tests.generated-amr/exact-gaussian-tagging@1");
+  criterion.install(system);
   system.bind_bootstrap_subject(route, "tracer", "gaussian_field");
   pops::analytic::GaussianCellAverageProfile<Dim> profile;
   profile.inverse_width = Real(80);

@@ -25,7 +25,7 @@ from pops.mesh._amr.hierarchy_native import (
     PreparedHierarchyNativeProvider,
     register_prepared_hierarchy_native_provider,
 )
-from pops.mesh._amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
+from pops.mesh._amr.tagging_policy import ConflictPolicy, EqualityPolicy, Hysteresis
 from .materialization import (
     CanonicalOptions,
     NativeAMRActionKind,
@@ -37,10 +37,8 @@ from .materialization import (
 from .providers import (
     AMRProviderLoweringContext,
     amr_provider_binding_identity,
-    ClusteringProvider,
     RefluxProvider,
     ResolvedAMRProviderBinding,
-    TaggerProvider,
 )
 
 
@@ -58,7 +56,6 @@ __all__ = [
     "Buffer",
     "CanonicalOptions",
     "Coarsen",
-    "ClusteringProvider",
     "ConflictPolicy",
     "EqualityPolicy",
     "Hysteresis",
@@ -76,7 +73,6 @@ __all__ = [
     "ResolvedAMRProviderBinding",
     "smallest_cells",
     "Tag",
-    "TaggerProvider",
     "TransferCapabilities",
     "register_prepared_hierarchy_native_provider",
 ]

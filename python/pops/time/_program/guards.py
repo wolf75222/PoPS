@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.provenance import SourceSpan, source_span
+
 from pops.time._program.traced_method import (
     ClosedBodyViolation, NotYetElaborated, TracedField, _changed_tables, _guarded_tables,
     _issued_since, _PredicateCall, _reads_step_size, _refuse_foreign,
@@ -85,13 +87,15 @@ def _fixed(trace: Any, field: TracedField) -> bool:
 class Guard:
     """One admissibility guard of a method body: its predicate, its site and its class (T38)."""
 
-    __slots__ = ("trace", "component", "site", "fixed", "applied")
+    __slots__ = ("trace", "component", "site", "fixed", "origin", "applied")
 
-    def __init__(self, trace: Any, component: Any, site: str, fixed: bool) -> None:
+    def __init__(self, trace: Any, component: Any, site: str, fixed: bool,
+                 origin: SourceSpan) -> None:
         self.trace = trace
         self.component = component
         self.site = site
         self.fixed = fixed
+        self.origin = origin
         self.applied = False
 
     def apply(self, value: ProgramValue) -> ProgramValue:
@@ -115,7 +119,8 @@ class Guard:
                 "the predicate %r reads the step size of its Program: a predicate reads the "
                 "value it is given (T33)" % self.component._name)
         guarded = program._trial_guard(self.site, value, condition, {
-            "site": self.site, "retry_can_change": not self.fixed, "variant": "NotAdmissible"})
+            "site": self.site, "retry_can_change": not self.fixed, "variant": "NotAdmissible",
+        }, authoring_origin=self.origin)
         self.applied = True
         return guarded
 
@@ -155,7 +160,7 @@ def cond(predicate: Any, then: Any, otherwise: Any) -> TracedField:
             % (predicate.component._name, _CHOICES))
     site = "%s/body#%d/%s" % (trace.name, trace.body_guards, predicate.component._name)
     trace.body_guards += 1
-    guard = Guard(trace, predicate.component, site, fixed)
+    guard = Guard(trace, predicate.component, site, fixed, source_span())
     trace.guards.append(guard)
     if field._value is not None:
         # B.state, or B.state already gated: the guard gates it now, at B.time.

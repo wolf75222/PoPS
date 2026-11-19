@@ -614,10 +614,11 @@ ExternalBoundaryDependencyStorage<Dim> prepare_external_boundary_dependencies(
                 const HyperbolicBoundaryLaw law = physical->face(axis, side).law;
                 if (law == HyperbolicBoundaryLaw::External ||
                     law == HyperbolicBoundaryLaw::CharacteristicNoInflow ||
-                    physical->has_analytic_state())
+                    law == HyperbolicBoundaryLaw::SourceGhost || physical->has_analytic_state())
                   throw std::runtime_error(
                       "prepared System cross-route GhostBoundary requires a source model transport "
-                      "hook for external, characteristic, or analytic physical faces");
+                      "hook for external, characteristic, source ghost, or analytic physical "
+                      "faces");
               }
           detached.ghost_transport =
               std::make_shared<typename ExternalBoundaryDependencyStorage<Dim>::GhostTransport>(
@@ -843,6 +844,7 @@ PreparedBlockInstallation<Dim, Implementation> prepare_block_installation(
   if (prepared.provider_components != 0)
     candidate.stability_consumer_qid = provider_consumer_qid;
   candidate.add_poisson_rhs = std::move(prepared.poisson_rhs);
+  candidate.elliptic_source = prepared.elliptic_source;
   candidate.cons_vars = std::move(prepared.conservative_variables);
   candidate.prim_vars = std::move(prepared.primitive_variables);
   candidate.prim_to_cons = std::move(prepared.primitive_to_conservative);
@@ -1834,12 +1836,13 @@ void System<Dim>::register_native_package(
     const std::string& expected_binary_identity, const std::string& limiter,
     const std::string& riemann, const std::string& recon, const std::string& time, double gamma,
     int substeps, bool evolve, int stride, const std::vector<double>& params,
-    double positivity_floor, NewtonOptions newton, bool newton_diagnostics) {
+    double positivity_floor, NewtonOptions newton, bool newton_diagnostics,
+    std::optional<double> smoothness_epsilon) {
   require_assembling(p_->lifecycle_, "register_native_package");
-  native_loader::register_native_package<Dim>(this, name, so_path, expected_model_identity,
-                                              expected_binary_identity, limiter, riemann, recon,
-                                              time, gamma, substeps, evolve, stride, params,
-                                              positivity_floor, newton, newton_diagnostics);
+  native_loader::register_native_package<Dim>(
+      this, name, so_path, expected_model_identity, expected_binary_identity, limiter, riemann,
+      recon, time, gamma, substeps, evolve, stride, params, positivity_floor, newton,
+      newton_diagnostics, smoothness_epsilon);
 }
 
 template <int Dim>
@@ -2971,7 +2974,7 @@ template std::string System<kNativeDimension>::last_dt_bound() const;
 template void System<kNativeDimension>::register_native_package(
     const std::string&, const std::string&, const std::string&, const std::string&,
     const std::string&, const std::string&, const std::string&, const std::string&, double, int,
-    bool, int, const std::vector<double>&, double, NewtonOptions, bool);
+    bool, int, const std::vector<double>&, double, NewtonOptions, bool, std::optional<double>);
 template void System<kNativeDimension>::register_external_riemann_package(
     const std::string&, const std::string&, const std::string&, const std::string&, int, int,
     const std::string&, const std::string&, const std::string&, const std::string&,

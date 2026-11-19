@@ -104,6 +104,14 @@ class ComponentInterface:
 
     def require_manifest(self, manifest: Any, *, source_package: bool = True) -> None:
         del source_package  # Source and fixed packages implement the identical table contract.
+        descriptor = {
+            "name": self.name, "id": self.abi_id, "uri": self.uri, "version": self.version,
+            "cpp_table": self.cpp_table, "hot_path": self.hot_path,
+            "facets": self.facets, "operations": self.operations,
+        }
+        if descriptor not in NATIVE_COMPONENT_INTERFACES:
+            raise ValueError("native component interface %s@%d is outside the closed catalog"
+                             % (self.uri, self.version))
         rows = tuple(manifest.interfaces)
         if any(not isinstance(row, Mapping) for row in rows):
             raise TypeError("ComponentManifest interfaces must use v2 binding rows")
@@ -209,7 +217,6 @@ GhostBoundary = resolve("ghost_boundary")
 AcceptedInitialGhost = resolve("accepted_initial_ghost")
 FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
-Clustering = resolve("clustering")
 Transfer = resolve("transfer")
 Reflux = resolve("reflux")
 FieldSolver = resolve("field_solver")
@@ -219,7 +226,7 @@ FieldTopology = resolve("field_topology")
 
 __all__ = [
     "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary", "AcceptedInitialGhost",
-    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
+    "FieldBoundaryClosure", "Tagger", "Transfer", "Reflux",
     "FieldSolver", "Writer", "FieldTopology",
 ]
 

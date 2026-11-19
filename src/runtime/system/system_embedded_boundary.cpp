@@ -100,6 +100,13 @@ std::vector<double> System<Dim>::embedded_boundary_mask() const {
 }
 
 template <int Dim>
+bool System<Dim>::owned_guard_unmasked_() const noexcept {
+  // Geometry installation publishes the same prepared mode on the lane. Keep the historical
+  // path when a geometry was installed, even if its embedded-boundary mode is inactive.
+  return !p_->embedded_boundary_;
+}
+
+template <int Dim>
 runtime::system::PreparedActiveMaskLocal<MultiFab<Dim>>
 System<Dim>::prepared_program_block_active_mask_local_(int runtime_block,
                                                        const MultiFab<Dim>& field,
@@ -170,6 +177,7 @@ template void System<kNativeDimension>::set_analytic_level_set(const std::vector
                                                                double);
 template void System<kNativeDimension>::set_geometry_mode(const std::string&);
 template std::vector<double> System<kNativeDimension>::embedded_boundary_mask() const;
+template bool System<kNativeDimension>::owned_guard_unmasked_() const noexcept;
 template const MultiFab<kNativeDimension>*
 System<kNativeDimension>::prepared_program_block_active_mask_(int,
                                                               const MultiFab<kNativeDimension>&,

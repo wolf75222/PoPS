@@ -34,8 +34,7 @@ CONTEXT_FRAGMENT_PATHS = frozenset(
         "pops/runtime/program/amr_program_context_continuation_regrid_topology.inc",
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
         "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
-        "pops/runtime/program/amr_program_context_field_allocation.inc",
-        "pops/runtime/program/amr_program_context_field_bundle.inc",
+        "pops/runtime/program/amr_program_context_regrid_read.inc",
         "pops/runtime/program/amr_program_context_affine_finalization.inc",
         "pops/runtime/program/amr_program_context_composite_integral.inc",
         "pops/runtime/program/amr_program_context_affine_history.inc",
@@ -115,8 +114,9 @@ PROGRAM_RESPONSIBILITY_AUTHORITIES = {
     }),
     "continuation_field_storage": frozenset({
         "pops/runtime/program/amr_program_context_continuation_field_storage.inc",
-        "pops/runtime/program/amr_program_context_field_allocation.inc",
-        "pops/runtime/program/amr_program_context_field_bundle.inc",
+    }),
+    "regrid_read": frozenset({
+        "pops/runtime/program/amr_program_context_regrid_read.inc",
     }),
     "continuation_field_provider": frozenset({
         "pops/runtime/program/amr_program_context_continuation_field_provider.inc",
@@ -254,6 +254,9 @@ PROGRAM_RESPONSIBILITY_BUDGETS = {
     "continuation_regrid": 512,
     # Exact provider geometry and coverage capabilities, including route consensus.
     "continuation_regrid_topology": 144,
+    # N10 lot 3b: the one relayout of phase 1, the parent read of a regrid child, and the
+    # target level's share of the composite integral (DM6, DM9, DM13).
+    "regrid_read": 288,
     # Producer metadata and exact allocation/lifetime authentication share the
     # copy authority; revoked instances remain tombstones while copies live.
     "continuation_field_storage": 336,
@@ -323,15 +326,6 @@ PROGRAM_CONTRACT_EXTENSIONS = {
         ("amr_program_context_continuation_field_storage.inc",
          "void continuation_require_field_type_(",
          "private:\ntemplate <class Lifetime>"),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_regrid_field_topology",
-         "  return field_bundle::export_field"),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_field_topology(topology);",
-         "  auto field ="),
-        ("amr_program_context_field_bundle.inc",
-         "  continuation_local_phase(\n      [&] {\n        require_continuation_regrid_().allocated_fields.push_back(field);",
-         "  return field;"),
             ('amr_program_context_continuation_field_storage.inc', '  const auto& manager = runtime_state().hist_;', '  if (const auto found = continuation_field_storage_.find(&field);'),
     )),
     # Observation route validation, metadata budget and canonical origin are
@@ -499,6 +493,10 @@ TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET = 34
 # program closure, with the same tokens (18230 to 18252 lines at 6e0a3ef5): both margins stay
 # what they were before the sweep.
 N5_SWEEP_PROGRAM_FRAGMENT_LINES = 22
+# N10 lot 3b (DM6, DM13): regrid_read and regrid_integral (275 lines, amr_program_context_
+# regrid_read.inc) replace the bridge's field_bundle.inc and field_allocation.inc (76 lines);
+# the regrid frame's views become private at the same length: 275 - 76, exactly.
+N10_REGRID_READ_FRAGMENT_LINES = 199
 PROGRAM_FRAGMENT_BUDGET = (
     7_730 + 400 + SPATIAL_IMPLICIT_FRAGMENT_BUDGET + FLUX_FAMILY_FRAGMENT_BUDGET
     + JOINT_FIELD_FRAGMENT_BUDGET + MAPPING_CONTINUATION_FRAGMENT_BUDGET
@@ -506,7 +504,7 @@ PROGRAM_FRAGMENT_BUDGET = (
     + PATH_INPUT_FRAGMENT_BUDGET + TENSOR_INPUT_HISTORY_PORT_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
-    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES + N10_REGRID_READ_FRAGMENT_LINES
 )
 # Context-owned cache acquisition and independent field-resource handles extend the
 # existing scaffolding; numerical solve and publication bodies remain counted above.
@@ -549,7 +547,7 @@ PROGRAM_SEMANTIC_CLOSURE_BUDGET = (
     + HIERARCHY_TENSOR_SCAFFOLDING_BUDGET
     + SHARED_HISTORY_CONSUMER_FRAGMENT_BUDGET + RETAINED_FLUX_PROVENANCE_FRAGMENT_BUDGET
     + PROGRAM_NEW_CONTRACT_BUDGET + TEMPORAL_FAMILY_COMPARISON_FRAGMENT_BUDGET
-    + N5_SWEEP_PROGRAM_FRAGMENT_LINES
+    + N5_SWEEP_PROGRAM_FRAGMENT_LINES + N10_REGRID_READ_FRAGMENT_LINES
 )
 PROGRAM_SEMANTIC_HELPER_PATHS = frozenset({
     "pops/runtime/program/prepared_program_field_stages.hpp",
@@ -578,7 +576,7 @@ PERMITTED_UPSTREAM_BOUNDARIES = frozenset(
         "pops/runtime/program/temporal_sample_source.hpp",
         "pops/runtime/program/composite_integral_kernel.hpp",
         "pops/runtime/program/field_topology_view.hpp",
-        "pops/runtime/program/field_bundle_port.hpp",
+        "pops/runtime/program/regrid_read_support.hpp",
         "pops/runtime/program/amr_finite_value_lifetime.hpp",
         "pops/runtime/program/continuation_authority.hpp",
         "pops/runtime/program/continuation_forest_distributed_migration.hpp",
@@ -857,8 +855,8 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
             (80, "struct CompositeIntegralKernel"),
         "pops/runtime/program/field_topology_view.hpp":
             (144, "class FieldTopologyView"),
-        "pops/runtime/program/field_bundle_port.hpp":
-            (480, "namespace pops::runtime::program::field_bundle"),
+        "pops/runtime/program/regrid_read_support.hpp":
+            (64, "struct RegridParentKernel"),
         "pops/runtime/program/amr_finite_value_lifetime.hpp":
             (64, "struct AmrFiniteValueLifetime"),
         "pops/runtime/program/continuation_authority.hpp":
@@ -900,6 +898,54 @@ def test_new_program_upstream_contracts_have_exact_ranked_owners_and_bounds() ->
         assert len(source.splitlines()) <= budget, (path, budget)
         assert not _fixed_rank_authorities(source), path
         assert not (set(_local_includes(source)) & (COMPATIBILITY_UMBRELLAS | CONTEXT_FRAGMENT_PATHS)), path
+
+
+def test_static_geometry_face_frequency_is_its_own_bounded_contract() -> None:
+    # N17 L1b (ROM-110), driver 13/11 12:10: the face frequency on static geometry arrays is a
+    # header of its own, bounded at the size of its content; the box contract above keeps its 80
+    # lines, and the adaptive program context includes neither this header nor the arrays (AMR on
+    # mapped configurations is a later lot of N17).
+    path = "pops/numerics/spatial/nd/static_geometry_face_frequency.hpp"
+    budget, owner = 78, "maximum_incident_face_frequency"
+    dependencies = frozenset({
+        "pops/mesh/execution/for_each.hpp",
+        "pops/mesh/geometry/static_geometry.hpp",
+        "pops/mesh/storage/mf_arith.hpp",
+        "pops/numerics/spatial/nd/face_field.hpp",
+        "pops/numerics/spatial/nd/face_frequency_rule.hpp",
+    })
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert owner in source, (path, owner)
+    assert len(source.splitlines()) <= budget, (path, budget)
+    assert frozenset(_local_includes(source)) == dependencies
+    assert not _fixed_rank_authorities(source), path
+    box = _direct_local_includes("pops/numerics/spatial/nd/face_frequency.hpp")
+    assert path not in box and "pops/mesh/geometry/static_geometry.hpp" not in box
+    for member in _semantic_closure(ROOTS["program"]):
+        assert path not in _direct_local_includes(member), member
+
+
+def test_centroid_slope_is_its_own_bounded_contract() -> None:
+    # N17 L2b-2 (ROM-110), design note N17 DN38: the geometric part of the centred slope of static
+    # geometry arrays is one header function of their view, which the Program operation of centred
+    # differences calls and the generated cell read of N15 will call; a header of its own, bounded
+    # at the size of its content, outside the adaptive program context (AMR on mapped
+    # configurations is a later lot of N17).
+    path = "pops/mesh/geometry/centroid_slope.hpp"
+    budget, owner = 110, "centroid_slope"
+    dependencies = frozenset({
+        "pops/core/foundation/types.hpp",
+        "pops/mesh/geometry/static_geometry.hpp",
+        "pops/mesh/index/real_vector.hpp",
+    })
+    source = (INCLUDE / path).read_text(encoding="utf-8")
+    assert owner in source, (path, owner)
+    assert len(source.splitlines()) <= budget, (path, budget)
+    assert frozenset(_local_includes(source)) == dependencies
+    assert not _fixed_rank_authorities(source), path
+    assert path in _direct_local_includes("pops/runtime/program/program_context.hpp")
+    for member in _semantic_closure(ROOTS["program"]):
+        assert path not in _direct_local_includes(member), member
 
 
 def test_local_include_parser_authenticates_both_delimiters_and_hidden_fragments() -> None:

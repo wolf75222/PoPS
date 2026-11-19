@@ -28,13 +28,6 @@ def _value_rules(names):
     )
 
 
-def _graph_rules(names):
-    from pops.math import ValueExpr
-
-    value = ValueExpr(names.state)
-    return (Tag(value > names.value("refine")), Coarsen(value < names.value("coarsen")))
-
-
 def _peak(names):
     return lambda B: largest_cells(lambda cell: cell.value(names.state)) > names.value("refine")
 
@@ -108,9 +101,17 @@ def test_an_indicator_reads_the_cell_itself_in_this_lot() -> None:
 
 
 def test_regrid_takes_a_criterion_written_as_functions_of_cell() -> None:
-    case, layout, names = advection_case(_graph_rules)
-    with pytest.raises(TypeError, match="function of cell"):
-        Regrid(layout.tagging, every(2))
+    from pops.math import ValueExpr
+
+    case, layout, names = advection_case(_value_rules)
+    assert type(Regrid(layout.tagging, every(2)).when) is RegridWhen
+    # The tag graph that read an expression of the state went with N12 lot 3c-2b: a rule is a
+    # region of cell, and the refusal shows that form.
+    value = ValueExpr(names.state)
+    for rule in (Tag, Coarsen):
+        with pytest.raises(TypeError, match=r"no longer takes an expression of the state.*"
+                                            r"lambda cell: cell\.value\(q\)"):
+            rule(value > names.value("refine"))
     with pytest.raises(TypeError, match="AMRTagging"):
         Regrid(object(), every(2))
 
@@ -223,6 +224,16 @@ def test_the_decision_is_generated_with_two_entries_and_its_identity() -> None:
 
 
 def test_a_when_body_is_not_a_tag_predicate() -> None:
-    with pytest.raises(TypeError, match="when body"):
-        EveryAcceptedSteps(2).resolve_for_amr_predicate(None, action="refine")
+    # every(k) is a Boolean of a when body. A region that joins it is refused at the author's line,
+    # since it is not a strict comparison; one that reads it in an operand is refused by the
+    # criterion, which reads cells, widths and parameters only.
+    _, _, names = advection_case(_value_rules)
+    with pytest.raises(TypeError, match="strict < or >"):
+        Tag(lambda cell: (cell.value(names.state) > names.value("refine"))
+            & EveryAcceptedSteps(2))
+    with pytest.raises(TypeError, match="EveryAcceptedSteps"):
+        _resolved(None, rules=lambda names: (
+            Tag(lambda cell: cell.value(names.state) + EveryAcceptedSteps(2)
+                > names.value("refine")),
+            Coarsen(lambda cell: cell.value(names.state) < names.value("coarsen"))))
     assert type(RegridWhen.trace(lambda B: B.time > 0.5).expression.a) is AcceptedTime

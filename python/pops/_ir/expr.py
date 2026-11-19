@@ -232,6 +232,8 @@ class Maximum(_Bin):
 class Compare(_Bin):
     """A scalar symbolic comparison; Python never evaluates it as a bool."""
 
+    __pops_ir_boolean__ = True
+
     _OPS = {
         "eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
     }
@@ -257,24 +259,25 @@ class Compare(_Bin):
             "ge": lambda: a >= b,
         }[self.comparison]()
 
-    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
-        protocol = getattr(context, "resolve_comparison", None)
-        if not callable(protocol):
-            raise TypeError("AMR predicate context must implement resolve_comparison(...)")
-        return protocol(self, action=action)
+
+
+def is_boolean_expression(value: Any) -> bool:
+    """Whether ``value`` is a symbolic Boolean expression of the IR.
+
+    A Boolean-valued node class declares ``__pops_ir_boolean__ = True``: the comparisons, the
+    Boolean connectives and the control nodes that a ``when`` body reads as a Boolean.
+    """
+    return isinstance(value, Expr) and getattr(type(value), "__pops_ir_boolean__", False) is True
 
 
 def _boolean_operand(value: Any, *, where: str) -> Any:
-    if not isinstance(value, Expr) or not callable(
-            getattr(value, "resolve_for_amr_predicate", None)):
+    if not is_boolean_expression(value):
         raise TypeError("%s requires a typed symbolic Boolean expression" % where)
-    # The runtime protocol check above is the authority.  Its concrete implementers are
-    # heterogeneous Expr subclasses, so retain the checked object without pretending every
-    # Expr implements the predicate protocol.
     return value
 
 
 class BooleanAnd(_Bin):
+    __pops_ir_boolean__ = True
     op = "&"
 
     def __init__(self, a: Any, b: Any) -> None:
@@ -286,15 +289,10 @@ class BooleanAnd(_Bin):
     def eval(self, env: Any) -> Any:
         return self.a.eval(env) & self.b.eval(env)
 
-    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
-        from pops.mesh._amr import AllOf
-        return AllOf(
-            self.a.resolve_for_amr_predicate(context, action=action),
-            self.b.resolve_for_amr_predicate(context, action=action),
-        )
 
 
 class BooleanOr(_Bin):
+    __pops_ir_boolean__ = True
     op = "|"
 
     def __init__(self, a: Any, b: Any) -> None:
@@ -306,15 +304,11 @@ class BooleanOr(_Bin):
     def eval(self, env: Any) -> Any:
         return self.a.eval(env) | self.b.eval(env)
 
-    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
-        from pops.mesh._amr import AnyOf
-        return AnyOf(
-            self.a.resolve_for_amr_predicate(context, action=action),
-            self.b.resolve_for_amr_predicate(context, action=action),
-        )
 
 
 class BooleanNot(Expr):
+    __pops_ir_boolean__ = True
+
     def __init__(self, value: Any) -> None:
         self.a = _boolean_operand(value, where="BooleanNot")
 
@@ -326,10 +320,6 @@ class BooleanNot(Expr):
 
     def eval(self, env: Any) -> Any:
         return ~self.a.eval(env)
-
-    def resolve_for_amr_predicate(self, context: Any, *, action: str) -> Any:
-        from pops.mesh._amr import Not
-        return Not(self.a.resolve_for_amr_predicate(context, action=action))
 
     def _str(self) -> str:
         return "~(%s)" % self.a
@@ -609,8 +599,10 @@ class Gradient(_BoardNode):
 class GradientMagnitude(Expr):
     """Semantic ``|grad(field)|`` resolved by a discrete consumer context.
 
-    The node deliberately has no context-free evaluator or C++ spelling.  AMR tagging resolves it
-    against the selected layout, discretization and stencil before a backend may lower it.
+    The node deliberately has no context-free evaluator or C++ spelling: a consumer must resolve
+    it against a layout, a discretization and a stencil. No consumer does since the AMR tag graph
+    went (N12 lot 3c-2b); a refinement region reads the gradient of the method through
+    ``pops.lib.amr.criteria.gradient_norm``.
     """
 
     def __init__(self, gradient: Any) -> None:
@@ -624,33 +616,6 @@ class GradientMagnitude(Expr):
 
     def __pops_ir_key__(self, recurse: Any) -> Any:
         return ("gradient_magnitude", scalar_literal(self.scale).to_data(), recurse(self.field))
-
-    def resolve_for_amr_tagging(
-        self,
-        context: Any,
-        *,
-        action: str,
-        comparison: str,
-        threshold: Any,
-    ) -> Any:
-        """Resolve through the consumer-owned discrete-indicator protocol.
-
-        The expression package does not know an AMR node class or a numerical stencil.  It only
-        exposes its semantic operands to a context implementing the small open protocol.  A custom
-        indicator can implement this same method without being added to a central class switch.
-        """
-        resolve = getattr(context, "resolve_gradient_magnitude", None)
-        if not callable(resolve):
-            raise TypeError(
-                "AMR tagging context must implement resolve_gradient_magnitude(...)"
-            )
-        return resolve(
-            field=self.field,
-            scale=self.scale,
-            action=action,
-            comparison=comparison,
-            threshold=threshold,
-        )
 
     def eval(self, env: Any) -> Any:
         del env

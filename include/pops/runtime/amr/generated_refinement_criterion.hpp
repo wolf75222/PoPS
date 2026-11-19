@@ -16,6 +16,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace pops::runtime::amr {
 
@@ -69,5 +71,44 @@ inline constexpr const char* kGeneratedCriterionEntrySymbol =
     "pops_program_refinement_criterion_amr";
 inline constexpr const char* kGeneratedCriterionIdentitySymbol =
     "pops_program_refinement_criterion_identity";
+
+/// Compiled description of one local state field read by a standalone criterion. The array slots
+/// use the same order as GeneratedCriterionPatch fields and components.
+struct StandaloneCriterionFieldView {
+  const char* state;
+  const char* block;
+  std::size_t count;
+  const char* const* variables;
+  const int* components;
+};
+
+struct StandaloneCriterionMetadata {
+  std::size_t real_bytes;
+  int minimum_cycles;
+  std::size_t field_count;
+  const StandaloneCriterionFieldView* fields;
+};
+
+/// Independent binding contract supplied by the plan that owns the mesh. Standalone entries in
+/// this version read only local conserved state and literals.
+struct StandaloneCriterionField {
+  std::string state;
+  std::string block;
+  std::vector<std::string> variables;
+  std::vector<int> components;
+};
+
+struct StandaloneCriterionBinding {
+  std::string identity;
+  std::string clock;
+  std::string provider;
+  int minimum_cycles = 0;
+  std::vector<StandaloneCriterionField> fields;
+};
+
+inline constexpr const char* kStandaloneCriterionAbiKeySymbol =
+    "pops_standalone_refinement_criterion_abi_key_v1";
+inline constexpr const char* kStandaloneCriterionMetadataSymbol =
+    "pops_standalone_refinement_criterion_metadata_v1";
 
 }  // namespace pops::runtime::amr

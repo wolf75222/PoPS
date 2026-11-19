@@ -133,6 +133,13 @@ class AcceptedExchangeLedger {
     return it->second.value;
   }
 
+  double integral_initial(std::string_view identity) const {
+    const auto it = integrals_.find(identity);
+    if (it == integrals_.end())
+      throw std::invalid_argument("exchange incidence destination is not a declared integral");
+    return it->second.initial;
+  }
+
   bool same_integral_declarations(const AcceptedExchangeLedger& other) const noexcept {
     if (integrals_.size() != other.integrals_.size())
       return false;

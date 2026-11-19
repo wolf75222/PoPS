@@ -39,6 +39,10 @@ def native_plain_data(value: Any) -> Any:
     return value
 
 
+def field_output_target(name: str, block: str, unknown: str) -> str:
+    return "field-install:%s:output:%s:%s" % (name, block, unknown)
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedFieldInstallPlan:
     """Complete field semantics plus their exact authenticated provider lowering."""

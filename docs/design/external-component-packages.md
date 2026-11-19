@@ -60,7 +60,7 @@ table layouts, plus the version of the common request/value ABI. The complete de
 catalog digest. The generator emits `pops.interfaces`, the Python route data and
 `generated_component_abi.hpp` together; `--check` makes any hand-edited drift fail CI. The current
 protocol includes separate tables for numerical flux, ghost boundary, post-Riemann boundary-flux
-transformation, field-boundary closure, tagging, clustering, transfer, reflux, field solve, writer
+transformation, field-boundary closure, tagging, transfer, reflux, field solve, writer
 and field topology. Adding an
 implementation requires no central scientific switch.
 

@@ -36,21 +36,38 @@ def block_holds_totals(model: Any, block: Any) -> bool:
     return bool(states()) if callable(states) else False
 
 
-def begin_total_rate(v: Any, var: dict, lines: list, *, model: Any, block: Any) -> Any:
-    """Decode ū before a rate of a total and substitute it for the state; None otherwise."""
+def decode_total_rate_input(
+    v: Any, stored: str, lines: list[str], *, model: Any, block: Any,
+) -> str | None:
+    """Emit the decoded stage density for a total, or return None for an unchanged input."""
     if v.op not in TOTAL_RATE_OPS or v.attrs.get("path_conservative", False):
         return None
     if not block_holds_totals(model, v.block):
         return None
     if block is None:
         raise ValueError("the rate of a cell total requires its resolved block owner")
-    state = v.inputs[0]
-    stored = var[state.id]
     density = "cell_density_%d" % v.id
     lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.scratch_state(%d, %d, %s);"
                  % (density, int(v.id), _DECODE_SUBSLOT, stored))
     lines.append("ctx.decode_cell_total(%s, %s);  // G03 R-b: the density of the total"
                  % (stored, density))
+    return density
+
+
+def encode_total_rate_output(rate: str, lines: list[str]) -> None:
+    """Encode a computed density rate in the original output field."""
+    lines.append("ctx.encode_cell_total_rate(%s);  // G03 R-b: the rate of the total" % rate)
+
+
+def begin_total_rate(v: Any, var: dict, lines: list, *, model: Any, block: Any) -> Any:
+    """Temporarily substitute the decoded stage density during ordinary rate emission."""
+    if v.op not in TOTAL_RATE_OPS:
+        return None
+    state = v.inputs[0]
+    stored = var[state.id]
+    density = decode_total_rate_input(v, stored, lines, model=model, block=block)
+    if density is None:
+        return None
     var[state.id] = density
     return state, stored
 
@@ -61,7 +78,10 @@ def end_total_rate(v: Any, var: dict, lines: list, token: Any) -> None:
         return
     state, stored = token
     var[state.id] = stored
-    lines.append("ctx.encode_cell_total_rate(%s);  // G03 R-b: the rate of the total" % var[v.id])
+    encode_total_rate_output(var[v.id], lines)
 
 
-__all__ = ["TOTAL_RATE_OPS", "begin_total_rate", "block_holds_totals", "end_total_rate"]
+__all__ = [
+    "TOTAL_RATE_OPS", "begin_total_rate", "block_holds_totals", "decode_total_rate_input",
+    "encode_total_rate_output", "end_total_rate",
+]

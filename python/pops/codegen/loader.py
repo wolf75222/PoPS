@@ -112,6 +112,12 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self.program_graph_hash = (
             self.program_graph.graph_hash if self.program_graph is not None else None
         )
+        from pops.time._program.guard_failure_sites import guard_failure_sites
+
+        self.guard_failure_sites = (
+            guard_failure_sites(self.program, self.program_hash)
+            if isinstance(self.program, Program) and type(self.program_hash) is str else ()
+        )
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
         if native_dimension is not None \
                 and (type(native_dimension) is not int or native_dimension not in (1, 2, 3)):
@@ -171,6 +177,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self.artifact_spec_identity = None
         self.binary_identity = None
         self.artifact_identity = None
+        # The name-free compile choices of this Program (program_id, CC2; N11 lot 2b).
+        self.toolchain_evidence: dict[str, Any] | None = None
 
     @property
     def target(self) -> str:

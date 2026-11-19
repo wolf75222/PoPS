@@ -62,7 +62,7 @@ class CompiledArtifactManifest:
         "supports_amr", "supports_mpi", "supports_gpu", "supports_stride",
         "supports_partial_imex_mask", "supports_named_fields", "native_entrypoints",
         "external_bricks", "dimension", "amr_refinement_ratio", "precision", "real_bytes",
-        "communicator", "supports_custom_communicator", "control",
+        "communicator", "supports_custom_communicator", "control", "failure_sites",
     )
 
     def __init__(self, *, model_name=None, abi_key=None, abi_version=None,
@@ -76,7 +76,7 @@ class CompiledArtifactManifest:
                  supports_named_fields=None, native_entrypoints=None, dimension=None,
                  amr_refinement_ratio=None, precision=None, real_bytes=None,
                  communicator=None, supports_custom_communicator=None,
-                 external_bricks=None, control=None):
+                 external_bricks=None, control=None, failure_sites=None):
         put = object.__setattr__
         put(self, "model_name", freeze_manifest_json(model_name, where="artifact.model_name"))
         put(self, "abi_key", freeze_manifest_json(abi_key, where="artifact.abi_key"))
@@ -225,6 +225,14 @@ class CompiledArtifactManifest:
             control = AdvanceControl.from_data(control).to_data()
         put(self, "control", None if control is None else freeze_manifest_json(
             control, where="artifact.control"))
+        from pops.time._step.transaction import validate_guard_failure_sites
+
+        if failure_sites is not None and type(failure_sites) not in (list, tuple):
+            raise TypeError("failure_sites requires a sequence of global guard rows")
+        failure_rows = list(failure_sites or ())
+        validate_guard_failure_sites(failure_rows)
+        put(self, "failure_sites", freeze_manifest_json(
+            failure_rows, where="artifact.failure_sites"))
 
     def supports(self):
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""
@@ -274,6 +282,8 @@ class CompiledArtifactManifest:
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
         if self.control is not None:
             payload["control"] = thaw_manifest_json(self.control)
+        if self.failure_sites:
+            payload["failure_sites"] = thaw_manifest_json(self.failure_sites)
         payload.update(self.supports())
         return manifest_envelope(
             kind=_MANIFEST_KIND,
@@ -307,7 +317,7 @@ class CompiledArtifactManifest:
             schema_version=ARTIFACT_MANIFEST_SCHEMA_VERSION,
             where="compiled-artifact manifest",
         )
-        optional = {"control"}
+        optional = {"control", "failure_sites"}
         unknown = sorted(set(payload) - ctor_keys - derived - optional)
         if unknown:
             raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
@@ -469,6 +479,13 @@ def _advance_control_data(compiled):
     return None if control is None else control.to_data()
 
 
+def _guard_failure_site_data(compiled):
+    layouts = getattr(compiled, "layout_programs", ())
+    programs = tuple(row.program for row in layouts) if layouts else (compiled,)
+    return [site.to_data() for program in programs
+            for site in getattr(program, "guard_failure_sites", ())]
+
+
 def _build_compiled_manifest(compiled, model, caps_flags, *, component_rows=None):
     abi_key = getattr(compiled, "abi_key", None)
     model_name = getattr(compiled, "program_name", None) or getattr(model, "name", None)
@@ -537,6 +554,7 @@ def _build_compiled_manifest(compiled, model, caps_flags, *, component_rows=None
         native_entrypoints=[],
         external_bricks=external_bricks,
         control=_advance_control_data(compiled) if component_rows is None else None,
+        failure_sites=_guard_failure_site_data(compiled) if component_rows is None else None,
         dimension=None,
         amr_refinement_ratio=None,
         precision=None,

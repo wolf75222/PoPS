@@ -169,6 +169,20 @@ def test_term_expect_accepts_the_key_of_its_form():
     _numerics(u, flux, linear_upwind())
 
 
+@pytest.mark.parametrize("law", [lambda u: u**2 / 2, lambda u: u + 1],
+                         ids=["burgers", "affine"])
+def test_public_upwind_without_speed_requires_a_homogeneous_linear_flux(law):
+    _, _, u, flux, _ = _model(law)
+    with pytest.raises(surface.RealizationMismatch) as caught:
+        represent = {u: surface.CellAverage()}
+        surface.Numerics(represent=represent, schemes={flux: upwind()})  # <- upwind-numerics
+    message = str(caught.value)
+    assert "the scheme expects the key" in message
+    assert "rusanov()" in message and "hll()" in message
+    assert message.startswith(f"{HERE}:{_line('upwind-numerics')} (in ")
+    assert "pops/lib/numerics/fluxes.py:" in message
+
+
 # --- the scalars and the vectors of a face (2.6.3, review Q2) ---------------------------------------
 
 def test_dot_of_a_scalar_with_the_normal_is_a_support_mismatch():
@@ -352,9 +366,10 @@ def test_pops_discrete_exports_no_entity():
 
 def test_no_method_of_this_lot_derives_a_face():
     """A face that reads largest or smallest lowers them to b6 maximum and minimum (SU-T3), and no
-    method of level 1 in this lot derives a face. The solves of the lot « solves » read the linear
-    map that a scheme states (two_point() of a constant coefficient), never a derivative: a face
-    flux read at the unknown of a solve is refused with its lot. When a later lot derives one, such
+    method of level 1 in this lot derives a face. A relation solve reads the claims that a scheme
+    states of its rate (two_point() of a coefficient that reads no state, the N9 lot « La
+    référence sous les solves de relation »), never a derivative: a face flux read at the unknown
+    of a solve is refused with its lot. When a later lot derives one, such
     a face keeps b6's behaviour or names the lot 2 of N11."""
     from pops.lib.solve import cg
     from pops.lib.time.methods import imex_euler
@@ -367,7 +382,7 @@ def test_no_method_of_this_lot_derives_a_face():
         initial={u: u0}, solvers={imex: cg()})
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={flux: rusanov(), diffusion: two_point()})
-    with pytest.raises(surface.NotYetElaborated, match="states no linear map.*G10"):
+    with pytest.raises(surface.NotYetElaborated, match="is not stated linear and homogeneous in the state.*G10"):
         surface.Case(model=model, numerics=numerics, program=program,
                      layout={domain: surface.Uniform(cells=16)})
 

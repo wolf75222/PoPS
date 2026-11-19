@@ -4,9 +4,12 @@ This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, an
 the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics`` (``upwind``, ``rusanov``, ``hll``,
-``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
+``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time`` (``ssprk2`` and
+``imex_euler``, re-exported from ``pops.lib.time.methods``, which also holds ``forward_euler``,
+``ssprk3`` and ``rk4``).
 Building ``pops.Case(...)`` traces the case into a b6 case (2.6.6, ``_elaborate``), and
-``pops.inspect(case)`` validates and resolves it without compiling (SU12).
+``pops.inspect(case)`` validates and resolves it without compiling (SU12). ``pops.Graded`` grades
+the nodes of a uniform layout (lot L1 of N17, D0b), which the static geometry arrays serve.
 
 Every other construct of 2.6.2, 2.6.4 and 2.6.8 is importable and refuses its use with
 ``NotYetElaborated``, which names the lot that elaborates it; a name of an earlier text is refused
@@ -23,15 +26,14 @@ from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
-    inspect,
+    AMR, CUDA, Advance, Case, Graded, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim,
+    compile, inspect,
 )
 from ._project import project
 from . import _solver
 from ._quadrature import Quadrature
 from ._representation import Coefficients, Dual, representation
-from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
-from ._step import StepRuleValue
+from ._run import BudgetExhausted, FaceFrequencyStop, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
@@ -152,8 +154,8 @@ _EARLIER = {
                                    "of cell, since accept= holds checks only"),
 }
 
-_LIBRARY = ("pops.lib.numerics, pops.lib.time.methods, pops.lib.quadrature and "
-            "pops.lib.representations")
+_LIBRARY = ("pops.lib.numerics, pops.lib.time (the methods that spec 17.1 imports from it; "
+            "every method in pops.lib.time.methods), pops.lib.quadrature and pops.lib.representations")
 
 
 def _later(name: str, owner: str) -> _Any:
@@ -186,7 +188,7 @@ def __getattr__(name: str) -> _Any:
 
 
 __all__ = [
-    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
+    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components", "Graded",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
     "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",
@@ -205,7 +207,6 @@ __all__ = [
     "UnknownName",
     "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
-    "BudgetExhausted", "RunFailed", "SolveFailed",
-    "Choice", "Report", "Row", "SchemeValue", "StepRuleValue", "TermView",
-    "check_plain_function",
+    "BudgetExhausted", "FaceFrequencyStop", "RunFailed", "SolveFailed",
+    "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

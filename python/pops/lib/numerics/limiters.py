@@ -47,7 +47,8 @@ def muscl(cell, term, axis, limiter):
     """u_(c+1/2) = u_c + limiter(u_c - u_(c-1), u_(c+1) - u_c) / 2, the trace on the face on the
     positive side of `axis`; the trace on the negative side mirrors it (2.6.4). A record state is
     limited field by field, since record arithmetic acts field by field (SD71). As master's MUSCL
-    face value."""
+    face value, with the two deviations that the module docstring states (the sign of a zero
+    trace on the negative face, and vanleer's product beyond the largest double)."""
     q = term.quantity
     centre = cell.value(q)
     backward = centre - cell.shift(axis, -1).value(q)

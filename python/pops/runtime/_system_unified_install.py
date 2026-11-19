@@ -433,7 +433,7 @@ class _SystemUnifiedInstall(_System):
             from pops.runtime._program_cadence_install import install_program_cadence
 
             install_program_cadence(self, authored)
-            self.install_program(so_path)
+            self._install_uniform_program(so_path, component, authored, install_plan)
             # (5a) HISTORY-PERSISTENCE POLICIES (ADC-626): the compiled Program records a per-ring
             # persistence policy (Dense / Interval / Revolve) on program._history_persistence. Attach the
             # name -> policy map to the System so the checkpoint stores only the policy-selected slots and
@@ -511,6 +511,20 @@ class _SystemUnifiedInstall(_System):
             install_plan=install_plan,
         )
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
+
+    def _install_uniform_program(self, so_path, component, authored, install_plan) -> None:
+        transfers = getattr(authored, "_integral_transfers", ())
+        binary_identity = getattr(getattr(component, "binary_identity", None), "token", None)
+        execution = getattr(install_plan, "execution_context", None)
+        communicator = getattr(execution, "communicator", None)
+        install_incidence = getattr(self._s, "_install_program_with_exchange_incidence", None)
+        if (install_incidence is not None and transfers and binary_identity
+                and getattr(communicator, "identity", None) == "serial"
+                and getattr(communicator, "handle", None) is None
+                and not getattr(component, "external_bricks", ())):
+            install_incidence(so_path, binary_identity, len(transfers))
+        else:
+            self.install_program(so_path)
 
     def explain_bind(self, compiled: Any) -> Any:
         """A printable :class:`pops.codegen.inspect_report.BindReport` of @p compiled vs this sim

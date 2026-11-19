@@ -248,6 +248,7 @@ class AnalyticAux(_AuxProducer):
     regrid_policy = "recompute"
     expression: ScalarExpr
     frame: CartesianDomainFrame | RectangleFrame
+    _entity_coordinate_axis: int | None
 
     def __init__(self, target: Any, expression: Any, *, frame: Any,
                  boundary: Any = None) -> None:
@@ -277,10 +278,25 @@ class AnalyticAux(_AuxProducer):
         super().__init__(target, boundary=boundary)
         object.__setattr__(self, "expression", expression)
         object.__setattr__(self, "frame", frame)
+        object.__setattr__(self, "_entity_coordinate_axis", None)
+
+    @classmethod
+    def _entity_coordinate(cls, target: Any, frame: Any, axis: int) -> AnalyticAux:
+        """A coordinate evaluated at the centre of the entity consuming it."""
+        from pops.analytic import coordinate
+
+        if type(axis) is not int or axis < 0 or axis >= len(frame.axes):
+            raise ValueError("entity coordinate axis is outside its frame")
+        result = cls(target, coordinate(frame, frame.axes[axis]), frame=frame,
+                     boundary=AuxiliaryBoundary(width=1))
+        object.__setattr__(result, "_entity_coordinate_axis", axis)
+        return result
 
     def options(self) -> dict[str, Any]:
         options = {**self._base_options(), "expression": self.expression.to_data(),
                    "frame": self.frame.to_dict()}
+        if self._entity_coordinate_axis is not None:
+            options["entity_coordinate_axis"] = self._entity_coordinate_axis
         clocks = self.expression.time_clocks()
         if clocks:
             options.update(temporal_contract="analytic-aux-time@1",
@@ -294,10 +310,10 @@ class AnalyticAux(_AuxProducer):
         return (self._target,)
 
     def resolve_references(self, resolver: Any) -> AnalyticAux:
-        return AnalyticAux(
-            resolve_handle(self._target, resolver, where="analytic auxiliary target"),
-            self.expression, frame=self.frame, boundary=self.boundary,
-        )
+        target = resolve_handle(self._target, resolver, where="analytic auxiliary target")
+        if self._entity_coordinate_axis is not None:
+            return AnalyticAux._entity_coordinate(target, self.frame, self._entity_coordinate_axis)
+        return AnalyticAux(target, self.expression, frame=self.frame, boundary=self.boundary)
 
     def to_data(self) -> dict[str, Any]:
         return {"type": type(self).__name__, **self.options(),

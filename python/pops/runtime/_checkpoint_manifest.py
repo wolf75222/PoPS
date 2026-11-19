@@ -11,7 +11,9 @@ from pops._manifest_protocol import strict_json_loads
 from pops._generated_release_contract import (
     CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
 )
-from pops.output._checkpoint_contract import IDENTITY_KEY, MANIFEST_KEY
+from pops.output._checkpoint_contract import (
+    CHECKPOINT_MANIFEST_KEYS, IDENTITY_KEY, MANIFEST_KEY, is_historical_amr_run_manifest,
+)
 
 from pops.identity.checkpoint_origin import (
     BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION, RUN_ORIGIN_CHECKPOINT_SCHEMA_VERSION,
@@ -217,6 +219,18 @@ def _runtime_identities(owner: Any) -> tuple[Identity, Identity, Identity]:
     return tuple(checked)  # type: ignore[return-value]
 
 
+def _runtime_program_id(owner: Any) -> Identity:
+    """The compiled ``program_id`` of the bound runtime (N11 lot 2b, spec 0.3 CC2, CN9)."""
+    provider = getattr(owner, "_checkpoint_program_id", None)
+    if not callable(provider):
+        raise TypeError(
+            "checkpoint owner must implement the private program_id provider protocol")
+    value = provider()
+    if type(value) is not Identity or value.domain != "program":
+        raise RuntimeError("checkpoint requires the runtime's domain-'program' identity")
+    return Identity.from_data(value.to_data())
+
+
 def _seal_checkpoint_payload_with_identities(
     payload: dict[str, Any],
     *,
@@ -224,6 +238,7 @@ def _seal_checkpoint_payload_with_identities(
     semantic: Identity,
     artifact: Identity,
     bind: Identity,
+    program: Identity,
     run: Identity | None,
     origin: dict[str, Any] | None = None,
 ) -> Identity:
@@ -234,6 +249,7 @@ def _seal_checkpoint_payload_with_identities(
         (semantic, "semantic"),
         (artifact, "artifact"),
         (bind, "bind"),
+        (program, "program"),
     ):
         if type(value) is not Identity or value.domain != domain:
             raise TypeError("checkpoint requires an exact domain-%r identity" % domain)
@@ -252,6 +268,7 @@ def _seal_checkpoint_payload_with_identities(
         "semantic_identity": _identity_json(semantic),
         "artifact_identity": _identity_json(artifact),
         "bind_identity": _identity_json(bind),
+        "program_id": _identity_json(program),
         "run_identity": None if run is None else _identity_json(run),
         "clock": {
             "time": float(payload["t"]).hex(),
@@ -273,6 +290,7 @@ def _seal_checkpoint_payload_with_identities(
 def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind: str) -> Identity:
     """Add the canonical manifest and restart token to an in-memory NPZ payload."""
     semantic, artifact, bind = _runtime_identities(owner)
+    program = _runtime_program_id(owner)
     evidence = checkpoint_lifecycle_evidence(owner)
     run = getattr(owner, "last_run_identity", None)
     return _seal_checkpoint_payload_with_identities(
@@ -281,6 +299,7 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
         semantic=semantic,
         artifact=artifact,
         bind=bind,
+        program=program,
         run=run,
         origin=evidence.get("origin"),
     )
@@ -303,14 +322,21 @@ def inspect_checkpoint_payload_integrity(
     This is an offline integrity inspection, not a compatibility or migration decision. It proves
     only that a canonical checkpoint is internally complete and untampered.
     """
+    return _inspect_checkpoint_payload_integrity(
+        payload, runtime_kind=runtime_kind, allow_historical_amr_refusal=False)
+
+
+def _inspect_checkpoint_payload_integrity(
+    payload: Any, *, runtime_kind: str, allow_historical_amr_refusal: bool
+) -> tuple[dict[str, Any], Identity]:
     files = _payload_files(payload)
     if MANIFEST_KEY not in files or IDENTITY_KEY not in files:
         raise ValueError("checkpoint has no canonical manifest/restart identity; historical formats are refused")
     manifest = _strict_json(payload[MANIFEST_KEY])
-    expected_keys = {
-        "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
-        "bind_identity", "run_identity", "clock", "arrays", "restart_identity",
-    }
+    expected_keys = set(CHECKPOINT_MANIFEST_KEYS)
+    historical = allow_historical_amr_refusal and is_historical_amr_run_manifest(manifest)
+    if historical:
+        expected_keys.remove("program_id")
     initial = manifest.get("schema_version") == BOUND_INITIAL_CHECKPOINT_SCHEMA_VERSION
     if initial:
         expected_keys.add("origin")
@@ -329,11 +355,19 @@ def inspect_checkpoint_payload_integrity(
     if files != expected_files:
         raise ValueError("checkpoint NPZ keys differ from its exact manifest")
 
-    for field, domain in (
+    bound_domains = [
         ("semantic_identity", "semantic"),
         ("artifact_identity", "artifact"),
         ("bind_identity", "bind"),
-    ):
+    ]
+    if historical:
+        from pops.output._checkpoint_collective import _require_manifest_restart_identity
+
+        _require_manifest_restart_identity(
+            manifest, str(payload[IDENTITY_KEY]), allow_historical_amr_refusal=True)
+    else:
+        bound_domains.append(("program_id", "program"))
+    for field, domain in bound_domains:
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain:
             raise ValueError("checkpoint %s has wrong domain" % field)
@@ -368,11 +402,23 @@ def inspect_checkpoint_payload_integrity(
 
 def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: str) -> Identity:
     """Authenticate every checkpoint byte and all runtime identities before state mutation."""
-    manifest, restart = inspect_checkpoint_payload_integrity(
+    manifest, restart = _inspect_checkpoint_payload_integrity(
         payload,
         runtime_kind=runtime_kind,
+        allow_historical_amr_refusal=runtime_kind == "amr",
     )
     semantic, artifact, bind = _runtime_identities(owner)
+    if "program_id" not in manifest:
+        if _identity_from_json(manifest["semantic_identity"]).token != semantic.token:
+            raise ValueError("checkpoint semantic_identity does not match the bound runtime")
+        raise ValueError("historical AMR checkpoint has no program_id and cannot be restarted")
+    program = _runtime_program_id(owner)
+    # program_id first (N11 lot 2b): another target, toolchain, optimization flags or emitter is
+    # refused as such, before the owner-name and member checks can describe it otherwise.
+    if _identity_from_json(manifest["program_id"]).token != program.token:
+        raise ValueError(
+            "checkpoint program identity (program_id) does not match the bound runtime: it was "
+            "compiled for another program, target, toolchain, optimization flags or emitter")
     for field, current, domain in (
         ("semantic_identity", semantic, "semantic"),
         ("artifact_identity", artifact, "artifact"),
@@ -380,12 +426,32 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     ):
         recorded = _identity_from_json(manifest[field])
         if recorded.domain != domain or recorded.token != current.token:
+            if field == "artifact_identity" and runtime_kind == "uniform":
+                missing = _missing_uniform_state_members(owner, manifest["arrays"])
+                if missing:
+                    raise ValueError(
+                        "checkpoint artifact_identity does not match the bound runtime (equal program_id): "
+                        "no member %s; native checkpoint images retain owner names, and restart "
+                        "across renamed owners requires N11 lot 2c-ii"
+                        % ", ".join(missing))
             raise ValueError("checkpoint %s does not match the bound runtime" % field)
     from pops.runtime._engine_descriptors import abi_key
     files = _payload_files(payload)
     if "abi_key" not in files or str(payload["abi_key"]) != str(abi_key()):
         raise ValueError("checkpoint ABI identity does not match the loaded runtime")
     return restart
+
+
+def _missing_uniform_state_members(owner: Any, arrays: Mapping[str, Any]) -> list[str]:
+    """Return the missing state members shown by the authenticated Uniform manifest."""
+    names: Any = getattr(owner, "block_names", None)
+    if not callable(names):
+        names = getattr(getattr(owner, "_bound_snapshot", None), "block_names", None)
+    if not callable(names):
+        return []
+    block_names: Any = names()
+    expected = ("state_%s" % name for name in block_names)
+    return [member for member in expected if member not in arrays]
 
 
 def checkpoint_run_identity(payload: Any) -> Identity | None:
