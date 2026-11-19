@@ -328,12 +328,14 @@ def test_copied_context_checks_a_kept_form_in_its_own_thread(monkeypatch):
 
 @pytest.mark.parametrize("read_from", ["proxy", "provider"])
 def test_registered_strategy_reprojects_current_application_data(read_from):
+    from pops.time import references
     from pops.time._step.strategy import (
         StepStrategy, register_step_strategy_type, validate_step_strategy_manifest,
     )
     from pops.time._program.serialization import _IR_IDENTITY_REUSE
 
     settings = {"dt": 0.01}
+    observations = []
 
     @register_step_strategy_type
     @dataclass(frozen=True, slots=True)
@@ -342,6 +344,7 @@ def test_registered_strategy_reprojects_current_application_data(read_from):
         view: Mapping[str, float] | None
 
         def to_data(self):
+            observations.append(references._REGISTRY_READS.get())
             data = settings if self.view is None else self.view
             return {"kind": self.kind, "dt": data["dt"]}
 
@@ -378,12 +381,71 @@ def test_registered_strategy_reprojects_current_application_data(read_from):
             saved_context = copy_context()
             settings["dt"] = 0.03
     assert assert_projection(0.03) != current
+    assert observations and all(scope is None for scope in observations)
     reference = ref(program)
     del validated, program, spec
     gc.collect()
     assert reference() is None
     expired_scope = saved_context.run(_IR_IDENTITY_REUSE.get)
     assert expired_scope is not None and not expired_scope.applies()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_registry_observation_stays_in_its_projection_and_thread(monkeypatch, fails):
+    from pops.model.ownership import _FINGERPRINT_SCOPE
+    from pops.time import references
+
+    with monkeypatch.context() as patch:
+        patch.setattr(canonical_form, "_ENABLED", False)
+        owner, _valid_owner, program = _validated("M01", "periodic-advection")
+        other, _valid_other, nested = _validated("M01", "periodic-advection")
+    owned = owner.subjects["fluid"]
+    foreign = other.subjects["fluid"]
+    expected_foreign = references.canonical_handle(foreign).canonical_identity()
+    scoped = []
+    original = pops.Program._canonical_projection
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        def capture(target, *, include_provenance=True):
+            reads = references._REGISTRY_READS.get()
+            if target is nested:
+                assert reads is None
+                return original(target, include_provenance=include_provenance)
+            assert target is program and reads is not None and reads.applies()
+            fingerprints = _FINGERPRINT_SCOPE.get()
+            assert fingerprints is not None and fingerprints.applies()
+            copied = copy_context()
+            scoped.append((copied, reads, fingerprints))
+            assert not reads.records
+            resolved = worker.submit(copied.run, references.canonical_handle, foreign).result()
+            assert resolved.canonical_identity() == expected_foreign
+            assert not reads.records
+            with monkeypatch.context() as patch:
+                patch.setattr(canonical_form, "_ENABLED", False)
+                nested._serialize()
+            assert references._REGISTRY_READS.get() is reads and not reads.records
+            references.canonical_handle(owned)
+            assert tuple(reads.records.values()) == (owned.block_ref._instance_registry,)
+            result = original(target, include_provenance=include_provenance)
+            if fails:
+                raise RuntimeError("projection refused in test")
+            return result
+
+        monkeypatch.setattr(pops.Program, "_canonical_projection", capture)
+        if fails:
+            with pytest.raises(RuntimeError, match="projection refused in test"):
+                program._serialize()
+        else:
+            program._serialize()
+        assert canonical_form.has_form(program) is not fails
+        assert references._REGISTRY_READS.get() is None
+        assert len(scoped) == (1 if fails else 2)
+        for copied, reads, fingerprints in scoped:
+            assert not reads.applies() and not reads.records
+            assert not fingerprints.applies() and not fingerprints.observed
+            assert copied.run(references.canonical_handle, foreign).canonical_identity() == expected_foreign
+            worker.submit(copied.run, references.canonical_handle, foreign).result()
+            assert not reads.records
 
 
 @pytest.mark.parametrize("provider", ["stock", "schedule", "trigger"])

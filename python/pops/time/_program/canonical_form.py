@@ -98,7 +98,7 @@ def eligible(program: Any) -> bool:
 def serialize(program: Any, include_provenance: bool) -> dict[str, Any]:
     """The canonical form of ``program``, from its kept form when the witness holds."""
     if not eligible(program):
-        return program._canonical_projection(include_provenance=include_provenance)
+        return _fresh_projection(program, include_provenance)
     form = _current_form(program)
     if form is not None:
         return json.loads(form.texts[include_provenance])
@@ -110,7 +110,7 @@ def ir_hash(program: Any) -> str:
     from pops._structural_data import canonical_json_sha256
 
     if not eligible(program):
-        return canonical_json_sha256(program._canonical_projection(include_provenance=False))
+        return projected_ir_hash(program)
     form = _current_form(program)
     if form is None:
         form, data = _build(program, False)
@@ -133,7 +133,20 @@ def projected_ir_hash(program: Any) -> str:
     """A real projection of the IR hash, bypassing any kept form."""
     from pops._structural_data import canonical_json_sha256
 
-    return canonical_json_sha256(program._canonical_projection(include_provenance=False))
+    return canonical_json_sha256(_fresh_projection(program, False))
+
+
+def _fresh_projection(program: Any, include_provenance: bool) -> dict[str, Any]:
+    from pops.time import references
+
+    if references._REGISTRY_READS.get() is None:
+        return program._canonical_projection(include_provenance=include_provenance)
+    # A nested projection that is not kept cannot supply its registries to its caller's form.
+    token = references._REGISTRY_READS.set(None)
+    try:
+        return program._canonical_projection(include_provenance=include_provenance)
+    finally:
+        references._REGISTRY_READS.reset(token)
 
 
 def _current_form(program: Any) -> _Form | None:
@@ -222,10 +235,12 @@ def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
     from pops.model import ownership
 
     closure = _immutable_closure(program)
+    if closure is None:
+        return None, _fresh_projection(program, first)
     authorities: dict[Any, Any] = {}
     registries: dict[int, Any] = {}
     data = _observed_projection(program, first, authorities, registries)
-    if closure is None or not _keepable_registries(registries.values()) or not _closed_json(data):
+    if not _keepable_registries(registries.values()) or not _closed_json(data):
         return None, data
     other_authorities: dict[Any, Any] = {}
     other = _observed_projection(program, not first, other_authorities, registries)
@@ -265,7 +280,7 @@ def _build(program: Any, first: bool) -> tuple[_Form | None, dict[str, Any]]:
     if not _objects_hold(program, form) or not _keepable_registries(form.registries):
         raise RuntimeError("Program IR identity changed during canonical projection")
     if not _mappings_hold(form.mappings):
-        return None, program._canonical_projection(include_provenance=first)
+        return None, _fresh_projection(program, first)
 
     with _LOCK:
         if _attached_form(program) is None:
@@ -298,19 +313,24 @@ def _observed_projection(
     projection = ownership._FingerprintProjection()
     observed = _RecordingObserved(outer_observed or {})
     projection.observed = observed
-    reads: list[Any] = []
+    reads = references._RegistryReads()
     token = ownership._FINGERPRINT_SCOPE.set(projection)
     reads_token = references._REGISTRY_READS.set(reads)
     try:
         return program._canonical_projection(include_provenance=include_provenance)
     finally:
+        recorded_registries = reads.close()
         references._REGISTRY_READS.reset(reads_token)
         ownership._FINGERPRINT_SCOPE.reset(token)
         projection.active = False
-        touched = {authority: dict.__getitem__(observed, authority)
-                   for authority in observed.touched if dict.__contains__(observed, authority)}
+        try:
+            touched = {authority: dict.__getitem__(observed, authority)
+                       for authority in observed.touched if dict.__contains__(observed, authority)}
+        finally:
+            observed.clear()
+            observed.touched.clear()
         authorities.update(touched)
-        for registry in reads:
+        for registry in recorded_registries:
             registries[id(registry)] = registry
         if outer_observed is not None:
             for authority, fingerprint in touched.items():

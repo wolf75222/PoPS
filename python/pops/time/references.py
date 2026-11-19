@@ -8,6 +8,7 @@ name.
 """
 from __future__ import annotations
 
+import threading
 from contextvars import ContextVar
 from typing import Any
 
@@ -228,16 +229,34 @@ def state_name(state: Any) -> str:
     return state.local_id
 
 
-# The Case registries that canonical_handle consults, recorded only while a Program's canonical
-# form is being built (time/_program/canonical_form.py), so that the form is kept only when they
-# are frozen and is dropped if one is not.
-_REGISTRY_READS: ContextVar[list[Any] | None] = ContextVar("pops_registry_reads", default=None)
+class _RegistryReads:
+    """Collect Case authorities only during the owning projection and on its thread."""
+
+    __slots__ = ("records", "thread", "active")
+
+    def __init__(self) -> None:
+        self.records: dict[int, Any] = {}
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def applies(self) -> bool:
+        return self.active and self.thread == threading.get_ident()
+
+    def close(self) -> tuple[Any, ...]:
+        self.active = False
+        observed = tuple(self.records.values())
+        self.records.clear()
+        return observed
+
+
+_REGISTRY_READS: ContextVar[_RegistryReads | None] = ContextVar(
+    "pops_registry_reads", default=None)
 
 
 def _note_registry(registry: Any) -> None:
     reads = _REGISTRY_READS.get()
-    if reads is not None:
-        reads.append(registry)
+    if reads is not None and reads.applies():
+        reads.records[id(registry)] = registry
 
 
 def canonical_handle(handle: Any) -> Handle:
