@@ -150,6 +150,7 @@ def euler(output, dimension):
         ("magnetic", ("fluid",), euler_state, "rho", 1.5),
         ("magnetic_union", ("ions", "electrons"), euler_state, "rho", 1.5),
         ("fickian", ("heat",), ("scalar",), "scalar", 1.15),
+        ("noop_history", ("tracer",), ("u",), "u", 2.0),
         ("mixed_cfl", ("tracer",), ("u",), "u", 1.5),
         ("mixed_norm", ("tracer",), ("scalar",), "scalar", 0.5),
         ("mixed_norm_wrong", ("tracer",), ("scalar",), "scalar", 1.25),
@@ -158,7 +159,7 @@ def euler(output, dimension):
     ):
         model_name = "mixed_norm" if name == "mixed_norm_wrong" else name
         model = pops.Model(model_name)
-        roles = {field: Scalar()} if model_name in ("fickian", "mixed_norm", "mixed_cfl") else None
+        roles = {field: Scalar()} if model_name in ("fickian", "mixed_norm", "mixed_cfl", "noop_history") else None
         state = model.state("U", components=variables, roles=roles)
         case = pops.Case(model_name)
         handles = tuple(case.block(block, model, states=(state,))[state] for block in blocks)

@@ -9,13 +9,13 @@
 
 namespace pops::test {
 
-template <int Dim>
-std::shared_ptr<runtime::program::AmrProgramContext<Dim>> install_scalar_history_fixture(
-    AmrSystem<Dim>& system, const std::string& path) {
+template <int Dim, std::size_t Size>
+std::shared_ptr<runtime::program::AmrProgramContext<Dim>> install_history_fixture(
+    AmrSystem<Dim>& system, const std::string& path, const FixtureCriterionGroup<Size>& criterion) {
   if (system.uses_runtime_engine())
     throw std::logic_error("scalar history fixture must install before bootstrap");
   constexpr char clock[] = "clock.macro";
-  scalar_history.install<Dim>(system, clock);
+  criterion.template install<Dim>(system, clock);
   system.install_program(path);
   system.mark_bound();
   const auto library = dynlib::open(path);
@@ -40,6 +40,12 @@ std::shared_ptr<runtime::program::AmrProgramContext<Dim>> install_scalar_history
   }
   dynlib::close(library);
   return context;
+}
+
+template <int Dim>
+std::shared_ptr<runtime::program::AmrProgramContext<Dim>> install_scalar_history_fixture(
+    AmrSystem<Dim>& system, const std::string& path) {
+  return install_history_fixture(system, path, scalar_history);
 }
 
 }  // namespace pops::test
