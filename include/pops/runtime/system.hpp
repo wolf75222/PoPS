@@ -888,6 +888,9 @@ class System {
       const runtime::program::AdvanceStepRule* rule = nullptr);
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
+
+  /// Restore the validated fixed-step grid inside the Uniform restart transaction.
+  POPS_EXPORT void restore_advance_segment(runtime::program::AdvanceSegment segment);
   /// The step bound of a cells rule (N8 « dt= as a function of cell », D2): the smallest value over
   /// the valid cells of the evolving block, at the accepted state, of the function of cell that dt=
   /// writes, reduced over the ranks (PF8); +infinity when it is +infinity on every cell. A cell where

@@ -489,6 +489,11 @@ class Simulation:
             schedule.append((0 if output.when is None else output.when.steps,
                              _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
+        temporal = runtime._executor._temporal_restart_state
+        project_fixed = (
+            rule is None and cells is None and dt == self._control.first_dt == temporal.fixed_dt()
+            and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
+        )
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
                 rule[0], math.inf if rule[1] is None else rule[1]), cells)
@@ -502,6 +507,13 @@ class Simulation:
                 MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
+        if project_fixed:
+            temporal.publish_compiled_fixed_run(
+                report, before_time=start, before_step=start_step, time=time,
+                macro_step=runtime.macro_step(),
+                rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
+                failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
+            )
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
         for sample in report.pop("outputs"):
             region = self._outputs[sample["output"]]
