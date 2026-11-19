@@ -10,7 +10,8 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
 from pops.layouts import AMR
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Constant
+from pops.analytic import x, y
+from pops.lib.initial import Analytic, Constant
 from pops.math import Const, ValueExpr, ddt, div
 from pops.mesh import (AxisQuadrature, CartesianGrid, LayoutPlanBuilder, LayoutMappingOperation,
                        LayoutRepresentation, LayoutSynchronization, PhysicalSupportMap,
@@ -32,12 +33,16 @@ def _value_above(subject, threshold):
     return lambda cell: cell.value(ValueExpr(subject)) > threshold
 
 
-def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100.):
+def resolve_amr_maps(directory, *, initial=2., refine=-100., profile=None):
+    """``profile`` maps each block to its own refine threshold and starts every block from
+    ``initial`` plus its position coordinate, so that each layout refines a part of its domain."""
     case = pops.Case("distinct adaptive moment and extension")
     program = pops.Program("one accepted AMR mapping cadence")
     phase = Rectangle("v,x", (-2, 0), (2, 1)).frame(Cartesian2D())
     space = Rectangle("x,hidden", (0, 0), (1, 1)).frame(Cartesian2D())
     threshold = case.param(RuntimeParam("refine", default=refine))
+    thresholds = {name: case.param(RuntimeParam("refine " + name, default=value))
+                  for name, value in (profile or {}).items()}
     states, grids = {}, {}
     for name, frame, support, shape, ratio in (
             ("distribution", phase, PHASE, (4, 8), (2, 2)),
@@ -60,16 +65,20 @@ def resolve_amr_maps(directory, *, initial=2., graph=False, refine=-100.):
         factor = 3 if name == "moment" else 1
         value = program.value(name + " update", factor * temporal.n, at=temporal.next.point)
         program.commit(temporal.next, value)
-        case.initials.add(InitialCondition(state=block[state], value=Constant((initial,)),
+        start = (Constant((initial,)) if profile is None
+                 else Analytic(frame=frame, components=(
+                     initial + (x(frame) if frame is space else y(frame)),)))
+        case.initials.add(InitialCondition(state=block[state], value=start,
                                           projection=ConservativeCellAverage()))
+        limit = case.value(thresholds.get(name, threshold))
         transfer = AMRTransfer()
         transfer.state(block[state], StateTransfer())
         grids[name] = AMR(
             grid=CartesianGrid(frame=frame, cells=shape, periodic=PeriodicAxes(frame.axes)),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(ratio,)),
-            tagging=AMRTagging(rules=(Tag(ValueExpr(block[state]) > case.value(threshold) if graph
-                                      else _value_above(block[state], case.value(threshold))),
-                                  Buffer(cells=0)),
+            tagging=AMRTagging(rules=(Tag(_value_above(block[state], limit)),
+                                  Buffer(cells=0) if profile is None
+                                  else Buffer(cells=0, selection="refine-requests")),
                 hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
                 conflict_policy=ConflictPolicy.REFINE_WINS),
             regrid=AMRRegrid.frozen(), transfer=transfer, execution=AMRExecution.synchronous())
@@ -120,7 +129,7 @@ def test_amr_maps_keep_exact_distinct_hierarchy_authorities(tmp_path):
         assert row.authorities.hierarchy.plan.level_count == 2
         assert row.authorities.transfer.layout_plan_id == row.layout_plan.qualified_id
         with pytest.raises(TypeError):
-            row.authorities.providers["tagger"]["layout_identity"] = "other"
+            row.authorities.providers["clustering"]["layout_identity"] = "other"
     first, second, third = plan.layout_amr_authorities.values()
     swapped = dict(plan.layout_amr_authorities)
     swapped[first.layout_id] = second
@@ -198,33 +207,44 @@ def test_native_amr_moment_extension_and_restart(tmp_path):
     assert set(instance._executor.mapping_report().values()) == {2}
 
 
+MAPS = ("distribution", "moment", "extension")
+# Review A1 of lot 3b: one threshold per layout inside its range, from a non-uniform state.
+PROFILE = {"distribution": 1.25, "moment": 1.5, "extension": 1.75}
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 @pytest.mark.parametrize("refine", (-100., 100.))
-def test_native_amr_maps_regions_match_the_tag_graph(tmp_path, refine):
+def test_native_amr_maps_regions_match_the_recorded_tag_graph(tmp_path, refine):
     """Each layout's region criterion is generated into its own Program slice (lot 3b): three
-    hierarchies refine, or stay coarse, exactly as the tag graph decides, and evolve the same."""
-    import numpy as np
-    from tests.python.support.native_execution_context import artifact_execution_context
-    from pops.mesh._amr import ResolvedRefinementCriterion, ResolvedTaggingGraph
+    hierarchies refine, or stay coarse, exactly as the tag graph decided, recorded before the VM
+    was removed (lot 3c-2b)."""
+    from pops.mesh._amr import ResolvedRefinementCriterion
+    from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
 
-    images, tagging = {}, {}
-    for graph in (True, False):
-        plan = resolve_amr_maps(tmp_path / ("graph" if graph else "regions"), graph=graph,
-                                refine=refine)
-        tagging[graph] = {type(row.authorities.bootstrap.tagging)
-                          for row in plan.layout_amr_authorities.values()}
-        artifact = pops.compile(plan)
-        instance = pops.bind(
-            artifact, resources={"execution_context": artifact_execution_context(artifact)})
-        before = _hierarchy_image(instance)
-        pops.run(instance, t_end=0.01, max_steps=1)
-        images[graph] = (before, _hierarchy_image(instance))
-    assert tagging == {True: {ResolvedTaggingGraph}, False: {ResolvedRefinementCriterion}}
-    for graph_image, region_image in zip(images[True], images[False], strict=True):
-        assert graph_image.keys() == region_image.keys()
-        for key, value in graph_image.items():
-            np.testing.assert_array_equal(region_image[key], value)
+    plan = resolve_amr_maps(tmp_path, refine=refine)
+    assert {type(row.authorities.bootstrap.tagging)
+                     for row in plan.layout_amr_authorities.values()} == {
+        ResolvedRefinementCriterion}
+    observations, margins, _ = layouts_trajectory(plan, MAPS, dict.fromkeys(MAPS, refine))
+    assert_observations("physical_maps/refine=%g" % refine, observations, margins)
+    levels = {row["levels"] for observation in observations for row in observation.values()}
+    # Below every value, the threshold refines every hierarchy; above, none keeps a fine level.
+    assert levels == ({2} if refine < 0 else {1})
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_native_amr_internal_maps_refine_as_the_recorded_tag_graph(tmp_path):
+    """The three adaptive layouts of the internal maps refine as the tag graph decided (review R1
+    of lot 3c part 1): its boxes were recorded before the VM was removed."""
+    from tests.python.integration.runtime.test_interstage_physical_maps import resolve_interstage_maps
+    from tests.python.support.amr_graph_oracles import assert_observations, layouts_trajectory
+
+    stages = ("population", "integral", "extended")
+    plan = resolve_interstage_maps(tmp_path, adaptive=True)
+    observations, margins, _ = layouts_trajectory(plan, stages, dict.fromkeys(stages, -100.))
+    assert_observations("interstage/adaptive", observations, margins)
 
 
 @pytest.mark.compiler

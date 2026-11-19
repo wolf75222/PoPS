@@ -24,24 +24,46 @@ from typing import Any
 OPERATION = "moving_total_rate"
 
 
-def _member_source(value: Any) -> Any:
-    """The members' rate operation behind ``value``: itself, or the source that a stage value
-    names (``program.value(name, rate(members), at=stage)``)."""
+def _same_stage(left: Any, right: Any) -> bool:
+    from pops.time._evaluation_point import evaluation_time_point
+    from pops.time.points import StagePoint
+
+    if type(left.point) is StagePoint and type(right.point) is StagePoint and left.point != right.point:
+        return False
+    try:
+        a, b = evaluation_time_point(left), evaluation_time_point(right)
+    except ValueError:
+        return False
+    return (a.clock, a.step, a.offset.to_python()) == (b.clock, b.step, b.offset.to_python())
+
+
+def member_source(value: Any) -> Any:
+    """Follow only a coefficient-one materialization at the exact evaluation point."""
     while value.op == "linear_combine" and len(value.inputs) == 1:
-        value = value.inputs[0]
+        (source,) = value.inputs
+        coeffs = value.attrs.get("coeffs", ())
+        if (len(coeffs) != 1 or dict(coeffs[0]) != {0: 1} or value.block != source.block
+                or not _same_stage(value, source)):
+            break
+        value = source
     return value
 
 
 def moving_total_rate(program: Any, name: Any, state: Any, members: Any, member_rate: Any, *,
-                      rate: Any) -> Any:
+                      rate: Any, members_owner: Any = None) -> Any:
     from pops.time._program.value_validation import rate_space_for, require_owned
 
     require_owned(program, state, "moving total rate state")
     require_owned(program, members, "moving total rate members")
     require_owned(program, member_rate, "moving total rate of the members")
+    from pops.time.references import canonical_handle
+
     validate_inputs(state, members, member_rate, rate)
+    owner = canonical_handle(members.state_ref)
+    if members_owner is not None and owner != canonical_handle(members_owner):
+        raise ValueError("moving transport differs from the declared owner of the moving members")
     return program._new("rhs", OPERATION, (state, members, member_rate),
-                        {"operator_handle": rate, "members_block": members.block},
+                        {"operator_handle": rate, "members_block": members.block, "members_state": owner},
                         name, state.block, space=rate_space_for(state.space), point=state.point,
                         field_context=state.field_context)
 
@@ -59,9 +81,9 @@ def validate_inputs(state: Any, members: Any, member_rate: Any, rate: Any) -> No
         raise ValueError("a moving total rate reads the members of another block")
     if members.point != state.point:
         raise ValueError("a moving total rate reads the totals and the members of one stage")
-    source = _member_source(member_rate)
+    source = member_source(member_rate)
     if (source.op != "source" or source.block != members.block or len(source.inputs) != 1
-            or source.inputs[0].id != members.id
+            or not _same_stage(member_rate, members) or source.inputs[0] is not members
             or source.attrs.get("source") != MOTION_SOURCE):
         raise ValueError("a moving total rate reads the rate of its members at the same stage, "
                          "the value of MovingMembers.rate(members)")
@@ -78,10 +100,13 @@ def validate_inputs(state: Any, members: Any, member_rate: Any, rate: Any) -> No
 def validate_moving_total_rate(value: Any) -> None:
     if value.op != OPERATION or len(value.inputs) != 3:
         raise ValueError("moving total rate inputs changed")
+    from pops.time.references import canonical_handle
+
     state, members, member_rate = value.inputs
-    if value.block != state.block or value.attrs.get("members_block") != members.block:
+    if (value.block != state.block or value.attrs.get("members_block") != members.block
+            or value.attrs.get("members_state") != canonical_handle(members.state_ref)):
         raise ValueError("moving total rate block authority changed")
     validate_inputs(state, members, member_rate, value.attrs.get("operator_handle"))
 
 
-__all__ = ["OPERATION", "moving_total_rate", "validate_moving_total_rate"]
+__all__ = ["OPERATION", "member_source", "moving_total_rate", "validate_moving_total_rate"]

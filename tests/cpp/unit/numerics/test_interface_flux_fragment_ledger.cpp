@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <cstdint>
 #include <set>
 
 #include <pops/numerics/time/amr/reflux/amr_interface_flux_ledger.hpp>
@@ -387,6 +389,32 @@ TEST(test_interface_flux_fragment_ledger, exact_weight_multiword_division_and_gc
     }
 }
 
+TEST(test_interface_flux_fragment_ledger, exact_weight_product_keeps_canonical_wire_and_budget) {
+  using pops::ExactWeight;
+  const auto expect = [](const ExactWeight& actual, const ExactWeight& reduced, double rounded) {
+    EXPECT_EQ(actual.encode(), reduced.encode());
+    EXPECT_EQ(std::bit_cast<std::uint64_t>(actual.value()), std::bit_cast<std::uint64_t>(rounded));
+  };
+  // Both cross factors cancel, while the result still has a non-dyadic denominator.
+  expect(ExactWeight(6, 35) * ExactWeight(-14, 15), ExactWeight(-4, 25), -4.0 / 25.0);
+  expect(ExactWeight(6, 35) / ExactWeight(-15, 14), ExactWeight(-4, 25), -4.0 / 25.0);
+  expect(ExactWeight(1, 2) * ExactWeight::from_double(0x1.999999999999ap-13),
+         ExactWeight::from_double(0x1.999999999999ap-14), 0x1.999999999999ap-14);
+  expect(ExactWeight::from_double(-0.0) * ExactWeight(-1, 3), ExactWeight(0), 0.0);
+  expect(ExactWeight(9007199254740995LL) * ExactWeight(2), ExactWeight(18014398509481990LL),
+         18014398509481992.0);
+  const double largest = std::numeric_limits<double>::max();
+  const auto overflow = ExactWeight::from_double(largest) * ExactWeight(2);
+  const std::string exact_overflow = "0x1fffffffffffff" + std::string(243, '0');
+  expect(overflow, ExactWeight::from_hex(exact_overflow, "0x1"),
+         std::numeric_limits<double>::infinity());
+
+  // Each product uses two limbs. Both final fields fit only at 16 bytes.
+  const auto a = ExactWeight(65537, 65539, 16);
+  const auto b = ExactWeight(65543, 65551, 16);
+  EXPECT_EQ((a * b).encode(), ExactWeight(4295491591LL, 4296146989LL).encode());
+  EXPECT_THROW(a.with_budget(12) * b.with_budget(12), std::length_error);
+}
 TEST(test_interface_flux_fragment_ledger, exact_weight_budget_failure_keeps_source_and_ledger) {
   using pops::ExactWeight;
   const auto small = ExactWeight::from_double(1e-6, 512);

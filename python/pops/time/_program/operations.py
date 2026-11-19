@@ -24,7 +24,7 @@ from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _authoring_source_location, _resolve_handle,
     _to_affine,
 )
-from pops.provenance import ProvenanceRecord, source_span
+from pops.provenance import ProvenanceRecord, SourceSpan, source_span
 from pops._ir.data_model import field_role
 
 if TYPE_CHECKING:
@@ -85,7 +85,8 @@ class _ProgramCore(
     # --- node construction ---
     def _new(self, vtype: Any, op: Any, inputs: Any, attrs: Any, name: Any, block: Any, *,
              space: Any = None, field_context: Any = None, state_ref: Any = None,
-             point: Any = None, inherit_state_ref: bool = True) -> Any:
+             point: Any = None, inherit_state_ref: bool = True,
+             authoring_origin: SourceSpan | None = None) -> Any:
         region = self._current_region()
         validate_input_regions(self, inputs, region, "IR op %r" % op)
         value_inputs = [i for i in inputs if isinstance(i, ProgramValue)]
@@ -108,17 +109,20 @@ class _ProgramCore(
         source_location = _authoring_source_location() if self._capture_source else None
         context = self._provenance_context
         if context is None:
-            primary = source_span()
+            primary = source_span() if authoring_origin is None else authoring_origin
             provenance = ProvenanceRecord(
                 primary=primary, owner=self.owner_path,
                 authoring_api="pops.time.Program.%s" % op,
                 origins=(primary,), phase="authoring", transformation="direct",
             )
         else:
+            origins = (context["caller"], context["factory"])
+            if authoring_origin is not None:
+                origins = (authoring_origin, *origins)
             provenance = ProvenanceRecord(
-                primary=context["caller"], owner=self.owner_path,
+                primary=origins[0], owner=self.owner_path,
                 authoring_api=context["authoring_api"],
-                origins=(context["caller"], context["factory"]),
+                origins=origins,
                 phase="authoring", transformation="factory_expand",
             )
         if state_ref is None and inherit_state_ref:

@@ -66,7 +66,7 @@ def test_public_synchronous_amr_layout_retains_all_principal_blocks(n):
         grid=uniform.mesh,
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(blocks[0][states[0]]) > case.value(threshold)),
+            rules=(Tag(lambda cell: cell.value(ValueExpr(blocks[0][states[0]])) > case.value(threshold)),
                    Buffer(cells=1, selection="refine-requests")),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS),

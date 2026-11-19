@@ -19,6 +19,7 @@
 namespace {
 
 using NativeStepAttemptRejected = pops::runtime::program::StepAttemptRejected;
+using NativeStepTerminalFailure = pops::runtime::program::StepTerminalFailure;
 
 // pybind11's ordinary register_exception translator preserves only what().  Attempt rejection is a
 // control protocol, not an opaque diagnostic: keep its C++ status and retry disposition structured
@@ -26,8 +27,10 @@ using NativeStepAttemptRejected = pops::runtime::program::StepAttemptRejected;
 // register_exception_impl lifetime model and avoids a process-global borrowed PyObject pointer.
 PYBIND11_CONSTINIT py::gil_safe_call_once_and_store<py::exception<NativeStepAttemptRejected>>
     step_attempt_rejected_type;
+PYBIND11_CONSTINIT py::gil_safe_call_once_and_store<py::exception<NativeStepTerminalFailure>>
+    step_terminal_failure_type;
 
-void translate_step_attempt_rejected(std::exception_ptr error) {
+void translate_step_failure(std::exception_ptr error) {
   if (!error)
     return;
   try {
@@ -44,23 +47,35 @@ void translate_step_attempt_rejected(std::exception_ptr error) {
     instance.attr("typed_failure_schema") = py::str(rejected.typed_failure_schema());
     instance.attr("typed_failure_payload") = py::bytes(rejected.typed_failure_payload());
     PyErr_SetObject(error_type.ptr(), instance.ptr());
+  } catch (const NativeStepTerminalFailure& failure) {
+    auto& error_type = step_terminal_failure_type.get_stored();
+    py::object instance = error_type.attr("__call__")(py::str(failure.what()));
+    instance.attr("typed_failure_schema") = py::str(failure.typed_failure_schema());
+    instance.attr("typed_failure_payload") = py::bytes(failure.typed_failure_payload());
+    PyErr_SetObject(error_type.ptr(), instance.ptr());
   }
 }
 
-void register_step_attempt_rejected(py::module_& module) {
+void register_step_failures(py::module_& module) {
   step_attempt_rejected_type
       .call_once_and_store_result([&] {
         return py::exception<NativeStepAttemptRejected>(module, "StepAttemptRejected",
                                                         PyExc_RuntimeError);
       })
       .get_stored();
-  py::register_local_exception_translator(&translate_step_attempt_rejected);
+  step_terminal_failure_type
+      .call_once_and_store_result([&] {
+        return py::exception<NativeStepTerminalFailure>(module, "StepTerminalFailure",
+                                                        PyExc_RuntimeError);
+      })
+      .get_stored();
+  py::register_local_exception_translator(&translate_step_failure);
 }
 
 }  // namespace
 
 PYBIND11_MODULE(_pops, m) {
-  register_step_attempt_rejected(m);
+  register_step_failures(m);
   init_core(m);
   init_identity(m);
   init_component_loader(m);

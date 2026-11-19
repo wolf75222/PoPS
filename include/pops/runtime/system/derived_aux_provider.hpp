@@ -270,6 +270,7 @@ template <int Dim>
 struct AuxiliaryConsumerProviderPlan {
   std::string consumer_qid;
   std::vector<AuxiliaryConsumerValue<Dim>> values;
+  std::string checkpoint_role{};
 
   void validate() const {
     if (consumer_qid.empty())
@@ -643,20 +644,34 @@ class PreparedAuxiliaryProvider final {
  public:
   using launcher_type = PreparedProvider<void(const AuxiliaryKernelLaunchContext<Dim>&)>;
 
+  // Optional provenance emitted by the authenticated producer of this registration.
+  struct CheckpointRole {
+    std::string identity;
+    std::vector<std::string> output_owners;
+    std::string launcher_parameters;
+  };
+
   PreparedAuxiliaryProvider(std::string identity, AuxiliaryProviderKind kind,
                             AuxiliaryEvaluationPolicy policy,
                             std::vector<AuxiliaryOutput<Dim>> outputs,
                             std::vector<AuxiliaryDependency<Dim>> dependencies,
                             std::optional<launcher_type> launcher = std::nullopt,
-                            AuxiliaryPointReads point_reads = {})
+                            AuxiliaryPointReads point_reads = {},
+                            std::optional<CheckpointRole> checkpoint_role = std::nullopt)
       : identity_(std::move(identity)),
         kind_(kind),
         policy_(policy),
         outputs_(std::move(outputs)),
         dependencies_(std::move(dependencies)),
         launcher_(std::move(launcher)),
-        point_reads_(point_reads) {
+        point_reads_(point_reads),
+        checkpoint_role_(std::move(checkpoint_role)) {
     validate_();
+    if (checkpoint_role_ &&
+        (checkpoint_role_->identity.empty() ||
+         checkpoint_role_->output_owners.size() != outputs_.size() ||
+         checkpoint_role_->launcher_parameters.empty() == launcher_.has_value()))
+      throw std::invalid_argument("auxiliary provider checkpoint role is incomplete");
     ExactContractBuilder exact;
     exact.text("pops.prepared-auxiliary-provider")
         .scalar(std::uint32_t{point_reads_.fields == AuxiliaryPointReads::all ? 1U : 2U})
@@ -693,6 +708,30 @@ class PreparedAuxiliaryProvider final {
     return collective_contract_;
   }
 
+  [[nodiscard]] const std::optional<CheckpointRole>& checkpoint_role() const noexcept {
+    return checkpoint_role_;
+  }
+
+  // Same typed contract writer as the live provider. The view is used only at the
+  // checkpoint boundary, with dependencies projected through the installed output keys.
+  template <typename ProjectKey>
+  [[nodiscard]] PreparedAuxiliaryProvider checkpoint_view(ProjectKey project) const {
+    const auto& role = checkpoint_role_.value();
+    auto outputs = outputs_;
+    for (auto& output : outputs)
+      output.key = project(output.key);
+    auto dependencies = dependencies_;
+    for (auto& dependency : dependencies)
+      dependency.key = project(dependency.key);
+    std::optional<launcher_type> launcher;
+    if (launcher_)
+      launcher = launcher_type::trusted_extension(
+          {"pops.auxiliary-checkpoint-launcher", launcher_->implementation_version()},
+          role.launcher_parameters, [live = *launcher_](const auto& context) { live(context); });
+    return {role.identity,       kind_,       policy_, std::move(outputs), std::move(dependencies),
+            std::move(launcher), point_reads_};
+  }
+
   void launch(const AuxiliaryKernelLaunchContext<Dim>& context) const {
     if (!launcher_)
       throw std::logic_error("auxiliary provider has no native launcher");
@@ -727,6 +766,7 @@ class PreparedAuxiliaryProvider final {
   std::vector<AuxiliaryDependency<Dim>> dependencies_;
   std::optional<launcher_type> launcher_;
   AuxiliaryPointReads point_reads_;
+  std::optional<CheckpointRole> checkpoint_role_;
   std::string collective_contract_;
 };
 

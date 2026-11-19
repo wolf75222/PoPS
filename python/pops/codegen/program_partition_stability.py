@@ -202,14 +202,18 @@ def _retain_convex_stage_values(terms):
     for state in sorted(missing.values(), key=lambda node: node.id, reverse=True):
         if state.op != "linear_combine":
             continue
+        # A local source spends no spatial budget, so a source of negative weight (``- S``, N15
+        # FaceFlux/CellRate lot FC-1) neither lowers the budget of its stage nor bars it.
         beta = sum(weight.get(1, Fraction()) for node, weight in table.values()
-                   if _is_rate(node) and _rate_state(node).id == state.id)
+                   if _is_rate(node) and _rate_state(node).id == state.id
+                   and not (_is_local_source(node) and weight.get(1, Fraction()) < 0))
         if beta <= 0:
             continue
         expansion = _affine_terms(state)
         if (not expansion or
                 any(set(weight) != ({1} if _is_rate(node) else {0}) or
-                    next(iter(weight.values())) <= 0 or
+                    (next(iter(weight.values())) <= 0
+                     and not (_is_local_source(node) and next(iter(weight.values())) < 0)) or
                     (not _is_rate(node) and node.vtype != "state")
                     for node, weight in expansion)):
             continue
@@ -265,7 +269,11 @@ def partition_stability_groups(value, *, include_transport=False):
         raise ValueError(_DIAGNOSTIC)
     if sum(weight[0] for _, weight in states) != 1:
         raise ValueError(_DIAGNOSTIC)
-    if any(set(weight) != {1} or weight[1] < 0 for _, weight in rates):
+    # A local source keeps its own obligation and spends no spatial budget (below), so its sign
+    # does not enter the certificate: ``- S`` of a named source is a source of weight -1 (N15
+    # FaceFlux/CellRate lot FC-1).
+    if any(set(weight) != {1} or (weight[1] < 0 and not _is_local_source(node))
+           for node, weight in rates):
         raise ValueError(_DIAGNOSTIC)
     budgets = {node.id: weight[0] for node, weight in states}
     groups = {}
@@ -284,7 +292,7 @@ def partition_stability_groups(value, *, include_transport=False):
     return tuple((state, alpha, tuple(rows)) for state, alpha, rows in groups.values())
 
 
-def emit_transport_frequency(value, var, lines, *, model, block_index, target="system"):
+def emit_transport_frequency(value, var, lines, *, model, block_index, target="system", state=None):
     """Capture the selected envelope while this exact rate's inputs/providers are current."""
     if not has_independent_diffusion_transport(model):
         return
@@ -295,8 +303,10 @@ def emit_transport_frequency(value, var, lines, *, model, block_index, target="s
     frequency = "transport_frequency_%d" % value.id
     trace = ("," + (var.get(("rhs_input_trace", value.id)) or "nullptr")
              if target == "amr_system" else "")
+    if state is None:
+        state = var[value.inputs[0].id]
     lines.append("const pops::Real %s = ctx.evaluated_transport_frequency(%d,%s,%d%s);"
-                 % (frequency, block_index, var[value.inputs[0].id], value.id, trace))
+                 % (frequency, block_index, state, value.id, trace))
     var[("partition_frequency", value.id)] = frequency
 
 
@@ -407,11 +417,15 @@ def _face_step_frequency_rejection(frequency, alpha):
     rejected = "pops_face_step_rejected"
     return [
         "} catch (const pops::runtime::program::StepAttemptRejected& %s) {" % rejected,
-        "  char pops_face_step_text[64];",
-        "  std::snprintf(pops_face_step_text, sizeof(pops_face_step_text), \"%%a\", "
-        "static_cast<double>(%s / %s));" % (frequency, alpha),
+        "  char pops_face_step_text[64] = {'0', 'x'};",
+        "  const auto pops_face_step_encoding = std::to_chars("
+        "pops_face_step_text + 2, pops_face_step_text + sizeof(pops_face_step_text),",
+        "      static_cast<double>(%s / %s), std::chars_format::hex);" % (frequency, alpha),
+        "  if (pops_face_step_encoding.ec != std::errc{})",
+        "    throw std::runtime_error(\"cannot encode the face step frequency\");",
         "  throw pops::runtime::program::StepAttemptRejected(%s.status(), %s.disposition(), "
-        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", std::string(pops_face_step_text));"
+        "%s.reason_code(), %s.phase(), %s.detail(), \"%s\", "
+        "std::string(pops_face_step_text, pops_face_step_encoding.ptr));"
         % (rejected, rejected, rejected, rejected, rejected, FACE_STEP_FREQUENCY_SCHEMA),
         "}",
     ]

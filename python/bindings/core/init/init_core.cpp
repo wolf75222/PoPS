@@ -478,6 +478,8 @@ void init_core(py::module_& m) {
           },
           py::arg("callback"),
           "Run one strictly local callback; return only after every rank prepared successfully.")
+      .def("_agree_program_bind",
+           &pops::python_collective::agree_program_bind<pops::WorldCommunicator>)
       .def(
           "agree_control_bytes",
           [](const pops::WorldCommunicator& world, py::handle schema, py::handle payload) {

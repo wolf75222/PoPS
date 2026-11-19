@@ -1151,24 +1151,6 @@ typedef struct PopsTaggerApiV2 {{
   PopsTagBatchFnV2 tag_batch;
 }} PopsTaggerApiV2;
 
-typedef struct PopsClusteringRequestV1 {{
-  uint32_t struct_size;
-  PopsConstByteViewV1 tags;
-  const int64_t* extents;
-  int32_t dimension;
-  // `boxes` is box-major [lo_0..lo_(d-1), hi_0..hi_(d-1)]. Bounds are
-  // inclusive and relative to the supplied tag region.
-  int64_t* boxes;
-  size_t box_capacity;
-  size_t* box_count;
-  PopsExecutionContextV1 execution;
-}} PopsClusteringRequestV1;
-typedef int32_t (*PopsClusterFnV1)(void*, const PopsClusteringRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsClusteringApiV1 {{
-  PopsComponentTableHeaderV1 header;
-  PopsClusterFnV1 cluster;
-}} PopsClusteringApiV1;
-
 typedef enum PopsTransferOperationV1 {{
   POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 = 1,
   POPS_TRANSFER_OPERATION_VELOCITY_MOMENT_V1 = 2,

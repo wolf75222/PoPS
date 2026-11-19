@@ -131,8 +131,10 @@ class _AmrSystemIO(_AmrSystem):
         selected_hierarchy_mode = require_restart_hierarchy_mode(
             hierarchy_mode, where="AMR restart"
         )
-        data = decode_checkpoint_bytes(payload, restart_checkpoint_resource_budget(
-            self, workspace_byte_capacity, bit_identical=bit_identical))
+        data = decode_checkpoint_bytes(
+            payload, restart_checkpoint_resource_budget(
+                self, workspace_byte_capacity, bit_identical=bit_identical),
+            allow_historical_amr_refusal=True)
         identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
         require_exact_payload_version(
             data,

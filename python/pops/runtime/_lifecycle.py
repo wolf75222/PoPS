@@ -185,6 +185,16 @@ class _LifecycleMixin(_System):
             snapshot.bind_identity,
         )
 
+    def _checkpoint_program_id(self) -> Any:
+        """Provide the compiled ``program_id`` that authenticates checkpoints (N11 lot 2b)."""
+        snapshot = getattr(self, "_bound_snapshot", None)
+        if snapshot is None:
+            raise RuntimeError("checkpoint requires a completed pops.bind transaction")
+        program_id = getattr(snapshot, "program_id", None)
+        if program_id is None:
+            raise RuntimeError("checkpoint requires the compiled program_id of the bound artifact")
+        return program_id
+
     def _restore_checkpoint_run_identity(self, identity: Any) -> None:
         """Publish an authenticated source run, or None for restored bound_initial origin."""
         from pops.identity import Identity

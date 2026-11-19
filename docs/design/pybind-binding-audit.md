@@ -67,7 +67,7 @@ contract and never claim template genericity. Both yield authenticated component
 the same installation registry. Raw `.so` paths, historical brick JSON and `compile_library` are not
 accepted.
 
-An external conformer can supply a flux, boundary provider, tagger, clustering policy, transfer,
+An external conformer can supply a flux, boundary provider, tagger, transfer,
 reflux operation, solver or writer without editing a central dispatcher. Adding a builtin may add a
 catalog row and generated template implementation; adding an external component changes no PoPS
 source file.

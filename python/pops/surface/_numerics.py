@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._expr import Call, walk
-from ._model import Balance, DiffusiveFlux, Flux, Quantity, Term
+from ._model import Balance, DiffusiveFlux, Flux, Quantity, Source, Term
 from ._refusal import (
     CoverageNotExact, LevelMismatch, NotYetElaborated, Site, SpellingRefusal, user_site,
 )
@@ -33,7 +33,16 @@ class CellAverage:
     def __init__(self, *, quadrature: Any = None) -> None:
         if quadrature is not None:
             raise NotYetElaborated("pops.CellAverage(quadrature=...) (D3)",
-                                   "a later lot of N15 with the quadratures of G03")
+                                   "CellAverage(quadrature=...) of pops.lib.representations "
+                                   "(N16 lot 1), which the surface elaborates with its initial "
+                                   "value bound as data")
+
+    def definition(self, rank: int) -> Any:
+        """The definition of contract @2 that this spelling elaborates, the one of
+        ``CellAverage()`` of ``pops.lib.representations`` (N16 5.5, SU-T3)."""
+        from pops.representations.definition import cell_average
+
+        return cell_average(rank)
 
     def __repr__(self) -> str:
         return "pops.CellAverage()"
@@ -84,6 +93,15 @@ class TermView:
         from ._model import Parameter
 
         return [node.name for node in walk(value) if isinstance(node, Parameter)]
+
+    def sign(self, value: Any) -> int | None:
+        """1, -1, 0 or None: the sign that the declarations of the model derive for a value,
+        whatever the bind gives its parameters (R2, K7): a parameter has the sign of its admissible
+        set, ``pops.Positive()`` the only one elaborated, and a parameter with none has no sign
+        (§3.5 of the N9 lot « La référence sous les solves de relation »)."""
+        from ._model import _sign
+
+        return _sign(value)
 
     def number(self, value: Any) -> Any:
         """The number of a value written with numbers, mathematical constants and model
@@ -178,13 +196,33 @@ class Numerics:
         self.site = user_site(2)
         self.boundary = self._boundary(boundary)
         self.represent = self._table(represent, "represent", Quantity)
-        for _, representation in self.represent:
-            if not isinstance(representation, CellAverage):
-                raise NotYetElaborated("the representation %r" % (representation,),
-                                       "a later lot of N15 with the representations of G03")
-        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux))
+        for quantity, representation in self.represent:
+            self._check_representation(quantity, representation)
+        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux, Source))
         for key, scheme in self.schemes:
             self._check_scheme(key, scheme)
+
+    def _check_representation(self, quantity: Quantity, representation: Any) -> None:
+        """A word of ``pops.lib.representations`` or a ``@pops.representation`` of the case runs
+        here, at the rank of the key (SU5, N16 3.1). This lot elaborates the definition of
+        ``CellAverage()`` on the route of ``pops.CellAverage()`` and refuses every other with the lot
+        that elaborates it (N16 5.5, the transitional table)."""
+        if isinstance(representation, CellAverage):
+            return
+        from ._representation import (
+            Coefficients, Dual, RepresentationValue, SurfaceRepresentation, check,
+        )
+
+        if isinstance(representation, (RepresentationValue, SurfaceRepresentation)):
+            check(representation, quantity, self.site)
+            return
+        if isinstance(representation, (Coefficients, Dual)):
+            raise TypeError("represent={%s: %r}: pops.Coefficients and pops.Dual are what a "
+                            "@pops.representation returns; write the representation called with "
+                            "its options" % (quantity, representation))
+        raise TypeError("represent={%s: ...} takes a representation called with its options, "
+                        "such as CellAverage() of pops.lib.representations or a "
+                        "@pops.representation of the case, got %r" % (quantity, representation))
 
     def _boundary(self, policy: Any) -> Any:
         """``boundary=ghosts()``: a boundary policy, a scheme over ``face`` that returns
@@ -285,6 +323,15 @@ class Numerics:
             if key is quantity:
                 return representation
         return None
+
+    def definition_of(self, quantity: Quantity) -> Any:
+        """The definition of contract @2 of the representation of ``quantity``, at the rank of its
+        support: the one of ``CellAverage()`` when none is stated (N16 5.5)."""
+        from pops.representations.definition import cell_average
+
+        representation = self.representation_of(quantity)
+        rank = quantity.support.rank
+        return cell_average(rank) if representation is None else representation.definition(rank)
 
     def of(self, subject: Any) -> _Realization:
         """``numerics.of(x)``: the realization of a balance or of a term."""

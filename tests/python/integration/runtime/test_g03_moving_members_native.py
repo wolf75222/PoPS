@@ -142,3 +142,219 @@ def test_a_rejected_attempt_restores_the_members(
         assert before.tobytes() == configuration.initial_members().tobytes()
         assert runtime.time() == 0.0 and runtime.macro_step() == 0
     record_property("failure", message)
+
+
+def _inverting_trial(*, transient, split):
+    import pops
+    from pops.analytic import coordinate, time
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, GeometryEvolution
+    from pops.mesh.layout_plan import LayoutPlanBuilder
+    from pops.mesh.moving_configuration import MovingConfiguration
+    from pops.time import FixedDt
+
+    case = pops.Case("moving_trial")
+    program = pops.Program("moving_trial")
+    frame = CartesianDomain("moving_trial", (0.0,), (1.0,)).frame(Cartesian1D())
+    x, t = coordinate(frame, frame.axes[0]), time(program.clock)
+    dt = 0.25
+    values, layouts = {}, {}
+    names = ("a_valid", "z_inverting") if split else ("z_inverting",)
+    for name in names:
+        invert = name == "z_inverting"
+        layout = Uniform(CartesianGrid(frame=frame, cells=(4 if invert else 8,)))
+        displacement = t - 4*t*t if invert and transient else t
+        law = x + (8 if invert else 1)*displacement*x*(1 - x)
+        configuration = MovingConfiguration(layout, node_rate=GeometryEvolution((law,)))
+        members = configuration.members(case, name)
+        temporal = program.state(members.block[members.state])
+        k0 = members.rate(temporal.n)
+        if transient:
+            stage = program.stage(name + "_heun", c=1)
+            u1 = program.value(name + "_stage", temporal.n + program.dt*k0, at=stage)
+            k1 = members.rate(u1)
+            update = temporal.n + program.dt*(0.5*k0 + 0.5*k1)
+        else:
+            update = temporal.n + program.dt*k0
+        program.commit(temporal.next, program.value(name + "_candidate", update,
+                                                    at=temporal.next.point))
+        values.update(members.initial_values())
+        layouts[name] = layout
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    validated = pops.validate(case)
+    if not split:
+        return pops.resolve(validated, layout=layout), values, dt, names
+    subjects = validated.layout_subjects()
+    builder = LayoutPlanBuilder(validated.owner_path.canonical())
+    providers = {builder.layout(name, descriptor): descriptor for name, descriptor in layouts.items()}
+    by_name = {handle.local_id: handle for handle in providers}
+    for block in subjects.blocks:
+        builder.assign_block(block, by_name[block.local_id])
+    for state in subjects.states:
+        builder.assign_state(state, by_name[state.block_ref.local_id])
+    plan = builder.resolve(**subjects.to_dict())
+    return pops.resolve(validated, layout=plan, layout_providers=providers), values, dt, names
+
+
+@pytest.mark.parametrize("transient,split", [(True, False), (False, False), (True, True)])
+def test_moving_geometry_rejects_inversion_before_stage_use_and_publication(
+        isolated_native_cache, native_cxx, kokkos_root, monkeypatch, transient, split):
+    import pops
+    from pops._bootstrap import StepAttemptRejected
+    from tests.python.support.native_execution_context import artifact_execution_context
+    from tests.python.support.public_native_profile import (
+        compile_profile_plan_once, native_profile, rank_and_size,
+    )
+
+    del isolated_native_cache, native_cxx, kokkos_root
+    scope = "moving geometric trial %s/%s" % (transient, split)
+    _, world = native_profile(dimension=1, scope=scope)
+    plan, values, dt, names = collective_call(
+        world, lambda: _inverting_trial(transient=transient, split=split))
+    artifact = compile_profile_plan_once(world, plan, route=scope, compile_artifact=pops.compile)
+
+    def bind(initial):
+        return pops.bind(artifact, initial_values=initial,
+                         resources={"execution_context": artifact_execution_context(artifact)})
+
+    if not transient:
+        # A single bad rank must refuse the bind on every participant, before installing state.
+        rank, _ = rank_and_size(world)
+        for component, invalid in ((0, float("nan")), (1, float("inf")), (2, 0.0), (2, -0.125)):
+            bad = {handle: array.copy() for handle, array in values.items()}
+            if rank == 0:
+                (array,) = bad.values()
+                array[component, 0] = invalid
+
+            def reject_bind():
+                with pytest.raises(ValueError, match="NotAdmissible"):
+                    bind(bad)
+            collective_call(world, reject_bind)
+
+    runtime = collective_call(world, lambda: bind(values))
+    pre_rollback_times = []
+    if split:
+        from dataclasses import replace
+
+        executor = runtime._executor
+        restore = executor._restore_rejected_native_attempt
+        expected_guards = tuple(
+            guard.to_data() for row in artifact.layout_programs
+            for guard in row.program.program.transaction_plan().guards
+        )
+        with collective_check(world):
+            assert len(expected_guards) == 6
+            assert runtime.program_report().step_transaction["guards"] == list(expected_guards)
+            assert runtime.bound_snapshot.to_dict()["step_transaction"]["guards"] == list(expected_guards)
+
+        child = executor._engines[executor._block_layouts[names[0]]]
+        transaction = child._step_transaction_plan
+        with monkeypatch.context() as patched:
+            renamed = replace(transaction.guards[0], name="other guard")
+            patched.setattr(child, "_step_transaction_plan",
+                           replace(transaction, guards=(renamed, *transaction.guards[1:])))
+            with pytest.raises(RuntimeError, match="child transaction report differs"):
+                runtime.program_report()
+
+        def check_children_at_rejection(*args):
+            pre_rollback_times.extend(executor._engines[executor._block_layouts[name]].time()
+                                      for name in names)
+            return restore(*args)
+
+        monkeypatch.setattr(executor, "_restore_rejected_native_attempt", check_children_at_rejection)
+
+    def states():
+        return tuple(np.asarray(runtime.state_global(name)).tobytes() for name in names)
+
+    before = collective_call(world, states)
+
+    def run():
+        with pytest.raises(StepAttemptRejected) as failed:
+            pops.run(runtime, t_end=dt, max_steps=1, console=False)
+        return failed.value.phase, str(failed.value)
+
+    phase, message = collective_call(world, run)
+    after = collective_call(world, states)
+    with collective_check(world):
+        # Heun's second stage uses V=-1/8 in the last cell. Its final V would be 1/4
+        # because the stage velocities are opposite. Euler reaches V=-1/8 at commit.
+        assert phase == "trial_failure"
+        assert "NotAdmissible" in message
+        assert ("moving geometry stage" if transient else "moving geometry commit") in message
+        if split:
+            assert pre_rollback_times == [dt, 0.0]
+        assert before == after == tuple(array.tobytes() for array in values.values())
+        assert runtime.time() == 0.0 and runtime.macro_step() == 0
+
+
+def test_map_domain_is_checked_before_motion_at_the_reached_stage(
+        isolated_native_cache, native_cxx, kokkos_root):
+    import pops
+    from pops._bootstrap import StepAttemptRejected
+    from pops.analytic import coordinate, time, where
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid, GeometryEvolution
+    from pops.mesh.moving_configuration import MovingConfiguration
+    from pops.time import FixedDt
+    from tests.python.support.native_execution_context import artifact_execution_context
+    from tests.python.support.public_native_profile import compile_profile_plan_once, native_profile
+
+    del isolated_native_cache, native_cxx, kokkos_root
+    scope = "moving rational map with guarded selection"
+    _, world = native_profile(dimension=1, scope=scope)
+
+    def build():
+        case = pops.Case("guarded_rational_map")
+        program = pops.Program("guarded_rational_map")
+        frame = CartesianDomain("guarded_rational_map", (0.0,), (1.0,)).frame(Cartesian1D())
+        layout = Uniform(CartesianGrid(frame=frame, cells=(4,)))
+        x, t = coordinate(frame, frame.axes[0]), time(program.clock)
+        law = (x + 0.125*x*(1-x)*t/(2-t)
+               + where(x > 1, 0/(t - 0.25), 0)
+               + where(x > 0.75, 0/(t - 0.5), 0))
+        config = MovingConfiguration(layout, node_rate=GeometryEvolution((law,)))
+        members = config.members(case)
+        state = program.state(members.block[members.state])
+        first = members.rate(state.n)
+        stage = program.stage("heun", c=1)
+        trial = program.value("trial", state.n + program.dt*first, at=stage)
+        second = members.rate(trial)
+        candidate = state.n + program.dt*(0.5*first + 0.5*second)
+        program.commit(state.next, program.value("candidate", candidate, at=state.next.point))
+        program.step_strategy(FixedDt(0.25))
+        case.program(program)
+        return pops.resolve(pops.validate(case), layout=layout), members.initial_values(), config
+
+    plan, initial, config = collective_call(world, build)
+    artifact = compile_profile_plan_once(world, plan, route=scope, compile_artifact=pops.compile)
+    runtime = collective_call(world, lambda: pops.bind(
+        artifact, initial_values=initial,
+        resources={"execution_context": artifact_execution_context(artifact)}))
+
+    # The pole at t=1/4 lies outside the selected branch at every reference node.
+    report = collective_call(world, lambda: pops.run(runtime, t_end=0.25, max_steps=1, console=False))
+    accepted = collective_call(world, lambda: np.asarray(runtime.state_global("configuration")).copy())
+    with collective_check(world):
+        assert report.accepted_steps == 1
+        xi = config.reference_nodes()
+        left, right, _ = accepted
+        increment = 0.25*0.5*(0.25*xi*(1-xi)/2**2 + 0.25*xi*(1-xi)/(2-0.25)**2)
+        np.testing.assert_allclose(np.concatenate((left, right[-1:])), xi + increment, rtol=0, atol=4*EPS)
+
+    def reject():
+        with pytest.raises(StepAttemptRejected) as failed:
+            pops.run(runtime, t_end=0.5, max_steps=1, console=False)
+        return failed.value.phase, str(failed.value)
+
+    phase, failure = collective_call(world, reject)
+    restored = collective_call(world, lambda: np.asarray(runtime.state_global("configuration")).copy())
+    with collective_check(world):
+        assert phase == "trial_failure"
+        assert "moving rate domain stage" in failure and "NotAdmissible" in failure
+        assert restored.tobytes() == accepted.tobytes()
+        assert runtime.time() == 0.25 and runtime.macro_step() == 1

@@ -249,7 +249,7 @@ def _compile_checkpoint_program(model, authored, *, regrid_every, initials, prog
         case.initials.add(InitialCondition(
             state=instance, value=BindArray(), projection=ConservativeCellAverage()))
         transfer.state(instance, StateTransfer())
-        rules.append(Tag(ValueExpr(instance) > ValueExpr(threshold)))
+        rules.append(Tag(lambda cell: cell.value(ValueExpr(instance)) > ValueExpr(threshold)))
     case.program(program)
     if ledger is not None:
         from pops.diagnostics import Balance

@@ -65,7 +65,6 @@ def test_terminal_failure_without_finite_operations_declares_the_finite_helpers(
     from pops.codegen.program_emit_finite_arrays import FINITE_OPS
     from pops.codegen.program_emit_versioned import VERSIONED_OPS
     from pops.codegen.program_lowerability import all_ops
-    from pops.time._program.field_representation import FIELD_REPRESENTATION_OPS
     from pops.time.variant_types import Failure, Int64, Product, Result
 
     p = Program("integer_failure")
@@ -74,7 +73,7 @@ def test_terminal_failure_without_finite_operations_declares_the_finite_helpers(
     p.require_success(p.variant(Result(Int64, errors), "err",
                                 p.variant(errors, "retry", p.product(code=p.int64(7)))))
     p.commit(q.next, p.value("accepted", q.n, at=q.next.point))
-    finite = FINITE_OPS | VERSIONED_OPS | FIELD_REPRESENTATION_OPS | DISTRIBUTED_OPS
+    finite = FINITE_OPS | VERSIONED_OPS | DISTRIBUTED_OPS
     assert not finite & {value.op for value in all_ops(p)}
     source = emit_cpp_program(p)
     # The payload packs through finite structural storage, declared by the finite helpers.

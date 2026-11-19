@@ -4,6 +4,7 @@
 #pragma once
 
 #include <pops/core/model/physical_model.hpp>
+#include <pops/physics/bricks/elliptic.hpp>
 #include <pops/mesh/geometry/static_geometry.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
@@ -37,6 +38,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -73,6 +75,14 @@ struct GeneratedStaticGeometryRoute : GeneratedResolvedRoute<Variables, Reconstr
   static constexpr bool reads_static_geometry = true;
 };
 
+/// The geometry of a package whose face is authored in source (riemann.User, the words of
+/// pops.lib.numerics since N3 lot 1) and whose layout is served by static geometry arrays (N17,
+/// C1): its block materializes that face on the physical normals, face measures and cell measures
+/// of the arrays, with the cell values as traces. It names no catalogue route.
+struct GeneratedStaticGeometryFace {
+  static constexpr bool reads_static_geometry = true;
+};
+
 template <class Routes>
 inline constexpr bool route_reads_static_geometry = [] {
   if constexpr (requires { Routes::reads_static_geometry; })
@@ -81,6 +91,11 @@ inline constexpr bool route_reads_static_geometry = [] {
 }();
 
 namespace generated_system_detail {
+
+/// No ghost policy, or the generated ghost policy of the package (G04-a).
+template <class Ghost, int Dim>
+concept GhostPolicyOrNone = std::same_as<Ghost, hyperbolic_boundary_detail::NoSourceGhostPolicy> ||
+                            hyperbolic_boundary_detail::SourceGhostPolicyFor<Ghost, Dim>;
 
 /// The metric of a generated block: the uniform logical box, or the static geometry arrays.
 struct CartesianBlockGeometry {};
@@ -732,9 +747,9 @@ void add_poisson_rhs(const Model& model, const MultiFab<Dim>& state, MultiFab<Di
 
 template <int Dim, class Model, class Reconstruction, class Numerical,
           nd::ReconstructionVariables Variables, class BlockGeometry = CartesianBlockGeometry,
-          class Request>
+          class Request, class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
 PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction reconstruction,
-                                           Numerical numerical) {
+                                           Numerical numerical, Ghost ghost = Ghost{}) {
   static_assert(Model::dimension == Dim);
   constexpr bool static_arrays = std::is_same_v<BlockGeometry, StaticArraysBlockGeometry>;
   if constexpr (static_arrays) {
@@ -771,9 +786,33 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     }
     return Reconstruction::n_ghost;
   }();
+  if constexpr (Ghost::present) {
+    // The generated ghost policy fills the depths 1..depth that the plan derives; a block that
+    // stores deeper ghost cells would leave them to no law (G04-a).
+    if constexpr (storage_ghost_depth > Ghost::depth)
+      throw std::invalid_argument(
+          "the generated ghost policy of the package fills the ghost depths 1.." +
+          std::to_string(Ghost::depth) + ", but the generated System block stores " +
+          std::to_string(storage_ghost_depth) + " ghost cells");
+  }
   Extent<Dim> ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     ghosts[axis] = storage_ghost_depth;
+  if constexpr (model_uses_flux_coordinates<Model>) {
+    if constexpr (static_arrays || !std::is_same_v<Reconstruction, NoSlope>)
+      throw std::invalid_argument("flux coordinates require Uniform Cartesian constant traces");
+    for (const auto& coordinate : Model::flux_coordinate_slots) {
+      if (coordinate.axis < 0 || coordinate.axis >= Dim ||
+          std::none_of(
+              Model::flux_provider_requirements.begin(), Model::flux_provider_requirements.end(),
+              [&](const auto& row) { return row.storage_slot == coordinate.storage_slot; }))
+        throw std::invalid_argument("flux coordinate role is outside the installed provider pack");
+    }
+    for (int axis = 0; axis < Dim; ++axis)
+      if (!request.topology.is_periodic(Face<Dim>{axis, BoundarySide::lower}) ||
+          !request.topology.is_periodic(Face<Dim>{axis, BoundarySide::upper}))
+        throw std::invalid_argument("flux coordinates require the installed periodic support");
+  }
   const auto spatial = [&] {
     if constexpr (static_arrays)
       return nd::prepare_cartesian_operator<Dim, Model, PreparedStaticGeometryMetric<Dim>,
@@ -797,7 +836,7 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const BoundaryTopology<Dim> topology = request.topology;
 
   auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                        provider_plan, geometry, topology, ghosts](
+                        provider_plan, geometry, topology, ghosts, ghost](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary) {
     if (boundary != nullptr) {
       boundary->template require_model_qualified_characteristic_provider<Model>();
@@ -812,15 +851,20 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
       runtime::system::require_pointwise_provider_groups<Dim, provider_count>(
           state, provider_storage, provider_plan, "generated flux providers");
     }
-    if (boundary != nullptr)
-      boundary->fill_physical_model_qualified(state, geometry, model);
+    if (boundary != nullptr) {
+      if constexpr (Ghost::present)
+        boundary->fill_physical_model_qualified(state, geometry, model, ghost);
+      else
+        boundary->fill_physical_model_qualified(state, geometry, model);
+    }
   };
 
   auto prepare_state_with_transport =
       [model, provider_storage_owner, provider_plan_owner, provider_storage, provider_plan,
-       geometry](const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab<Dim>& state,
-                 const PreparedHyperbolicBoundary<Dim>* boundary, const ExecutionLane& lane,
-                 const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
+       geometry, ghost](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                        MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
+                        const ExecutionLane& lane,
+                        const runtime::program::PreparedScalarBoundarySession<Dim>& transport) {
         prepared_boundary_collective_phase(
             lane,
             [&] {
@@ -846,8 +890,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
               lane,
               [&] {
                 transport.with_characteristic_candidate(state, [&](MultiFab<Dim>& candidate) {
-                  boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
-                                                          static_cast<Real>(point.physical_time));
+                  if constexpr (Ghost::present)
+                    boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                            ghost,
+                                                            static_cast<Real>(point.physical_time));
+                  else
+                    boundary->fill_physical_model_qualified(state, geometry, model, lane, candidate,
+                                                            static_cast<Real>(point.physical_time));
                 });
               },
               "generated prepared physical boundary fill failed collectively");
@@ -1203,6 +1252,20 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   result.poisson_rhs = [model](const MultiFab<Dim>& state, MultiFab<Dim>& rhs) {
     add_poisson_rhs<Dim>(model, state, rhs);
   };
+  // The closure adds a source unless the model has no elliptic_rhs, or its elliptic brick is the
+  // zero right-hand side (NoElliptic, or the brick codegen emits for a model without
+  // set_elliptic_rhs), decided on the brick's provider identity: a cells rule reads that (N8).
+  result.elliptic_source = [] {
+    if constexpr (requires(const Model& provider) { provider.ell.provider_identity(); }) {
+      using Elliptic = std::remove_cvref_t<decltype(std::declval<const Model&>().ell)>;
+      const std::string_view name = Elliptic::provider_identity().name;
+      return name != NoElliptic::provider_identity().name &&
+             name != std::string_view("pops.codegen.zero-elliptic-rhs-brick");
+    } else
+      return requires(const Model& provider, const typename Model::State& value) {
+        provider.elliptic_rhs(value);
+      };
+  }();
   result.primitive_to_conservative = [model](const double* primitive, double* conservative) {
     generated_system_detail::publish_conservative_state(model, primitive, conservative);
   };
@@ -1595,9 +1658,11 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
       return select_riemann<Dim, Variables, Routes>(std::move(request), Minmod{});
     case LimiterRouteId::kVanLeer:
       return select_riemann<Dim, Variables, Routes>(std::move(request), VanLeer{});
-    case LimiterRouteId::kWeno5:
+    case LimiterRouteId::kWeno5: {
+      const auto epsilon = request.routes.smoothness_epsilon;
       return select_riemann<Dim, Variables, Routes>(std::move(request),
-                                                    configured_reconstruction<Weno5>());
+                                                    configured_reconstruction<Weno5>(epsilon));
+    }
     case LimiterRouteId::kMc:
       return select_riemann<Dim, Variables, Routes>(std::move(request), MC{});
     case LimiterRouteId::kSuperbee:
@@ -1606,28 +1671,42 @@ PreparedSystemBlock<Dim> select_reconstruction(Request request) {
   throw std::logic_error("generated limiter route escaped its exhaustive selector");
 }
 
-template <int Dim, nd::ReconstructionVariables Variables, class Request, class Numerical>
-PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical) {
+/// `Geometry` is GeneratedStaticGeometryFace for a package compiled for static geometry arrays
+/// (N17, C1): its face reads the cell values as traces and the physical normals and measures of
+/// the arrays. Resolution refuses any other trace there; a block of the logical box that such a
+/// package would build is refused when it is prepared on the arrays (materialize_block).
+template <int Dim, nd::ReconstructionVariables Variables, class Geometry = GeneratedCatalogueRoutes,
+          class Request, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+PreparedSystemBlock<Dim> select_reconstruction_with_face(Request request, Numerical numerical,
+                                                         Ghost ghost = Ghost{}) {
   using Model = std::remove_cvref_t<decltype(request.model)>;
   switch (parse_limiter_route(request.routes.limiter, "generated System face block")) {
     case LimiterRouteId::kNone:
-      return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(std::move(request),
-                                                                          NoSlope{}, numerical);
+      if constexpr (route_reads_static_geometry<Geometry>)
+        return materialize_block<Dim, Model, NoSlope, Numerical, Variables,
+                                 StaticArraysBlockGeometry>(std::move(request), NoSlope{},
+                                                            numerical, ghost);
+      else
+        return materialize_block<Dim, Model, NoSlope, Numerical, Variables>(
+            std::move(request), NoSlope{}, numerical, ghost);
     case LimiterRouteId::kMinmod:
-      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(std::move(request),
-                                                                         Minmod{}, numerical);
+      return materialize_block<Dim, Model, Minmod, Numerical, Variables>(
+          std::move(request), Minmod{}, numerical, ghost);
     case LimiterRouteId::kVanLeer:
-      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(std::move(request),
-                                                                          VanLeer{}, numerical);
-    case LimiterRouteId::kWeno5:
+      return materialize_block<Dim, Model, VanLeer, Numerical, Variables>(
+          std::move(request), VanLeer{}, numerical, ghost);
+    case LimiterRouteId::kWeno5: {
+      const auto epsilon = request.routes.smoothness_epsilon;
       return materialize_block<Dim, Model, Weno5, Numerical, Variables>(
-          std::move(request), configured_reconstruction<Weno5>(), numerical);
+          std::move(request), configured_reconstruction<Weno5>(epsilon), numerical, ghost);
+    }
     case LimiterRouteId::kMc:
       return materialize_block<Dim, Model, MC, Numerical, Variables>(std::move(request), MC{},
-                                                                     numerical);
+                                                                     numerical, ghost);
     case LimiterRouteId::kSuperbee:
-      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(std::move(request),
-                                                                           Superbee{}, numerical);
+      return materialize_block<Dim, Model, Superbee, Numerical, Variables>(
+          std::move(request), Superbee{}, numerical, ghost);
   }
   throw std::logic_error("generated face limiter route escaped its exhaustive selector");
 }
@@ -1824,10 +1903,14 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
 }
 
 /// A source-authored face body is instantiated only by its owning package and
-/// still flows through the ordinary shared conservative face operator.
-template <class Request, class Numerical>
-  requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>)
-auto prepare_generated_system_block(Request request, Numerical numerical)
+/// still flows through the ordinary shared conservative face operator. GeneratedStaticGeometryFace
+/// reads the physical normals and measures of the static arrays. A source ghost policy from the
+/// same package authenticates and fills the installed SourceGhost faces at each fill.
+template <class Geometry = GeneratedCatalogueRoutes, class Request, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+  requires requires { Numerical::source_identity; } && (!ReconstructionPolicy<Numerical>) &&
+           generated_system_detail::GhostPolicyOrNone<Ghost, Request::dimension>
+auto prepare_generated_system_block(Request request, Numerical numerical, Ghost ghost = Ghost{})
     -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1839,19 +1922,23 @@ auto prepare_generated_system_block(Request request, Numerical numerical)
     switch (parse_recon_route(request.routes.reconstruction, "generated System face block")) {
       case ReconRouteId::kConservative:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Conservative>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Conservative, Geometry>(std::move(request), numerical,
+                                                                      ghost);
       case ReconRouteId::kPrimitive:
         return generated_system_detail::select_reconstruction_with_face<
-            Dim, nd::ReconstructionVariables::Primitive>(std::move(request), numerical);
+            Dim, nd::ReconstructionVariables::Primitive, Geometry>(std::move(request), numerical,
+                                                                   ghost);
     }
     throw std::logic_error("generated face reconstruction route escaped its exhaustive selector");
   }
 }
 
-template <class Request, class Reconstruction, class Numerical>
-  requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; }
+template <class Request, class Reconstruction, class Numerical,
+          class Ghost = hyperbolic_boundary_detail::NoSourceGhostPolicy>
+  requires ReconstructionPolicy<Reconstruction> && requires { Numerical::source_identity; } &&
+           generated_system_detail::GhostPolicyOrNone<Ghost, Request::dimension>
 auto prepare_generated_system_block(Request request, Reconstruction reconstruction,
-                                    Numerical numerical)
+                                    Numerical numerical, Ghost ghost = Ghost{})
     -> PreparedSystemBlock<Request::dimension> {
   constexpr int Dim = Request::dimension;
   using Model = std::remove_cvref_t<decltype(request.model)>;
@@ -1867,11 +1954,11 @@ auto prepare_generated_system_block(Request request, Reconstruction reconstructi
       case ReconRouteId::kConservative:
         return generated_system_detail::materialize_block<
             Dim, Model, Reconstruction, Numerical, nd::ReconstructionVariables::Conservative>(
-            std::move(request), reconstruction, numerical);
+            std::move(request), reconstruction, numerical, ghost);
       case ReconRouteId::kPrimitive:
         return generated_system_detail::materialize_block<Dim, Model, Reconstruction, Numerical,
                                                           nd::ReconstructionVariables::Primitive>(
-            std::move(request), reconstruction, numerical);
+            std::move(request), reconstruction, numerical, ghost);
     }
     throw std::logic_error("generated source reconstruction route escaped its exhaustive selector");
   }

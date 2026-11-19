@@ -4,9 +4,12 @@ This is lot 1 of N15, with ``@pops.scheme`` and ``pops.discrete`` from lot 2, an
 the lot « solves » (``pops.unknown``, ``pops.solve``, ``pops.Tolerance``, ``solvers=``). Until the cut-over of §21.7 makes the surface ``pops`` itself, a case
 imports it as ``import pops.surface as pops`` and ``from pops.surface.math import *``; the words
 of the library that it elaborates are ``pops.lib.numerics`` (``upwind``, ``rusanov``, ``hll``,
-``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time.methods`` (``forward_euler``, ``ssprk2``, ``ssprk3``, ``rk4``).
+``two_point``, written with ``@pops.scheme``, N3 lot 1) and ``pops.lib.time`` (``ssprk2`` and
+``imex_euler``, re-exported from ``pops.lib.time.methods``, which also holds ``forward_euler``,
+``ssprk3`` and ``rk4``).
 Building ``pops.Case(...)`` traces the case into a b6 case (2.6.6, ``_elaborate``), and
-``pops.inspect(case)`` validates and resolves it without compiling (SU12).
+``pops.inspect(case)`` validates and resolves it without compiling (SU12). ``pops.Graded`` grades
+the nodes of a uniform layout (lot L1 of N17, D0b), which the static geometry arrays serve.
 
 Every other construct of 2.6.2, 2.6.4 and 2.6.8 is importable and refuses its use with
 ``NotYetElaborated``, which names the lot that elaborates it; a name of an earlier text is refused
@@ -23,20 +26,20 @@ from ._model import Components, Model, Positive, Scalar, Tensor, Vector
 from ._numerics import CellAverage, Numerics, SchemeValue, TermView
 from ._scheme import check_plain_function, scheme
 from ._program import (
-    AMR, CUDA, Advance, Case, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim, compile,
-    inspect,
+    AMR, CUDA, Advance, Case, Graded, OpenMP, Program, Resources, Tolerance, Uniform, bind, claim,
+    compile, inspect,
 )
 from ._project import project
 from . import _solver
 from ._quadrature import Quadrature
-from ._run import BudgetExhausted, Output, RunFailed, SolveFailed, every
-from ._step import StepRuleValue
+from ._representation import Coefficients, Dual, representation
+from ._run import BudgetExhausted, FaceFrequencyStop, Output, RunFailed, SolveFailed, every
 from ._refusal import (
     AmbiguousElaboration, AntiDiffusive, ClosedBodyViolation, ContradictsDerivation,
     CoverageNotExact, IncrementNotDerivable, IncrementTypeMismatch, LevelMismatch,
     MissingBoundaryRealization, NotAPopsOperation, NotDiffusive, NotYetElaborated, OutOfScope,
     RealizationMismatch, ReservedName, SupportMismatch, SurfaceRefusal,
-    SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, UnknownName,
+    SymbolNotInSurface, SymbolicTruthValue, TermCountedTwice, TermNotAdditive, UnknownName,
 )
 from ._refusal import AmbiguousSolvePath, UnknownSolvePath
 from ._refusal import SpellingRefusal as _SpellingRefusal
@@ -49,6 +52,8 @@ _RUN = "the run of N8 (Simulation.run, RunResult and Output, CC14) and a later l
 _HIERARCHY = "a later lot of N15 with the hierarchies of N12"
 _REPRESENT = "a later lot of N15 with the representations and projections of G03 and G07"
 _SUPPORTS = "a later lot of N15 with the supports of G03 and G09"
+# The named representations are words of pops.lib.representations (N16 lot 1), not of pops.
+_LIB_REPRESENTATION = "the word %s() of pops.lib.representations (N16 lot 1), of which %s"
 _LATER_N15 = "a later lot of N15"
 
 # The constructs of 2.6.2, 2.6.4 and 2.6.8 that this lot does not elaborate, with their owner.
@@ -64,9 +69,15 @@ _LATER = {
     "Scientific": _RUN, "Bitwise": _RUN, "Reproducible": _RUN, "Cache": _RUN,
     "Regrid": _HIERARCHY, "Level": _HIERARCHY, "invalidate": _HIERARCHY, "remap": _HIERARCHY,
     "restrict_onto": _HIERARCHY, "replace_contribution": _HIERARCHY,
-    "CellTotal": _REPRESENT,
-    "PointValue": _REPRESENT, "FaceNormalIntegral": _REPRESENT, "EdgeCirculation": _REPRESENT,
-    "DualLoad": _REPRESENT, "Covector": _REPRESENT, "reconstruct": _REPRESENT,
+    "CellTotal": _LIB_REPRESENTATION % ("CellTotal", "the surface elaborates a total on a "
+                                        "static configuration"),
+    "PointValue": _LIB_REPRESENTATION % ("PointValue", "the surface elaborates a sample bound as "
+                                         "data"),
+    "FaceNormalIntegral": _LIB_REPRESENTATION % ("FaceNormalIntegral", "G08 elaborates its "
+                                                 "carrier"),
+    "EdgeCirculation": _LIB_REPRESENTATION % ("EdgeCirculation", "G08 elaborates its carrier"),
+    "DualLoad": _LIB_REPRESENTATION % ("DualLoad", "N16 lot 2 elaborates the loads"),
+    "Covector": _REPRESENT, "reconstruct": _REPRESENT,
     "Weak": _REPRESENT, "Pointwise": _REPRESENT, "Approximate": _REPRESENT,
     "Realizable": _REPRESENT,
     "product": _SUPPORTS, "Fibre": _SUPPORTS, "Line": _SUPPORTS, "Ball": _SUPPORTS,
@@ -143,7 +154,8 @@ _EARLIER = {
                                    "of cell, since accept= holds checks only"),
 }
 
-_LIBRARY = "pops.lib.numerics, pops.lib.time.methods and pops.lib.quadrature"
+_LIBRARY = ("pops.lib.numerics, pops.lib.time (the methods that spec 17.1 imports from it; "
+            "every method in pops.lib.time.methods), pops.lib.quadrature and pops.lib.representations")
 
 
 def _later(name: str, owner: str) -> _Any:
@@ -176,11 +188,13 @@ def __getattr__(name: str) -> _Any:
 
 
 __all__ = [
-    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components",
+    "AMR", "Advance", "Box", "CUDA", "Candidate", "Case", "CellAverage", "Components", "Graded",
     "Model", "Numerics", "OpenMP", "Output", "Periodic", "Positive", "Program", "Quadrature",
     "Resources", "Scalar", "Tensor", "Tolerance", "Uniform", "Vector", "bind", "claim", "compile",
     "every", "inspect", "project", "record", "discrete", "math", "method", "scheme", "solve",
     "unknown",
+    # @pops.representation and what it returns (N16 lot 1, D1b)
+    "Coefficients", "Dual", "representation",
     # @pops.solver and the words of its body (N9 lot 4); pops.fail takes the variants of T39
     # listed with the failures of a run below
     "PropertyNotDerived", "choose", "fail", "solver",
@@ -189,10 +203,10 @@ __all__ = [
     "CoverageNotExact", "IncrementNotDerivable", "IncrementTypeMismatch", "LevelMismatch",
     "MissingBoundaryRealization", "NotAPopsOperation", "NotDiffusive", "NotYetElaborated",
     "OutOfScope", "RealizationMismatch", "ReservedName", "SupportMismatch", "SurfaceRefusal",
-    "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "UnknownName",
+    "SymbolNotInSurface", "SymbolicTruthValue", "TermCountedTwice", "TermNotAdditive",
+    "UnknownName",
     "AmbiguousSolvePath", "UnknownSolvePath",
     # the failures of a run (T39), lot G, which a solver also fails with (N9 lot 4)
-    "BudgetExhausted", "RunFailed", "SolveFailed",
-    "Choice", "Report", "Row", "SchemeValue", "StepRuleValue", "TermView",
-    "check_plain_function",
+    "BudgetExhausted", "FaceFrequencyStop", "RunFailed", "SolveFailed",
+    "Choice", "Report", "Row", "SchemeValue", "TermView", "check_plain_function",
 ]

@@ -1106,6 +1106,7 @@ def _migrate_payload(
     from pops.runtime._checkpoint_manifest import (
         IDENTITY_KEY,
         MANIFEST_KEY,
+        _identity_from_json,
         _seal_checkpoint_payload_with_identities,
     )
     from pops.runtime._history_sample_identity import identity_key
@@ -1218,6 +1219,9 @@ def _migrate_payload(
         semantic=authority.identities[0],
         artifact=authority.identities[1],
         bind=authority.identities[2],
+        # The authority checkpoint's compiled program_id (N11 lot 2b), authenticated with its
+        # manifest: the migrated envelope restarts only in that program.
+        program=_identity_from_json(authority.manifest["program_id"]),
         run=authority.identities[3],
     )
     return output, (restart, mapping_identity)

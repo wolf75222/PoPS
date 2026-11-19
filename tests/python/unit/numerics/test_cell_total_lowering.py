@@ -9,6 +9,9 @@ Program operation outside the rates that read the decoded state.
 """
 from __future__ import annotations
 
+import re
+from types import SimpleNamespace
+
 import pops
 import pytest
 from pops.codegen._cell_total_consumers import CellTotalNotYetElaborated
@@ -74,13 +77,13 @@ def test_a_decode_outside_one_constant_mode_names_n16_lot_2():
 
 @pytest.mark.parametrize("definition", [point_value(1), cell_average(1, GaussLegendre(3))],
                          ids=["sample", "stated-rule"])
-def test_a_sample_or_a_stated_rule_waits_for_the_projection_by_encode(definition):
-    """R1 of the review of #803: a sample and an average under a stated rule have the average's
-    constant mode, but b6 would project their initial value as a cell average (N16 5.5, A6). Only
-    cell_average(rank) and cell_total(rank) are accepted; the others name the N16 lot of line 4."""
-    with pytest.raises(NotYetElaborated, match="transitional table of CellAverage"):
-        DiscretizationPlan().representations.add(_state(), definition)
+def test_a_sample_or_a_stated_rule_is_served_bound_as_data(definition):
+    """R1 of the review of #803, as N16 lifts the table for three words: a sample and an average
+    under a stated rule have the average's constant mode and rate, so the row serves them; their
+    initial value is bound as data, the analytic route refused with N16 lot 2
+    (test_n16_three_words_rows.py)."""
     plan = DiscretizationPlan()
+    plan.representations.add(_state(), definition)
     plan.representations.add(_state("G03_Rb_unit_average"), cell_average(1))
     plan.representations.add(_state("G03_Rb_unit_total"), cell_total(1))
 
@@ -175,6 +178,135 @@ def test_a_total_emits_the_decode_and_the_encode_and_an_average_emits_todays_cod
     assert diffusion.count("ctx.encode_cell_total_rate(") == 2
 
 
+@pytest.mark.parametrize("representations", (
+    ("average", "average"), ("average", "total"), ("total", "total"),
+))
+def test_a_group_reads_and_encodes_each_blocks_representation(tmp_path, representations):
+    from tests.python.integration.runtime.test_shared_interface_runtime import (
+        _flux_source_component, _resolve_static_cell_total_interface,
+    )
+
+    component = _flux_source_component(tmp_path / "component")
+
+    def emit(representations):
+        *_, plan = _resolve_static_cell_total_interface(tmp_path, component, representations)
+        return emit_cpp_program(plan.time, target="system", model_graph=build_program_model_graph(plan))
+
+    source = emit(representations)
+    expected_conversions = 2 * representations.count("total")
+    assert source.count("ctx.decode_cell_total(") == expected_conversions
+    assert source.count("ctx.encode_cell_total_rate(") == expected_conversions
+    groups = list(re.finditer(r"ctx\.rhs_group\(\d+, [^\n]+", source))
+    assert len(groups) == 2
+    for group in groups:
+        requests = re.findall(r"\{(\d+), &(\w+), &(r(\d+)), \d+, 1\}", group[0])
+        assert [index for index, _, _, _ in requests] == ["0", "1"]
+        for index, stage_input, rate, rate_id in requests:
+            if representations[int(index)] == "total":
+                assert stage_input == f"cell_density_{rate_id}"
+                assert re.search(rf"ctx\.decode_cell_total\(\w+, {stage_input}\);", source[:group.start()])
+                encode = f"ctx.encode_cell_total_rate({rate});"
+                write = re.search(rf"ctx\.axpy\([^\n]+\b{rate}\b", source[group.end():])
+                assert write is not None
+                assert encode in source[group.end():group.end() + write.start()]
+            else:
+                assert not stage_input.startswith("cell_density_")
+                assert f"ctx.encode_cell_total_rate({rate});" not in source
+    if not expected_conversions:
+        assert source == emit((None, None))
+
+
+def test_a_remote_prepared_boundary_cannot_read_undecoded_total_storage():
+    from pops.codegen._cell_total_consumers import validate_cell_total_consumers
+    from pops.mesh.boundaries.compiled_plan import CompiledBoundaryPlan
+
+    total = SimpleNamespace(
+        name="total", state_identities=("total-state",),
+        numerics=SimpleNamespace(
+            representations=("total-representation",),
+            cell_total_states=lambda: ("total-state",), boundaries=(),
+        ),
+    )
+    neighbour = SimpleNamespace(
+        name="neighbour", state_identities=("neighbour-state",),
+        numerics=SimpleNamespace(
+            cell_total_states=tuple,
+            boundaries=(CompiledBoundaryPlan({
+                "schema_version": 1, "authority_type": "prepared_boundary_plan_compile",
+                "ghost_plan_identity": "test-prepared-boundary", "faces": [],
+                "component_region_templates": [{"states": ["total-state"]}],
+            }),),
+        ),
+    )
+    plan = SimpleNamespace(blocks=(total, neighbour), layout_targets={"static": "system"})
+    with pytest.raises(CellTotalNotYetElaborated, match="block 'neighbour'") as error:
+        validate_cell_total_consumers(plan)
+    assert error.value.reason == "cell_total_boundary_dependency"
+    assert "block 'total'" in str(error.value)
+
+
+@pytest.mark.parametrize("total_port", ("source_port", "target_port"))
+def test_a_cell_average_mapping_cannot_consume_or_install_totals(total_port):
+    from pops.codegen._cell_total_consumers import _validate_external_storage_consumers
+
+    total = SimpleNamespace(name="total", state_identities=("total-state",), numerics=None)
+    ports = {
+        name: SimpleNamespace(subject=SimpleNamespace(
+            qualified_id="total-state" if name == total_port else "average-state",
+        ))
+        for name in ("source_port", "target_port")
+    }
+    requirement = SimpleNamespace(qualified_id="average-mapping", **ports)
+    plan = SimpleNamespace(
+        blocks=(total,),
+        layout_plan=SimpleNamespace(mappings=(SimpleNamespace(requirement=requirement),)),
+    )
+    with pytest.raises(CellTotalNotYetElaborated, match="average-mapping") as error:
+        _validate_external_storage_consumers(plan, (total,))
+    assert error.value.reason == "cell_total_layout_mapping"
+
+
+def test_a_cut_cell_total_requires_the_fluid_volume():
+    from pops.layouts import Uniform
+    from tests.python.unit.runtime.test_public_embedded_boundary_lowering import _ranked_embedded_boundary
+
+    def resolve(representation):
+        case, layout, _, _ = build_burgers(represent=representation, periodic=False)
+        grid = layout.mesh
+        layout = Uniform(grid, embedded_boundary=_ranked_embedded_boundary(grid))
+        return pops.resolve(pops.validate(case), layout=layout)
+
+    average = resolve("average")
+    assert average.layout_plan.layouts[0].options["embedded_boundary"]["transport"]["mode"] == "cutcell"
+    with pytest.raises(CellTotalNotYetElaborated, match="fluid volume") as error:
+        resolve("total")
+    assert error.value.reason == "cell_total_cut_cell_measure"
+
+
+def test_the_cut_cell_refusal_follows_the_total_blocks_layout_assignment():
+    from pops.codegen._cell_total_consumers import _validate_volume_authority
+    from pops.layouts import Uniform
+    from pops.mesh import LayoutPlanBuilder
+    from pops.model import Handle, OwnerPath
+    from tests.python.unit.runtime.test_public_embedded_boundary_lowering import _ranked_embedded_boundary
+
+    _, regular, _, _ = build_burgers(represent="average", periodic=False)
+    owner = OwnerPath.case("independent-layouts")
+    builder = LayoutPlanBuilder(owner)
+    regular_handle = builder.layout("regular-layout", regular)
+    cut_handle = builder.layout("cut-layout", Uniform(
+        regular.mesh, embedded_boundary=_ranked_embedded_boundary(regular.mesh),
+    ))
+    regular_block = Handle("regular", owner=owner, kind="block")
+    cut_block = Handle("cut", owner=owner, kind="block")
+    builder.assign_block(regular_block, regular_handle)
+    builder.assign_block(cut_block, cut_handle)
+    plan = SimpleNamespace(layout_plan=builder.resolve(blocks=(regular_block, cut_block)))
+    _validate_volume_authority(plan, (SimpleNamespace(name="regular"),))
+    with pytest.raises(CellTotalNotYetElaborated, match="block 'cut'"):
+        _validate_volume_authority(plan, (SimpleNamespace(name="cut"),))
+
+
 def test_a_step_rule_on_a_total_is_refused_naming_lot_t():
     """B1: the native step selection reads the stored totals U, not ū = U/μ(K); Burgers' speed
     would be off by μ(K). A total takes a fixed step until lot T (driver, 23:00). The native test
@@ -199,3 +331,95 @@ def test_an_analytic_initial_projection_of_a_total_is_refused():
 def test_the_graded_cases_resolve_under_a_total():
     for build in (build_graded_burgers, build_graded_diffusion_total):
         assert _resolved(build).blocks[0].numerics.cell_total_states()
+
+
+# --- N15 FaceFlux/CellRate lot FC-1 (ROM-98, note §3.4): the named source of a total ----------
+
+def _decaying_burgers(shape="split"):
+    """Burgers with the named source -2u on 16 periodic cells, under a total, on the split route:
+    the flux by a finite volume, the source selected and realized by ``StateStorage()``.
+    ``shape`` names how the Program evaluates the source: ``split`` beside the rate of the flux,
+    ``absorbed`` inside a pointwise rate, ``solved`` by the local solve of the source."""
+    from pops import math as pm
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import StateStorage, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt
+
+    frame = CartesianDomain("n15_fc1_source", (0.0,), (3.0,)).frame(Cartesian1D())
+    (x,) = frame.axes
+    model = pops.Model("N15_FC1_decaying_burgers", frame=frame)
+    U = model.state("u", components=("u",))
+    (u,) = U
+    flux = model.flux("burgers_flux", state=U, frame=frame, components={x: (0.5 * u * u,)},
+                      waves={x: (u,)})
+    decay = model.source("decay", on=U, value=(-2.0 * u,))
+    rate = model.rate("burgers_decay", equation=pm.ddt(U) == -pm.div(flux) + decay)
+    transport, source = rate.select(flux), rate.select(decay)
+    case = pops.Case("N15_FC1_%s" % shape)
+    block = case.block("line", model)
+    plan = DiscretizationPlan()
+    plan.rates.add(transport, FiniteVolume(flux=flux, variables=variables.Conservative(U),
+                                           reconstruction=reconstruction.FirstOrder(),
+                                           riemann=riemann.Rusanov()))
+    plan.rates.add(source, StateStorage())
+    plan.representations.add(U, cell_total(1))
+    case.numerics(plan, block=block)
+    program = pops.Program("N15_FC1_%s_program" % shape)
+    q = program.state(block[U])
+    if shape == "solved":
+        relaxed = program.solve_implicit_source(q.n)
+        update = program.value("next", relaxed + program.dt * transport(relaxed), at=q.next.point)
+    else:
+        local = source(q.n)
+        if shape == "absorbed":
+            local = program.rate("absorbed", (2 * local[0],), of=q.n)
+        update = program.value("next", q.n + program.dt * (transport(q.n) + local),
+                               at=q.next.point)
+    program.commit(q.next, update)
+    program.step_strategy(FixedDt(0.01))
+    case.program(program)
+    case.initials.add(InitialCondition(state=block[U], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    layout = Uniform(CartesianGrid(frame=frame, cells=(16,), periodic=PeriodicAxes((x,))))
+    return pops.resolve(pops.validate(case), layout=layout)
+
+
+def test_the_named_source_of_a_total_reads_the_density_and_encodes_its_rate():
+    """The split ``source`` operation reads ū = U/μ(K) from the decode and its rate is multiplied
+    by μ(K) after, as the rate of the flux (route line 6, extended by FC-1)."""
+    resolved = _decaying_burgers()
+    source = emit_cpp_program(resolved.time, model_graph=build_program_model_graph(resolved),
+                              target="system")
+    lines = [line.strip() for line in source.splitlines()]
+    assert source.count("ctx.decode_cell_total(") == 2  # the flux and the source
+    assert source.count("ctx.encode_cell_total_rate(") == 2
+    scope = next(number for number, line in enumerate(lines)
+                 if 'ProfileScope "node:decay' in line)
+    (decode,) = [number for number in range(scope - 2, scope)
+                 if lines[number].startswith("ctx.decode_cell_total(")]
+    density = lines[decode].split(",")[1].split(")")[0].strip()
+    kernel = next(number for number in range(scope, len(lines)) if "rhs_scratch(" in lines[number])
+    assert lines[kernel].endswith(", %s);" % density)
+    output = lines[kernel].split("&")[1].split("=")[0].strip()
+    encode = lines.index("ctx.encode_cell_total_rate(%s);  // G03 R-b: the rate of the total"
+                         % output)
+    assert encode > kernel
+
+
+@pytest.mark.parametrize("shape, operation", [("absorbed", "pointwise_expression"),
+                                              ("solved", "solve_implicit_source")])
+def test_a_source_evaluated_inside_another_operation_stays_refused_on_a_total(shape, operation):
+    """O1: the gate is an allowlist over every node of the Program, so a source that a pointwise
+    rate absorbs, or that a local solve holds in its residual, is refused by its outer operation,
+    and only the standalone ``source`` is served."""
+    with pytest.raises(CellTotalNotYetElaborated) as caught:
+        _decaying_burgers(shape)
+    assert caught.value.reason == "cell_total_operation"
+    assert operation in str(caught.value)

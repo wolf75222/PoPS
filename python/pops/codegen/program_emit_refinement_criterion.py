@@ -3,9 +3,12 @@
 The compiled Program of an adaptive layout exports the criterion as one entry that evaluates it on
 the valid cells of one patch. Each input of the criterion becomes a local of the cell kernel: a cell
 read is the field view of its state at the shifted index, a width is the cell size of the level
-along its axis, and a runtime parameter is its bound value. The regions go through the common CSE
-emitter with every operation materialized, so the kernel observes each value that it computes: a
-non-finite one marks the cell, and the tagging plan then rejects the level as it does for the
+along its axis, and a runtime parameter is its value in the parameter table of the patch: the case
+parameters first, bound at ``bind``, then the runtime parameters of a model, which the tagging plan
+reads from their block's RuntimeParams table at the slot that ``program_param_entries`` gives them
+(N12 lot 3c-2a). No value enters the generated C++. The regions go through the common CSE emitter
+with every operation and literal materialized in the native scalar type before use, so the
+kernel observes each value that it computes: a non-finite one marks the cell, and the tagging plan then rejects the level as it does for the
 bytecode of the tag graph.
 
 Each rule is lowered to the cells where its region is certainly true (``certainly``): strict
@@ -21,12 +24,49 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._ir.expr import Const
+
 CRITERION_ENTRY_SYMBOL = "pops_program_refinement_criterion_amr"
 CRITERION_IDENTITY_SYMBOL = "pops_program_refinement_criterion_identity"
 _INPUT_KIND = "refinement_criterion_input"
 _KERNEL = "pops_program_refinement_criterion_kernel"
 _DIM = "pops::kNativeDimension"
 _MARK = "pops::runtime::amr::kGeneratedCriterion"
+_FLOAT32_MAX = int(float.fromhex("0x1.fffffep+127"))
+_FLOAT64_MAX = int(float.fromhex("0x1.fffffffffffffp+1023"))
+_FLOAT32_OVERFLOW = _FLOAT32_MAX + (1 << 103)
+_FLOAT64_OVERFLOW = _FLOAT64_MAX + (1 << 970)
+_REAL_LIMITS = "std::numeric_limits<pops::Real>"
+
+
+def _native_literal(expression: Const) -> str:
+    """Leave active narrowing failures visible to the kernel's finiteness check."""
+    literal = expression.literal
+    token = literal.to_cpp()
+    try:
+        value = literal.to_python()
+    except TypeError:
+        # Custom and algebraic literals supply their own lowering. Check its value before
+        # the generated local narrows it to Real.
+        return "pops_checked_criterion_literal(%s)" % token
+    if not -_FLOAT64_OVERFLOW < value < _FLOAT64_OVERFLOW:
+        raise ValueError("refinement criterion literal exceeds the finite native scalar range")
+    if -_FLOAT32_MAX <= value <= _FLOAT32_MAX:
+        return token
+
+    sign = "-" if value < 0 else ""
+    if not -_FLOAT32_OVERFLOW < value < _FLOAT32_OVERFLOW:
+        binary32 = "%s::quiet_NaN()" % _REAL_LIMITS
+    else:
+        # The open band above the largest finite magnitude rounds back to that maximum.
+        binary32 = "%sstd::numeric_limits<float>::max()" % sign
+    if literal.target == "float":
+        return binary32
+    if not -_FLOAT64_MAX <= value <= _FLOAT64_MAX:
+        token = "%sstd::numeric_limits<double>::max()" % sign
+    # Avoid a narrowing conversion outside the range of C++'s floating conversion.
+    # The conditional remains in the active scope of this literal.
+    return "(%s::max_exponent == 128 ? %s : (%s))" % (_REAL_LIMITS, binary32, token)
 
 
 def _cpp_string(text: str) -> str:
@@ -39,6 +79,7 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
     """The replacement of each input leaf, the C++ of each input local and the shifted indices."""
     from pops._ir.expr import Var
     from pops._ir.handle_expr import ValueExpr
+    from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _key
     from pops.mesh._amr.refinement_criterion import CellRead, CellWidth, criterion_inputs
 
@@ -46,6 +87,8 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
     components = {row.state.qualified_id: dict(zip(row.variables, row.components, strict=True))
                   for row in criterion.fields}
     parameters = {handle.qualified_id: index for index, handle in enumerate(criterion.parameters)}
+    model_parameters = {row.parameter.qualified_id: len(parameters) + index
+                        for index, row in enumerate(criterion.model_parameters)}
     offsets: dict[tuple[tuple[int, int], ...], str] = {}
     names: dict[Any, str] = {}
     bindings: dict[tuple[str, str], str] = {}
@@ -66,6 +109,8 @@ def _inputs(criterion: Any) -> tuple[dict[int, Any], dict[tuple[str, str], str],
                 rendered = "spacing[%d]" % leaf.axis
             elif isinstance(leaf, ValueExpr):
                 rendered = "parameters[%d]" % parameters[leaf.handle.qualified_id]
+            elif type(leaf) is RuntimeParamRef and leaf.handle is not None:
+                rendered = "parameters[%d]" % model_parameters[leaf.handle.qualified_id]
             else:
                 raise TypeError("a refinement criterion input is a cell read, a width or a "
                                 "runtime parameter")
@@ -121,8 +166,8 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
         expression_bindings=replacements)
     comparisons = _comparisons(roots)
     lines, rendered, observed = _cse_emit(
-        comparisons + list(roots), "pops::Real", "    ", materialize_all=True, return_names=True,
-        scalar_bindings=bindings)
+        comparisons + list(roots), "pops::Real", "    ", materialize_all=True,
+        literal_renderer=_native_literal, return_names=True, scalar_bindings=bindings)
     rendered = rendered[len(comparisons):]
     count = len(criterion.refine)
 
@@ -130,7 +175,7 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
         return " || ".join("(%s != pops::Real(0))" % value for value in values) or "false"
 
     field_count = len(criterion.fields)
-    parameter_count = len(criterion.parameters)
+    parameter_count = len(criterion.parameters) + len(criterion.model_parameters)
     members = [
         "  pops::FieldView<const pops::Real, %s> fields[%d];" % (_DIM, field_count),
         "  pops::runtime::amr::GeneratedCriterionMarks<%s> marks;" % _DIM,
@@ -175,8 +220,23 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
         "#include <cmath>",
         "#include <cstddef>",
         "#include <cstdint>",
+        "#include <limits>",
         "",
         "namespace {",
+        "",
+        "template <class Scalar>",
+        "POPS_HD pops::Real pops_checked_criterion_literal(Scalar value) {",
+        "  constexpr auto limit = %s::max();" % _REAL_LIMITS,
+        "  if (value >= -limit && value <= limit) return pops::Real(value);",
+        "  if constexpr (std::numeric_limits<Scalar>::digits > %s::digits &&" % _REAL_LIMITS,
+        "                std::numeric_limits<Scalar>::max_exponent > %s::max_exponent) {" % _REAL_LIMITS,
+        "    constexpr auto half_ulp = %s::max_exponent == 128 ? 0x1p103 : 0x1p970;" % _REAL_LIMITS,
+        "    constexpr Scalar overflow = Scalar(limit) + Scalar(half_ulp);",
+        "    if (value > limit && value < overflow) return limit;",
+        "    if (value < -limit && value > -overflow) return -limit;",
+        "  }",
+        "  return %s::quiet_NaN();" % _REAL_LIMITS,
+        "}",
         "",
         "struct %s {" % _KERNEL,
         *members,
@@ -205,4 +265,50 @@ def emit_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
     ])
 
 
-__all__ = ["CRITERION_ENTRY_SYMBOL", "CRITERION_IDENTITY_SYMBOL", "emit_refinement_criterion"]
+def emit_standalone_refinement_criterion(criterion: Any, *, native_dimension: int) -> str:
+    """Export a resolved local-state criterion with the standalone mesh-owner contract."""
+    source = emit_refinement_criterion(criterion, native_dimension=native_dimension)
+    if criterion.parameters or criterion.model_parameters:
+        raise ValueError("a standalone refinement criterion has no runtime parameter authority")
+    data = criterion.runtime_criterion_data({})
+    fields = data["fields"]
+    if not fields or any(any(field["reach"]) for field in fields):
+        raise ValueError("a standalone refinement criterion requires local conserved state reads")
+
+    tables, rows = [], []
+    for index, field in enumerate(fields):
+        variables = ", ".join(_cpp_string(name) for name in field["variables"])
+        components = ", ".join(str(slot) for slot in field["components"])
+        tables.extend([
+            "constexpr const char* variables_%d[] = {%s};" % (index, variables),
+            "constexpr int components_%d[] = {%s};" % (index, components),
+        ])
+        rows.append("  {%s, %s, %d, variables_%d, components_%d}," % (
+            _cpp_string(field["state"]), _cpp_string(field["block"]),
+            len(field["variables"]), index, index))
+    return "#include <pops/core/foundation/native_dimension.hpp>\n" + source + "\n".join([
+        "#include <pops/runtime/dynamic/abi_key.hpp>",
+        "",
+        "namespace {",
+        *tables,
+        "constexpr pops::runtime::amr::StandaloneCriterionFieldView criterion_fields[] = {",
+        *rows,
+        "};",
+        "constexpr pops::runtime::amr::StandaloneCriterionMetadata criterion_metadata{",
+        "  sizeof(pops::Real), %d, %d, criterion_fields};" % (criterion.hysteresis.min_cycles,
+                                                            len(fields)),
+        "}  // namespace",
+        "",
+        'extern "C" const char* pops_standalone_refinement_criterion_abi_key_v1() {',
+        "  return POPS_ABI_KEY_LITERAL;",
+        "}",
+        'extern "C" const pops::runtime::amr::StandaloneCriterionMetadata*',
+        "pops_standalone_refinement_criterion_metadata_v1() {",
+        "  return &criterion_metadata;",
+        "}",
+        "",
+    ])
+
+
+__all__ = ["CRITERION_ENTRY_SYMBOL", "CRITERION_IDENTITY_SYMBOL", "emit_refinement_criterion",
+           "emit_standalone_refinement_criterion"]

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import pops
-from pops.analytic import CellBounds, coordinate, cos, sin, time
+from pops.analytic import CellBounds, coordinate, cos, sin, time, where
 from pops.codegen._moving_members_consumers import MovingMembersNotYetElaborated
 from pops.domain import CartesianDomain, Rectangle
 from pops.frames import Cartesian1D, Cartesian2D
@@ -51,6 +51,138 @@ def test_the_node_rate_of_a_map_is_its_time_derivative_at_the_reference_coordina
     assert time_derivative(x*x + 3) is None
 
 
+@pytest.mark.parametrize("power", [False, True])
+def test_zero_over_a_proven_nonzero_denominator_has_no_moving_members(power):
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_defined_zero").clock)
+    base = _grid(frame, cells=4)
+    law = x + 0/(1 + (t**2 if power else t*t))
+    assert time_derivative(law) is None
+    configuration = MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+    assert configuration.at_rest and configuration.layout is base
+
+
+@pytest.mark.parametrize("case", ["zero-over-zero", "stationary-pole", "erased-pole"])
+def test_partial_map_fails_before_normalization_or_differentiation(case):
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_partial_map").clock)
+    base = _grid(frame, cells=4)
+    law = {
+        "zero-over-zero": x + 0/(x - x),
+        "stationary-pole": x + 1/(x - 0.5),
+        "erased-pole": x + t + 0*(1/(x - 0.5)),
+    }[case]
+    with pytest.raises(ValueError, match="zero denominator|undefined at a reference node"):
+        MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+
+
+def test_stationary_map_can_select_away_a_quotient_pole():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    base = _grid(frame, cells=4)
+    law = x + where(x == 0.5, 0, 0/(x - 0.5))
+    assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+    for predicate in ((x != 0.5) & (1/(x - 0.5) > 0),
+                      (x == 0.5) | (1/(x - 0.5) > 0)):
+        law = where(predicate, x, x)
+        assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+
+
+@pytest.mark.parametrize("style", ["condition", "selected-branch", "unselected-branch", "with-rate"])
+def test_selected_map_paths_require_a_defined_predicate(style):
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_domain_paths").clock)
+    base = _grid(frame, cells=4)
+    masked_pole = where(1/(x - 0.5) > 0, x, x)
+    law = {
+        "condition": masked_pole,
+        "selected-branch": where(x > 0.25, masked_pole, x),
+        "unselected-branch": where(x > 0.75, masked_pole, x),
+        "with-rate": where(x > 0.25, masked_pole, x) + t*x*(1-x),
+    }[style]
+    if style == "unselected-branch":
+        assert MovingConfiguration(base, node_rate=GeometryEvolution((law,))).layout is base
+    else:
+        with pytest.raises(ValueError, match="undefined at a reference node"):
+            MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+
+
+def test_map_powers_keep_legitimate_zero_and_singular_paths():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_power_domain").clock)
+    base = _grid(frame, cells=4)
+    assert time_derivative((x + t)**0) is None
+    for exponent in (1, 2, -2):
+        xi = np.array([0.25, 0.5, 0.75])
+        derivative = time_derivative((x + t)**exponent)
+        np.testing.assert_allclose(evaluate(derivative, xi, 0.25),
+                                   exponent*(xi + 0.25)**(exponent - 1))
+    law = x + (1/(x - 0.5))**0
+    with pytest.raises(ValueError, match="undefined at a reference node"):
+        MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+
+    active = MovingConfiguration(base, node_rate=GeometryEvolution((x + (t - 0.5)**-1,)))
+    with np.errstate(all="ignore"):
+        assert not np.isfinite(active.node_rate_at(active.reference_nodes(),
+                                                   active.reference_nodes(), 0.5)).any()
+
+
+def test_a_rational_map_keeps_its_rate_on_the_selected_domain():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_selected_rational").clock)
+    base = _grid(frame, cells=4)
+    law = x + where(x > 0.75, 0/(t - 0.5), x*(1-x)*t/(2-t))
+    configuration = MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+    xi = configuration.reference_nodes()
+    with np.errstate(all="ignore"):
+        np.testing.assert_allclose(
+            configuration.node_rate_at(xi, xi, 0.5)[:-1], 2*xi[:-1]*(1-xi[:-1])/(1.5**2),
+        )
+        assert np.isnan(configuration.node_rate_at(xi, xi, 0.5)[-1])
+    case = pops.Case("geometry_selected_rational")
+    members = configuration.members(case)
+    assert members is not None and members.rate_domain is not None
+
+
+def test_a_clock_switching_map_names_the_unserved_derivative():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_clock_switch").clock)
+    law = x + where(t < 0.5, t*x*(1-x), 0)
+    with pytest.raises(NotYetElaborated, match="selection reads the clock.*node_rate=w"):
+        MovingConfiguration(_grid(frame, cells=4), node_rate=GeometryEvolution((law,)))
+
+
+def test_differentiation_retains_a_dynamic_quotient_domain():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_dynamic_domain").clock)
+    configuration = MovingConfiguration(
+        _grid(frame, cells=4), node_rate=GeometryEvolution((x + t + 0/(t - 0.5),)))
+    xi = configuration.reference_nodes()
+    np.testing.assert_array_equal(configuration.node_rate_at(xi, xi, 0.0), np.ones_like(xi))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        assert not np.isfinite(configuration.node_rate_at(xi, xi, 0.5)).any()
+
+
+def test_mapped_displacement_is_anchored_to_the_base_nodes():
+    frame = _frame()
+    x = coordinate(frame, frame.axes[0])
+    t = time(pops.Program("geometry_anchored_map").clock)
+    base = _grid(frame, cells=4)
+    law = x + x*(1 - x)*(0.3 + t)
+    configuration = MovingConfiguration(base, node_rate=GeometryEvolution((law,)))
+    xi = configuration.reference_nodes()
+    np.testing.assert_array_equal(configuration.base_nodes(), xi)
+    np.testing.assert_allclose(configuration.node_rate_at(xi, xi, 0.0), xi*(1-xi))
+    assert not np.array_equal(configuration.base_nodes(), evaluate(law, xi, 0.0))
+
+
 @pytest.mark.parametrize("form", ["expression", "map"])
 def test_the_members_are_the_state_of_a_block_with_one_rate(form):
     case, layout, values, configuration = build_members(form=form)
@@ -63,6 +195,42 @@ def test_the_members_are_the_state_of_a_block_with_one_rate(form):
     (initial,) = values.values()
     nodes = configuration.reference_nodes()
     np.testing.assert_array_equal(initial, np.stack((nodes[:-1], nodes[1:], np.diff(nodes))))
+
+
+def test_moving_trials_slice_without_relaxing_global_guard_refusal():
+    from pops.codegen.program_slicing import slice_program
+
+    case, layout, _, _ = build_members()
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    sliced = slice_program(plan.time, ("configuration",))
+    guards = [value for value in sliced._values if value.op == "acceptance_guard"]
+    assert len(guards) == 4
+    assert all(value.attrs["trial_site"]["variant"] == "NotAdmissible" for value in guards)
+    assert tuple(sliced._commits.values()) == (guards[-1],)
+    assert [value.inputs[0] for value in sliced._values if value.op == "source"] == guards[:-1]
+    assert not case._time._acceptance_guards
+
+    case, layout, _, _ = build_members(reject=True)
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    with pytest.raises(ValueError, match="does not support dt bounds or guards"):
+        slice_program(plan.time, ("configuration",))
+
+
+def test_layout_guard_composition_keeps_exact_strategies_and_unique_sites():
+    from dataclasses import replace
+
+    from pops.runtime._multi_layout_executor import _compose_transaction_plans
+    from pops.time import FixedDt
+
+    case, layout, _, _ = build_members()
+    plan = pops.resolve(pops.validate(case), layout=layout).time.transaction_plan()
+    ordinary = replace(plan, guards=())
+    assert _compose_transaction_plans((ordinary, ordinary)) is ordinary
+    assert _compose_transaction_plans((ordinary, plan)) == plan
+    with pytest.raises(ValueError, match="exact transaction strategy"):
+        _compose_transaction_plans((replace(ordinary, strategy=FixedDt(0.5)), plan))
+    with pytest.raises(ValueError, match="guard names must be unique"):
+        _compose_transaction_plans((plan, plan))
 
 
 def test_a_graded_base_gives_the_members_its_nodes_and_resolves_on_its_logical_grid():

@@ -8,6 +8,7 @@
 #include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/generated_step_bound.hpp>
 #include <pops/runtime/program/module_metadata.hpp>
 #include <pops/runtime/program/history_sample_identity_codec.hpp>
 #include <pops/runtime/system/exact_field_marshaling.hpp>
@@ -667,11 +668,46 @@ int System<Dim>::rebuild_history_slots(const std::string& name,
 // and installs the macro-step closure. The .so stays loaded for the process lifetime.
 template <int Dim>
 POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
+  install_program_image_(so_path, {}, 0);
+}
+
+template <int Dim>
+void System<Dim>::install_program_with_exchange_incidence(const std::string& so_path,
+                                                          const std::string& binary_identity,
+                                                          std::size_t authored_count) {
+  if (binary_identity.empty() || authored_count == 0 || n_ranks() != 1)
+    throw std::invalid_argument("exchange incidence requires the serial Program artifact identity");
+  install_program_image_(so_path, binary_identity, authored_count);
+}
+
+template <int Dim>
+std::vector<runtime::program::MountedExchangeIncidenceRow> System<Dim>::mounted_exchange_incidence()
+    const {
+  if (p_->exchange_incidence_generation_ != p_->program_.step_install_generation_ ||
+      p_->mounted_exchange_incidence_.empty())
+    throw std::runtime_error("installed Program has no complete exchange incidence authority");
+  return p_->mounted_exchange_incidence_;
+}
+
+template <int Dim>
+void System<Dim>::install_program_image_(const std::string& so_path,
+                                         const std::string& binary_identity,
+                                         std::size_t authored_count) {
   require_assembling(p_->lifecycle_,
                      "install_program");  // frozen once pops.bind completes (ADC-592)
+  std::shared_ptr<pops::dynlib::AuthenticatedNativeFile> authenticated_file;
+  if (!binary_identity.empty()) {
+    authenticated_file = std::make_shared<pops::dynlib::AuthenticatedNativeFile>(so_path);
+    if (authenticated_file->binary_identity() != binary_identity)
+      throw std::invalid_argument("exchange incidence Program binary differs from its artifact");
+  }
+  const auto open_program = [&] {
+    return authenticated_file ? pops::dynlib::open_private_image(authenticated_file->load_path())
+                              : pops::dynlib::open(so_path);
+  };
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
-  pops::dynlib::handle h = pops::dynlib::open(so_path);
+  pops::dynlib::handle h = open_program();
   if (!h) {
     throw std::runtime_error("System::install_program: LoadLibrary('" + so_path +
                              "'): " + pops::dynlib::last_error());
@@ -687,7 +723,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   }
   // The host must be visible to the package, but the package itself must remain local: generated
   // Programs deliberately reuse fixed ABI and C++ template names across semantic identities.
-  pops::dynlib::handle h = pops::dynlib::open(so_path);
+  pops::dynlib::handle h = open_program();
   if (!h) {
     throw std::runtime_error(
         "System::install_program: dlopen('" + so_path + "'): " + pops::dynlib::last_error() +
@@ -846,6 +882,29 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
       advance_output_scalar_counts.push_back(scalars);
     }
   }
+  // The step bound of a cells rule (N8 « dt= as a function of cell », D2): the generated entry
+  // that reduces the bound over this rank's cells, and its identity, both or neither.
+  using runtime::program::StepBoundReduction;
+  using advance_step_bound_t = int (*)(System<Dim>*, StepBoundReduction*);
+  using advance_step_bound_identity_t = const char* (*)();
+  auto advance_step_bound = reinterpret_cast<advance_step_bound_t>(
+      pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundEntrySymbol));
+  auto advance_step_bound_identity = reinterpret_cast<advance_step_bound_identity_t>(
+      pops::dynlib::sym(h, pops::runtime::program::kGeneratedStepBoundIdentitySymbol));
+  const bool legacy_step_bound =
+      pops::dynlib::sym(h, pops::runtime::program::kLegacyStepBoundEntrySymbol) != nullptr;
+  std::string step_bound_identity;
+  if (advance_step_bound || advance_step_bound_identity || legacy_step_bound) {
+    const char* identity = advance_step_bound_identity ? advance_step_bound_identity() : nullptr;
+    if (legacy_step_bound || !advance_attempts || !advance_step_bound || identity == nullptr ||
+        identity[0] == '\0') {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "System::install_program: Program declares a step bound without its complete entries; "
+          "regenerate the System artifact");
+    }
+    step_bound_identity = identity;
+  }
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   const std::string installed_hash = hash_fn ? std::string(hash_fn()) : std::string();
   auto install_boundaries = reinterpret_cast<void (*)(System<Dim>*)>(
@@ -970,6 +1029,7 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
   field_plan_registry candidate_field_plans;
   std::string candidate_boundary_contract;
   runtime::program::ProgramOwnedClockManifest candidate_auxiliary_clocks;
+  std::vector<runtime::program::MountedExchangeIncidenceRow> incidence;
   std::vector<runtime::program::ProgramCheckpointHistoryMetadata> candidate_history_metadata;
   std::exception_ptr boundary_preparation_error;
 
@@ -983,6 +1043,9 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     candidate_auxiliary_clocks =
         runtime::program::read_program_owned_clock_manifest(h, installed_hash);
     candidate_history_metadata = runtime::program::read_program_checkpoint_histories(h, true);
+    if (authenticated_file)
+      incidence =
+          runtime::program::read_exchange_incidence(h, program_block_map, authored_count, Dim);
     for (const auto& history : candidate_history_metadata)
       if (static_cast<std::size_t>(history.program_owner) >= program_block_map.size())
         throw std::invalid_argument("System Program history descriptor has a foreign block route");
@@ -1190,6 +1253,14 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     p_->program_.operator_authorities_ = operator_authorities;
     install(this);
     p_->program_.require_exact_artifact_step_install(*previous_install, "System::install_program:");
+    for (const auto& row : incidence) {
+      const auto initial = static_cast<double>(static_cast<Real>(std::get<13>(row)));
+      if (std::bit_cast<std::uint64_t>(initial) !=
+          std::bit_cast<std::uint64_t>(
+              p_->program_.accepted_exchanges_.integral_initial(std::get<3>(row))))
+        throw std::invalid_argument(
+            "exchange incidence initial differs from its installed declaration");
+    }
 
     p_->program_.block_map_ = std::move(program_block_map);
     p_->program_.block_params_.swap(installed_params);
@@ -1219,6 +1290,15 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     } else {
       p_->program_.advance_output_scalars_ = nullptr;
     }
+    if (!step_bound_identity.empty()) {
+      System<Dim>* self = this;
+      p_->program_.advance_step_bound_ = [self, advance_step_bound](StepBoundReduction* result) {
+        return advance_step_bound(self, result);
+      };
+    } else {
+      p_->program_.advance_step_bound_ = nullptr;
+    }
+    p_->program_.advance_step_bound_identity_ = std::move(step_bound_identity);
     p_->program_.artifact_backed_ = true;
 
     if (!p_->program_.artifact_field_boundary_baseline_)
@@ -1240,6 +1320,9 @@ POPS_EXPORT void System<Dim>::install_program(const std::string& so_path) {
     pops::dynlib::close(h);
     std::rethrow_exception(failure);
   }
+  p_->mounted_exchange_incidence_.swap(incidence);
+  p_->exchange_incidence_generation_ = p_->program_.step_install_generation_;
+  p_->installed_exchange_program_file_ = std::move(authenticated_file);
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
 // Scheduler-cache checkpoint/restart seam (ADC-458, Spec 3 section 30): the System owns the cache, so
@@ -1357,6 +1440,11 @@ template void System<kNativeDimension>::restore_history_slot_dt(const std::strin
 template int System<kNativeDimension>::rebuild_history_slots(const std::string&,
                                                              const std::vector<int>&);
 template void System<kNativeDimension>::install_program(const std::string&);
+template void System<kNativeDimension>::install_program_with_exchange_incidence(const std::string&,
+                                                                                const std::string&,
+                                                                                std::size_t);
+template std::vector<runtime::program::MountedExchangeIncidenceRow>
+System<kNativeDimension>::mounted_exchange_incidence() const;
 template std::vector<int> System<kNativeDimension>::program_cache_nodes() const;
 template std::string System<kNativeDimension>::program_cache_name(int) const;
 template int System<kNativeDimension>::program_cache_last_update_step(int) const;

@@ -39,16 +39,24 @@ import tempfile
 
 import numpy as np
 
+import pops
 import pops.runtime._engine_descriptors as engine
+from pops._ir.handle_expr import ValueExpr
+from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis, Tag
 from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
+from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
+from pops.model import Handle
 from pops.physics import Density, Energy, Momentum
 from pops.physics._facade import Model
+from pops.runtime._runtime_mesh_lowering import _flow_refinement_criterion
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
-from tests.python.support.explicit_program import install_forward_euler_program
+from tests.python.support.explicit_program import (
+    AMR_TEST_PROGRAM_CLOCK,
+    install_forward_euler_program,
+)
 from tests.python.support.initial_states import bubble_amr as _bubble
 from tests.python.support.physics_roles import X_AXIS, Y_AXIS
-from tests.python.support.amr_tagging import install_prepared_threshold_union
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -57,6 +65,7 @@ from tests.python.support.requirements import (
 )
 
 GAMMA = 1.4
+MODELSPEC_COMPONENTS = ("rho", "mx", "my", "E")
 # Independent Poisson, Roe and refusal phases have separate process test files.
 # The shared transport/HLLC/WENO5 package still performs several cold native compiles.
 POPS_PROCESS_TIMEOUT = 900
@@ -167,7 +176,7 @@ def _public_euler_poisson_plan(n, dt):
     threshold = case.param(RuntimeParam("density_refinement", default=1.2))
     layout = AMR(grid=CartesianGrid(frame=FRAME, cells=(n, n), periodic=PeriodicAxes(FRAME.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
-        tagging=AMRTagging(rules=(Tag(ValueExpr(block[state])["rho"] > case.value(threshold)),
+        tagging=AMRTagging(rules=(Tag(lambda cell: cell.value(ValueExpr(block[state])["rho"]) > case.value(threshold)),
                                  Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD), conflict_policy=ConflictPolicy.REFINE_WINS),
         regrid=AMRRegrid(schedule=every(4, clock=program.clock)), transfer=transfer,
@@ -257,7 +266,40 @@ def _transport_spec():
                         elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
-def _amr(n, L, branch, refine=1.2):
+def _install_gas_state_route(system, components):
+    model = pops.Model("dsl-amr-gas-state")
+    state = model.state("U", components=tuple(components))
+    case = pops.Case("dsl-amr-gas")
+    block = case.block("gas", model, states=(state,))
+    read = pops.validate(case).resolve(block[state])
+    system._s._install_block_state_route("gas", read.qualified_id)
+    return read
+
+
+def _density_criterion(read, refine):
+    density = ValueExpr(read)["rho"]
+
+    def admit_state(state: Handle) -> None:
+        if state is not read:
+            raise ValueError("foreign DSL AMR fixture state")
+
+    return resolve_refinement_criterion(
+        (("refine", Tag(lambda cell: cell.value(density) > refine).predicate),),
+        hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
+        conflict_policy=ConflictPolicy.REFINE_WINS,
+        dimension=2,
+        admit_state=admit_state,
+    )
+
+
+def _install_density_program(system, read, refine):
+    assert tuple(system._s.variable_names("gas", "conservative")) == read.space.components
+    criterion = _density_criterion(read, refine)
+    _flow_refinement_criterion(system._s, criterion, {}, clock_identity=AMR_TEST_PROGRAM_CLOCK)
+    install_forward_euler_program(system, criterion=criterion)
+
+
+def _amr(n, L, branch, refine=1.2, *, components):
     cfg = AmrSystemConfig()
     cfg.shape = (n, n)
     cfg.lower = (0.0, 0.0)
@@ -266,12 +308,12 @@ def _amr(n, L, branch, refine=1.2):
     cfg.regrid_every = 4
     s = AmrSystem(cfg)
     s.set_temporal_relations([2], [1], ["integral_only"])
+    read = _install_gas_state_route(s, components)
     branch(s)
-    install_prepared_threshold_union(s, (("gas", "rho", refine),))
     rho = np.asarray(_bubble(n), dtype=float)
     rho += 1.0 - float(rho.mean())
     s.set_conservative_state("gas", _euler_state(rho))
-    install_forward_euler_program(s)
+    _install_density_program(s, read, refine)
     # This advanced-runtime fixture assembles the native hierarchy directly, without pops.bind.
     # Seal its installed Program checkpoint budget before the first accepted-state publication.
     s._s.mark_bound()
@@ -343,11 +385,12 @@ def _parity_riemann(cm_t, spec_t, n, L, dt, riem, recon, label):
     """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
     R = _amr(n, L, lambda s: s.add_equation(
         "gas", cm_t,
-        spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
+        spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)),
+        components=cm_t.cons_names)
     S = _amr(n, L, lambda s: s.add_equation(
         "gas", spec_t,
         spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
-        time=engine.Explicit()))
+        time=engine.Explicit()), components=MODELSPEC_COMPONENTS)
     for _ in range(12):
         R.step(dt)
         S.step(dt)
@@ -395,10 +438,10 @@ def run_transport_parity(tmp, n=48):
     """Share the transport package across Rusanov, HLLC and WENO5 checks."""
     L = 1.0
     _, cm_t, spec_t = _compile_transport(tmp)
-    A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
+    A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t), components=cm_t.cons_names)
     B = _amr(n, L, lambda s: s.add_equation(
         "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-        time=engine.Explicit()))
+        time=engine.Explicit()), components=MODELSPEC_COMPONENTS)
     assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
     dt = 2e-4
     for _ in range(12):
@@ -421,13 +464,13 @@ def run_transport_parity(tmp, n=48):
     # Les routes production et ModelSpec doivent toutes deux construire une vraie hierarchie,
     # avancer, et rester finies. La selection native refuse tout fournisseur d'ordre inferieur.
     weno_systems = [
-        _amr(n, L, install)
-        for install in (
-            lambda s: _install_compiled_amr(s, cm_t, weno5=True),
-            lambda s: s.add_equation(
+        _amr(n, L, install, components=components)
+        for install, components in (
+            (lambda s: _install_compiled_amr(s, cm_t, weno5=True), cm_t.cons_names),
+            (lambda s: s.add_equation(
                 "gas", spec_t,
                 spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
-                time=engine.Explicit()),
+                time=engine.Explicit()), MODELSPEC_COMPONENTS),
         )
     ]
     for weno_system in weno_systems:
@@ -443,11 +486,11 @@ def run_transport_parity(tmp, n=48):
     E = AmrSystem(n=n, L=L, periodicity=(True, True))
     E.set_temporal_relations([2], [1], ["integral_only"])
     E.set_poisson("charge_density", "geometric_mg")
+    read = _install_gas_state_route(E, cm_t.cons_names)
     E.add_equation("gas", cm_t,
                    spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
-    install_prepared_threshold_union(E, (("gas", "rho", 1.2),))
     E.set_conservative_state("gas", _euler_state(_bubble(n)))
-    install_forward_euler_program(E)
+    _install_density_program(E, read, 1.2)
     E._s.mark_bound()
     for _ in range(4):
         E.step(dt)

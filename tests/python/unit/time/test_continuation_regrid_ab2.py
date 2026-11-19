@@ -20,10 +20,14 @@ def test_python_authors_both_field_transfers_and_the_parent_verdict(reject):
     program = build_continuation_regrid_amr(reject_regrid_parent=reject).case._time
     assert program.validate()
     source = emit_cpp_program(program, target="amr_system")
-    assert source.count("ctx.import_field_bundle(") == 2
+    # N10 lot 3b: the two Fields are read along Parent(r); no topology or bundle is authored.
+    assert source.count("ctx.regrid_read(") == 2
+    assert source.count("ctx.regrid_integral(") == 1
+    assert "pops_relayout_byte_count" in source
     assert "prepare_continuation_regrid_child" in source
     assert "install_continuation_regrid_graph" in source
     assert "continuation_child_dependencies" in source
-    assert "continuation_source_topology" in source
-    assert "continuation_target_topology" in source
+    assert "ctx.import_field_bundle(" not in source
+    assert "continuation_source_topology" not in source
+    assert "continuation_target_topology" not in source
     assert detach_compiled_program(program)._ir_hash() == program._ir_hash()

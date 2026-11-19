@@ -2,8 +2,9 @@
 
 The physical equation is q'=q.  Its deliberately simple spatial behavior makes
 the independent oracle exact while still requiring the old Field to move to a
-new fine layout.  The regrid law is periodic piecewise-constant injection from
-level zero; neither that choice nor AB2 is implemented by the native port.
+new fine layout.  The regrid law reads, at each target cell, its parent cell on
+level zero (``regrid_read``, the map Parent(r), periodic): piecewise-constant
+injection. The case chooses the source level; the runtime only copies.
 """
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ from pops import math as pm
 from pops.amr import (AMRExecution, AMRHierarchy, AMRRegrid, AMRTagging,
                       AMRTransfer, Buffer, ConflictPolicy, EqualityPolicy,
                       Hysteresis, Tag)
-from pops.bundles import BundleSchema
 from pops.continuations import Assess, Candidate, ContinuationSchema, accept, assess
 from pops.graph_functions import graph
 from pops.layouts import AMR
@@ -20,8 +20,7 @@ from pops.lib.amr import StateTransfer
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.params import RuntimeParam
 from pops.time import FixedDt, every
-from pops.time._program.distributed_arrays import Distributed
-from pops.time.variant_types import Bool, Float64, Int64, Product, Result, type_of
+from pops.time.variant_types import Bool, Int64, Product, type_of
 
 from .common import CaseSpec, non_owner_metrics
 from .methods_T01_T12 import _storage
@@ -66,55 +65,6 @@ def _approve(p, base, proposal, after, report, *, advancing, mass=False, reject=
                          checks=q.product(stage=q.int64(71 if reject else 0)))
 
     return p.require_success(accept(p, candidate, assess(p, candidate, Assess(assessment))))
-
-
-def _with_values(p, target, values):
-    raw = p.product(instance=target["instance"], fields=p.product(values=values),
-                    geometry=target["geometry"], maps=target["maps"], histories=target["histories"])
-    bindings = {("fields", "values"): "cells", ("maps", "patches"): "patches"}
-    for name in ("coordinates", "indices", "is_active", "is_covered", "is_valid",
-                 "measure", "volume_fraction"):
-        bindings[("geometry", name)] = "cells"
-    return BundleSchema(raw, domains={"cells": ("instance",),
-        "patches": ("maps", "patch_instance")}, bindings=bindings).bind(p, raw)
-
-
-def _injection(p, algebra, source, target, *, target_level, cells):
-    """Global target-to-source index map, written entirely in finite Python algebra."""
-    scale = p.branch(target_level == p.int64(0), lambda q: q.int64(1), lambda q: q.int64(2))
-
-    def source_index(q, index):
-        position = algebra.at_local(target["geometry"]["indices"], index)
-        x = (position["i0"]//scale) % q.int64(cells[0])
-        y = (position["i1"]//scale) % q.int64(cells[1])
-
-        def locate(b, found, patch):
-            inside = (_indicator(b, x >= patch["lo0"])*_indicator(b, x <= patch["hi0"])
-                      *_indicator(b, y >= patch["lo1"])*_indicator(b, y <= patch["hi1"])
-                      *b.branch(patch["is_replica"], lambda z: z.int64(0), lambda z: z.int64(1)))
-            width = patch["hi0"]-patch["lo0"]+1+2*patch["ghost0"]
-            offset = ((y-patch["lo1"]+patch["ghost1"])*width
-                      +x-patch["lo0"]+patch["ghost0"])
-            return b.branch(inside == b.int64(1), lambda z: patch["global_offset"]+offset,
-                            lambda z: found)
-
-        gid = q.reduce(source["maps"]["patches"], q.int64(-1), locate, order="ascending")
-        return algebra.index(source["instance"], gid)
-
-    requests = algebra.requests(target["instance"], source["instance"], source_index)
-    values = algebra.import_values(source["fields"]["values"], requests, byte_capacity=8*1024*1024)
-    return _with_values(p, target, values)
-
-
-def _bundle_mass(p, algebra, bundle):
-    def weighted(q, i):
-        value = algebra.at_local(bundle["fields"]["values"], i)["c0"]
-        measure = algebra.at_local(bundle["geometry"]["measure"], i)
-        return q.variant(Result(Float64, Int64), "ok", value*measure)
-    values = p.require_success(algebra.local_map(bundle["instance"], weighted,
-                                                byte_capacity=8*1024*1024))
-    return algebra.reduce(values, p.float64(0), lambda q, total, value: total+value,
-                          order="global_gid_ascending", byte_capacity=8*1024*1024)
 
 
 def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regrid_parent=False,
@@ -218,41 +168,18 @@ def build_continuation_regrid_amr(*, cells=(16, 8), dt=.1, steps=3, reject_regri
         return _approve(b, base, proposal, result, b.product(), advancing=True)
 
     def remap(b, proposal):
-        algebra = Distributed(b, storage_bytes=64*1024*1024, storage_versions=4096)
         source_level = b.int64(0)  # Explicit equation for this profile, not an engine default.
         base = b.regrid_base(source_level)
         old = b.continuation_read(base)
         source = b.regrid_source(source_level)
-        template = proposal["templates"]["field_0"]
-
-        def move(field, output_template, family=None):
-            old_view = b.regrid_topology(field, level=source_level, side="source", dimension=2)
-            exported = b.field_bundle(field, topology=old_view, cell_capacity=16384,
-                                       patch_capacity=256, family=family)
-            new_view = b.regrid_topology(output_template, level=proposal["level"],
-                                        side="target", dimension=2)
-            # Geometry comes from target storage.  An old retained Field is only
-            # an import type/provenance template; it is never read as new storage.
-            target = (b.field_bundle(output_template, topology=new_view, cell_capacity=16384,
-                                     patch_capacity=256, family=exported)
-                      if family is None else family)
-            transferred = _injection(b, algebra, exported, target,
-                                     target_level=proposal["level"], cells=cells)
-            return b.bundle_field(transferred, template=output_template, topology=new_view), transferred
-
-        current, bundle = move(source["state"], template)
-        if independent_previous:
-            previous_view = b.regrid_topology(source["previous"], level=proposal["level"],
-                                               side="target", dimension=2)
-            previous_storage = b.scalar_field(like=source["previous"], topology=previous_view,
-                                               initial=b.float64(0))
-            previous, _ = move(source["previous"], previous_storage)
-        else:
-            previous, _ = move(source["previous"], source["previous"], family=bundle)
+        # The law: each target cell reads its source cell along the map the regrid issues
+        # (Parent(r), the identity on level 0); the runtime allocates the new storage.
+        current = b.regrid_read(source["state"])
+        previous = b.regrid_read(source["previous"])
         result = b.product(state=current, previous=previous, time=old["time"], step=old["step"],
                            counter=old["counter"], controls=old["controls"])
         return _approve(b, base, proposal, result,
-            b.product(mass=_bundle_mass(b, algebra, bundle)), advancing=False)
+            b.product(mass=b.regrid_integral(current[0])), advancing=False)
 
     def remap_parent(b, base, proposal):
         entry = b.continuation_read(base)

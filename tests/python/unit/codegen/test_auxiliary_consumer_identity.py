@@ -446,7 +446,7 @@ def test_public_amr_shared_model_bind_if_native_available() -> None:
         grid=CartesianGrid(frame=frame, cells=(8, 8), periodic=PeriodicAxes(frame.axes)),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(ValueExpr(ions[state]) > case.value(refine_threshold)), Buffer(cells=1)),
+            rules=(Tag(lambda cell: cell.value(ValueExpr(ions[state])) > case.value(refine_threshold)), Buffer(cells=1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),

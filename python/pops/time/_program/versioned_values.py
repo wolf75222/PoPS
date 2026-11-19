@@ -27,7 +27,7 @@ from pops.time.variant_types import ValueType
 from pops.bundles import BUNDLE_OPS, validate_bundle_signature
 
 
-CAPABILITY_TYPES = frozenset(("field_topology", "continuation_base", "continuation_candidate",
+CAPABILITY_TYPES = frozenset(("continuation_base", "continuation_candidate",
                              "continuation_assessment", "continuation_accepted"))
 VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuation_freeze",
                           "continuation_candidate_value", "continuation_proposal",
@@ -45,7 +45,7 @@ VERSIONED_OPS = frozenset(("continuation_open", "continuation_read", "continuati
                           "continuation_regrid_source", "continuation_regrid_base",
                           "continuation_regrid_templates", "continuation_regrid_child_publish",
                           "continuation_regrid_parent_open", "continuation_regrid_parent_publish",
-                          "continuation_source_topology", "continuation_target_topology")) | BUNDLE_OPS
+                          "continuation_regrid_read", "continuation_regrid_integral")) | BUNDLE_OPS
 
 
 def _digest(value):
@@ -264,8 +264,6 @@ def _same(expected, actual, where):
 
 def validate_continuations(program, *, target=None):
     """Check the closed executable profile and unique root publication after deserialization too."""
-    from pops.time._program.field_representation import validate_field_representation_program
-    validate_field_representation_program(program)
     def walk(values):
         pending = list(reversed(values))
         keys = ("body_block", "cond_block", "true_block", "false_block", "apply_block", "residual_block")
@@ -323,8 +321,8 @@ def validate_continuations(program, *, target=None):
     publications = [value for value in values if value.op == "continuation_publish"]
     if len(opened) != 1 or opened[0].region or len(publications) != 1 or publications[0].region:
         raise ValueError("Continuation requires one initialization and one root publication")
-    from pops.graph_functions import _PURE, _COLLECTIVE
-    allowed = _PURE | _COLLECTIVE | VERSIONED_OPS | {
+    from pops._ir.effects import has_graph_contract
+    allowed = set(VERSIONED_OPS) | {
         "state", "requested_dt", "reached_duration", "history", "store_history"}
     if forest is not None:
         allowed |= {"post_synchronization", "composite_integral", "composite_pair", "attempt_start"}
@@ -357,7 +355,7 @@ def validate_continuations(program, *, target=None):
         # Their own provider/lowerability contracts still run after this check.
         # History stores retain their top-level effect contract; the enclosing
         # System attempt owns them together with the continuation image.
-        if value.op not in allowed and forest is None:
+        if value.op not in allowed and not has_graph_contract(value.op) and forest is None:
             raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
         if value.op == "reached_duration" and value.id > publications[0].id:
             raise ValueError("reached duration must precede the complete continuation publication")

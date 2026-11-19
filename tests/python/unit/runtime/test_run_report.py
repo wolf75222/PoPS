@@ -50,6 +50,9 @@ def test_public_run_returns_exact_immutable_report():
     assert report.bind_identity == plan.bind_identity
     assert report.execution_identity == plan.execution_context.identity
     assert report.artifact_identity == plan.artifact.artifact_identity
+    # N11 lot 2b-i (CC2, CN9): the report names the compiled Program by its program_id.
+    assert report.program_id == plan.artifact.program_id
+    assert report.program_id.domain == "program"
     assert report.to_data() == {
         "accepted_steps": 2,
         "rejected_steps": 0,
@@ -60,6 +63,7 @@ def test_public_run_returns_exact_immutable_report():
         "bind_identity": report.bind_identity.to_data(),
         "execution_identity": report.execution_identity.to_data(),
         "artifact_identity": report.artifact_identity.to_data(),
+        "program_id": report.program_id.to_data(),
         "field_providers": [],
     }
     with pytest.raises(FrozenInstanceError):

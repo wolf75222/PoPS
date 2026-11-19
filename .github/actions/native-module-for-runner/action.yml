@@ -42,6 +42,21 @@ runs:
         --summary "$GITHUB_STEP_SUMMARY"
         --receipt "$RUNNER_TEMP/pops-ci-native-runner-check-dim${{ inputs.dimension }}.json"
 
+    # actions/cache ne retrouve une entree que sous le meme chemin litteral que sa sauvegarde (la
+    # version du cache en derive) : gate-python-build sauve ${{ env.CCACHE_DIR }} = .ccache-py. On
+    # restaure donc sous ce chemin, puis on deplace vers le repertoire propre a la dimension ; un
+    # .ccache-py deja present dans ce job est mis de cote et remis a sa place.
+    - name: Set aside this job's ccache before the Dim${{ inputs.dimension }} build ccache
+      if: steps.check.outputs.rebuild == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        aside="$RUNNER_TEMP/pops-ci-ccache-py-aside-dim${{ inputs.dimension }}"
+        rm -rf "$aside"
+        if [ -e "${{ github.workspace }}/.ccache-py" ]; then
+          mv "${{ github.workspace }}/.ccache-py" "$aside"
+        fi
+
     # Cle de sauvegarde du job gate-python-build (CCACHE_CACHE_KEY) : meme run d'abord, puis la
     # branche, puis master. Un ccache ne sert qu'a accelerer : chaque hit est adresse par le contenu
     # exact des en-tetes lus, donc un en-tete systeme change donne un miss, jamais un objet perime.
@@ -49,7 +64,7 @@ runs:
       if: steps.check.outputs.rebuild == 'true'
       uses: actions/cache/restore@v6
       with:
-        path: ${{ github.workspace }}/.ccache-module-dim${{ inputs.dimension }}
+        path: ${{ github.workspace }}/.ccache-py
         key: ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           ccache-${{ runner.os }}-python-build-dim${{ inputs.dimension }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-
@@ -70,6 +85,11 @@ runs:
         set -euo pipefail
         dim="${{ inputs.dimension }}"
         package_dir="${{ inputs.package-dir }}"
+        # Hand the restored build ccache to this dimension, then give the job its own back.
+        rm -rf "$CCACHE_DIR"
+        if [ -d .ccache-py ]; then mv .ccache-py "$CCACHE_DIR"; else mkdir -p "$CCACHE_DIR"; fi
+        aside="$RUNNER_TEMP/pops-ci-ccache-py-aside-dim${dim}"
+        if [ -e "$aside" ]; then mv "$aside" .ccache-py; fi
         pip install --upgrade pip numpy pytest
         # Same configure line as gate-python-build: preset, linker, Dim, TU pool and path map.
         rm -rf build-kokkos-py

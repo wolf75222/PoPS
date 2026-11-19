@@ -33,6 +33,7 @@ def model_artifact_spec(
     from pops.identity import artifact_spec_identity, make_identity
 
     from pops.codegen.model_compile_evidence import codegen_source_authority
+    from pops.codegen._checkpoint_provenance import model_cache_components
 
     digest = str(model_hash(model))
     wave_speeds = getattr(model, "_ws_jacobian", {}) or {}
@@ -51,6 +52,7 @@ def model_artifact_spec(
         },
         components={
             **native_compiler_command_contract(compiler),
+            **model_cache_components(target),
             "codegen_source_authority": codegen_source_authority(),
             "model_hash": digest,
             "emitted_name": str(name or ""),
@@ -155,4 +157,39 @@ def program_artifact_spec(
     return semantic, spec
 
 
-__all__ = ["model_artifact_spec", "program_artifact_spec"]
+def program_toolchain_evidence(
+    *, target: str, abi_key: str, compiler: str, standard: str, cflags: Any, lflags: Any,
+    optflags: Any, libraries: Any, native_components: Any = (), native_dimension: int,
+    toolchain_capture: Any = None,
+) -> dict[str, Any]:
+    """The compile choices of one Program that enter ``program_id`` (CC2, CN9; N11 lot 2b).
+
+    Every member of :func:`program_artifact_spec` except the generated source, its source map
+    and the Program entry name, which carry presentation names until name-free emission (lot 2c),
+    and except the semantic identity, which ``program_id`` takes from the resolved plan.
+    """
+    from pops.codegen.cache import _precision_cache_key, _registry_cache_key
+    from pops.codegen.toolchain import _native_feature_key, native_compiler_command_contract
+
+    return {
+        "schema_version": 1,
+        "target": target,
+        "backend": "production",
+        "precision": _precision_cache_key(),
+        "abi": abi_key,
+        "toolchain": "%s|%s" % (compiler, standard),
+        "routes": {"registry": _registry_cache_key(), "features": _native_feature_key()},
+        "compiler_contract": native_compiler_command_contract(compiler),
+        "native_dependency_contract": (
+            "compiler-observed-sdk-metadata-v2" if toolchain_capture is not None
+            else "compiler-observed-v1"),
+        "native_toolchain_metadata": (
+            None if toolchain_capture is None else toolchain_capture.to_data()),
+        "prepared_native_components": list(native_components),
+        "native_dimension": native_dimension,
+        "flags": [*optflags, *cflags, *lflags],
+        "libraries": [manifest.content_hash for manifest in libraries],
+    }
+
+
+__all__ = ["model_artifact_spec", "program_artifact_spec", "program_toolchain_evidence"]

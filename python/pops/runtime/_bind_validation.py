@@ -759,6 +759,10 @@ def run_bind_gates(
             validate_bound_initial_values(manifest, arguments, layout, initial_values),
         ),
     ]
+    if type(compiled) is CompiledSimulationArtifact:
+        from pops.codegen._moving_members_consumers import moving_geometry_bind_failures
+        groups.append(("moving-geometry", moving_geometry_bind_failures(
+            compiled.plan.blocks, initial_values or {}, execution_context)))
     message = aggregate_bind_refusals(groups)
     if message is not None:
         raise ValueError(message)

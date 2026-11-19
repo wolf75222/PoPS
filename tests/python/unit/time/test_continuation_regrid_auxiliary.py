@@ -27,5 +27,7 @@ def test_auxiliary_history_and_explicit_target_allocation_resolve_and_emit():
     assert tuple(metadata["level_schema"]["retained_fields"]) == (("previous",),)
     graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks, scalar_layout_plan=resolved.layout_plan)
     source = emit_cpp_program(resolved.time, model_graph=graph, target="amr_system")
-    assert source.count("ctx.allocate_field_storage(") == 1
-    assert source.count("ctx.import_field_bundle(") == 2
+    # N10 lot 3b: both Fields are read along Parent(r); the runtime allocates the target storage.
+    assert source.count("ctx.regrid_read(") == 2
+    assert source.count("ctx.regrid_integral(") == 1
+    assert "ctx.allocate_field_storage(" not in source and "ctx.import_field_bundle(" not in source

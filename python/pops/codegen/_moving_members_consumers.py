@@ -10,18 +10,10 @@ are refused at resolution, before any C++, by name and with the lot that serves 
   lot T (note §7.9, ruling B2);
 - a hierarchy of levels, and so its regrid: the transfer of a geometry under regrid is G11's
   (note §7.7, ruling C1).
-
-The other blocks of such a case are balances on the moving cells (G03 lot M1b):
-
-- each holds its state as cell totals (``cell_total(1)``): an average on a moving cell is not
-  served, the case writes ``represent={U: pops.CellTotal()}``, or an accumulation of lot A;
-- its rate is ``moving_total_rate`` (``MovingMembers.transport``); a static face pass (a native rate,
-  a diffusion, a stencil flux, a principal or coupled rate) reads the spacing of the base, not the
-  members, and is refused;
-- the face of ``moving_total_rate`` is first order and Rusanov, of a FiniteVolume rate.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pops.time._program.traced_method import NotYetElaborated
@@ -41,25 +33,175 @@ def member_blocks(plan: Any) -> tuple[Any, ...]:
     return tuple(block for block in plan.blocks if members_of(block.model) is not None)
 
 
-# The rates whose face pass reads the static spacing of the base.
-def _static_face_ops() -> frozenset:
-    from pops.time._program.stencil_flux import OPERATION as STENCIL
-    return frozenset({"rhs", "diffusive_rhs", STENCIL, "principal_rate", "coupled_rate"})
+def lower_moving_member_guards(program: Any, blocks: Any) -> Any:
+    """Check physical geometry before evaluating its rate and before publishing the candidate."""
+    from contextlib import nullcontext
+
+    from pops.mesh.moving_configuration import MEMBER_COMPONENTS, MOTION_SOURCE, members_of
+    from pops.time._evaluation_point import evaluation_partition
+    from pops.time._program.control import AdvanceControl
+    from pops.time._program.moving_total_rate import OPERATION, member_source
+    from pops.time._step.strategy import FixedDt
+    from pops.time.references import canonical_handle
+
+    geometries = {
+        identity: members for block in blocks if (members := members_of(block.model)) is not None
+        for identity in block.state_identities
+    }
+    if not geometries or type(program._step_strategy) is not FixedDt:
+        return program
+    volume_component = MEMBER_COMPONENTS.index("volume")
+    trial_sites: list[dict[str, Any]] = []
+    guarded_rates: dict[int, tuple[int, Any]] = {}
+
+    def geometry_of(state: Any) -> Any:
+        return None if state is None else geometries.get(canonical_handle(state).qualified_id)
+
+    def admit(out: Any, value: Any, condition: Any, name: str) -> Any:
+        site = {"site": name, "variant": "NotAdmissible", "retry_can_change": False}
+        result = out._trial_guard(name, value, condition, site)
+        trial_sites.append({**site, "guard": "admissibility", "classified": True, "lot": None})
+        return result
+
+    def guard(out: Any, value: Any, name: str) -> Any:
+        volume = out._new("scalar", "reduce", (value,),
+                          {"kind": "min", "comp": volume_component}, None, value.block)
+        finite = out.isfinite(out.norm_inf_all(value))
+        return admit(out, value, finite & (volume > 0), name)
+
+    def guard_rate_domain(out: Any, node: Any, value: Any, members: Any) -> Any:
+        reads_motion = ((node.op == "source" and node.attrs["source"] == MOTION_SOURCE)
+                        or (node.op == "rhs" and (
+                            node.attrs.get("sources") is None
+                            or MOTION_SOURCE in node.attrs["sources"])))
+        if not reads_motion or members.rate_domain is None:
+            return value
+        partition = node.attrs.get("evaluation_partition")
+        if partition is None and "explicit" in getattr(node.point, "partitions", ()):
+            partition = "explicit"
+        with (nullcontext() if partition is None else evaluation_partition(out, partition)):
+            status = out.transform(value, transform=members.rate_domain)
+        return admit(out, value, out.min(status) > 0, "moving rate domain stage %d" % node.id)
+
+    def guard_rate(out: Any, node: Any, inputs: list[Any]) -> list[Any]:
+        # Equations evaluate their input as physical geometry. Method arithmetic can also
+        # represent increments with the State role, so those edges carry no admissibility check.
+        if node.op == OPERATION:
+            source = member_source(node.inputs[2])
+            record = guarded_rates.get(source.id)
+            if record is None or record[0] != node.inputs[1].id:
+                raise ValueError("moving total rate lost its exact geometry at guard lowering")
+            return [inputs[0], record[1], inputs[2]]
+        support_only = node.attrs.get("support_only_inputs", ())
+        if node.op in {"source", "rhs", "pointwise_expression", "solve_implicit_source"}:
+            checked = []
+            for index, value in enumerate(inputs):
+                members = geometry_of(value.state_ref)
+                if index not in support_only and value.vtype == "state" and members is not None:
+                    value = guard(out, value, "moving geometry stage %d/%d" % (node.id, index))
+                    if index == 0:
+                        value = guard_rate_domain(out, node, value, members)
+                        if node.op == "source" and node.attrs["source"] == MOTION_SOURCE:
+                            guarded_rates[node.id] = (node.inputs[0].id, value)
+                checked.append(value)
+            return checked
+        return inputs
+
+    def guard_commit(out: Any, state: Any, value: Any) -> Any:
+        if geometry_of(state) is not None:
+            return guard(out, value, "moving geometry commit %d" % value.id)
+        return value
+
+    guarded = program._rebuild(lambda _: True, inputs_of=guard_rate, commit_value=guard_commit)
+    control = guarded._advance_control
+    if control is not None:
+        guarded._advance_control = AdvanceControl(
+            assessments=control.assessments, max_attempts=control.max_attempts,
+            max_transforms=control.max_transforms, first_dt=control.first_dt,
+            outputs=control.outputs, memory=control.memory, step_rule=control.step_rule,
+            trial_failures=(*control.trial_failures, *trial_sites),
+        )
+    guarded.validate()
+    guarded.freeze()
+    return guarded
 
 
-STATIC_FACE_OPS = _static_face_ops()
+def moving_geometry_bind_failures(
+    blocks: Any, initial_values: Mapping[Any, Any], execution_context: Any,
+) -> list[str]:
+    """Report invalid member arrays before native installation, collectively under MPI."""
+    import numpy as np
+
+    component_by_id = {
+        identity: block.moving_volume_component
+        for block in blocks if block.moving_volume_component is not None
+        for identity in block.state_identities
+    }
+    if not component_by_id:
+        return []
+    rejected = []
+    for handle, array in initial_values.items():
+        identity = handle.qualified_id
+        component = component_by_id.get(identity)
+        if (component is not None and isinstance(array, np.ndarray) and array.dtype.kind == "f"
+                and array.ndim >= 2 and array.shape[0] > component
+                and (not np.isfinite(array).all() or not (array[component] > 0).all())):
+            rejected.append(identity)
+    if execution_context is not None and execution_context.communicator.identity != "serial":
+        from pops._native_collectives import allgather_value
+
+        rows = allgather_value(execution_context.communicator.handle, tuple(rejected))
+        rejected = [identity for row in rows for identity in row]
+    return ["%s failed: NotAdmissible (geometry must be finite and cell volumes positive)"
+            % identity for identity in sorted(set(rejected))]
+
+
+def moving_geometry_values(plan: Any, values: Any) -> frozenset[int]:
+    """Find operations confined to one geometry, including its compiler-generated predicates."""
+    from pops.time._program.moving_total_rate import OPERATION
+    from pops.time.references import canonical_handle
+
+    geometry_blocks = {block.name for block in member_blocks(plan)}
+    if not geometry_blocks:
+        return frozenset()
+    owners = {canonical_handle(row.subject).qualified_id
+              for row in plan.layout_plan.assignments if row.subject_kind == "block"
+              and row.subject.local_id in geometry_blocks}
+    dependencies: dict[int, frozenset[str]] = {}
+    users: dict[int, list[tuple[Any, int]]] = {}
+    for value in values:
+        for index, source in enumerate(value.inputs):
+            users.setdefault(source.id, []).append((value, index))
+
+    def sources(value: Any) -> frozenset[str]:
+        if value.id not in dependencies:
+            block = value.block
+            local = set() if block is None else {canonical_handle(block).qualified_id}
+            inherited = frozenset().union(*(sources(source) for source in value.inputs))
+            dependencies[value.id] = inherited | local
+        return dependencies[value.id]
+
+    owned = {value.id for value in values if len(sources(value)) == 1 and sources(value) <= owners}
+    return frozenset(vid for vid in owned if all(
+        other.id in owned or (other.op == OPERATION and index in (1, 2))
+        for other, index in users.get(vid, ())
+    ))
 
 
 def validate_moving_member_consumers(plan: Any) -> None:
-    """Refuse a step rule and a hierarchy on a case that holds a moving configuration, and every
-    balance on it that is not a total transported by ``moving_total_rate``."""
+    """Refuse a step rule and a hierarchy on a case that holds a moving configuration."""
     from pops.time._step.strategy import FixedDt
+
+    from pops.codegen.program_lowerability import all_ops
+    from pops.time._program.moving_total_rate import OPERATION
 
     blocks = member_blocks(plan)
     if not blocks:
+        if plan.time is not None and any(value.op == OPERATION for value in all_ops(plan.time)):
+            raise MovingMembersNotYetElaborated(
+                "moving_members_owner", "moving total transport requires an installed configuration")
         return
     name = blocks[0].name
-    _validate_balances(plan, {block.name for block in blocks})
     if any(target == "amr_system" for target in plan.layout_targets.values()):
         raise MovingMembersNotYetElaborated(
             "moving_regrid",
@@ -79,8 +221,10 @@ def validate_moving_member_consumers(plan: Any) -> None:
             "state, not the current spacing and |lambda - w.n|; write dt= a fixed step until "
             "G03 lot T" % (name, type(strategy).__name__))
 
+    _validate_balances(plan, {block.name: block for block in blocks})
 
-def _validate_balances(plan: Any, members: set) -> None:
+def _validate_balances(plan: Any, members: dict[str, Any]) -> None:
+    from pops._ir.effects import EFFECTS
     from pops.codegen._cell_total_consumers import total_blocks
     from pops.codegen.program_lowerability import all_ops
     from pops.time._program.moving_total_rate import OPERATION
@@ -100,7 +244,8 @@ def _validate_balances(plan: Any, members: set) -> None:
         block = getattr(value.block, "local_id", None)
         if block is None or block in members:
             continue
-        if value.op in STATIC_FACE_OPS:
+        effect = EFFECTS.get(value.op)
+        if effect is not None and (effect.static_face or effect.cell_total == "density-rate"):
             raise MovingMembersNotYetElaborated(
                 "moving_static_face",
                 "the rate %r of block %r is a static face pass (%s), which reads the spacing of "
@@ -111,14 +256,30 @@ def _validate_balances(plan: Any, members: set) -> None:
             _validate_face(plan, value, block, members)
 
 
-def _validate_face(plan: Any, value: Any, block: str, members: set) -> None:
-    """The members of a moving total rate, and its face: FiniteVolume, first order, Rusanov."""
+def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -> None:
+    """Resolve the exact co-located members and the physical face operator."""
+    from pops.mesh.moving_configuration import members_of
     from pops.numerics.spatial import FiniteVolume
+    from pops.time.references import canonical_handle
 
-    if getattr(value.attrs.get("members_block"), "local_id", None) not in members:
-        raise ValueError("the moving total rate %r reads a block that holds no moving "
-                         "configuration" % value.name)
+    member_block = value.attrs.get("members_block")
+    owner = members.get(getattr(member_block, "local_id", None))
+    geometry = value.attrs.get("members_state")
+    if owner is None or geometry is None or geometry.qualified_id not in owner.state_identities:
+        raise MovingMembersNotYetElaborated(
+            "moving_members_owner", "the moving total rate reads no installed owner of the moving members")
     (resolved,) = [item for item in plan.blocks if item.name == block]
+    state = canonical_handle(value.inputs[0].state_ref)
+    if state.qualified_id not in resolved.state_identities or not resolved.numerics.cell_total_states():
+        raise MovingMembersNotYetElaborated(
+            "moving_total_storage", "moving total transport requires the exact CellTotal state")
+    layout = plan.layout_plan.layout_for(canonical_handle(value.block))
+    geometry_layout = plan.layout_plan.layout_for(canonical_handle(member_block))
+    declared = members_of(owner.model)
+    if (layout != geometry_layout or declared is None or resolved.numerics.interfaces
+            or plan.layout_plan.normalized(layout).geometry != declared.configuration.layout.normalized_geometry()):
+        raise MovingMembersNotYetElaborated(
+            "moving_layout", "the totals and moving members require their co-located layout without interfaces")
     handle = value.attrs["operator_handle"]
     rows = [row for row in resolved.numerics.rates
             if row.rate.registered_operator_name == handle.registered_operator_name]
@@ -139,5 +300,5 @@ def _validate_face(plan: Any, value: Any, block: str, members: set) -> None:
             "speeds, a later G03 lot" % (value.name, error)) from error
 
 
-__all__ = ["MovingMembersNotYetElaborated", "STATIC_FACE_OPS", "member_blocks",
-           "validate_moving_member_consumers"]
+__all__ = ["MovingMembersNotYetElaborated", "lower_moving_member_guards", "member_blocks",
+           "moving_geometry_bind_failures", "validate_moving_member_consumers"]

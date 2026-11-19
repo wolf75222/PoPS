@@ -1,5 +1,5 @@
 """Typed refusals of the region analyses (spec 0.3 IR13, IR17, IR19, IR21, D5, R7, the refusal table
-of §14.1).
+of §14.1), and of the elaboration of a named body (IR6).
 
 Each refusal names the phase that raises it and what it refuses: a region refusal names the
 region and the first map, coefficient or construct that blocks it, a coverage refusal the term,
@@ -80,6 +80,23 @@ class GeneralAccessOnPatches(RegionRefusal, TypeError):
     """
 
     rule = "DM5"
+    phase = "tracing"
+
+    def __init__(self, message, *, region, op):
+        self.op = op
+        super().__init__(message, region=region, blocking=op)
+
+
+class HierarchyInstancesMixed(RegionRefusal):
+    """DM2: a pointwise operation of a regrid child mixes a field over H and a field over H′.
+
+    A regrid child reads its sources over the hierarchy H that the regrid replaces and writes its
+    targets over H′ (N10 lot 3, addendum §5). The two spaces have equal shapes, so the builder
+    accepted the mix, but the lowering pairs the boxes of two different layouts. A source field
+    reaches a target only through ``regrid_read``.
+    """
+
+    rule = "DM2"
     phase = "tracing"
 
     def __init__(self, message, *, region, op):
@@ -173,6 +190,24 @@ class TermNotAdditive(ValueError):
                          % (type(self).__name__, self.rule, self.phase, message, held, where))
 
 
+class RecursiveGraphFunction(ValueError):
+    """A named body whose elaboration reaches its own elaboration again (IR6, §14.1).
+
+    ``cycle`` holds (name, Python origin) for each elaboration of the cycle, the first and the last
+    naming the same definition. A recursion is written as ``iterate``.
+    """
+
+    rule = "IR6"
+    phase = "validate"
+
+    def __init__(self, cycle: tuple) -> None:
+        self.cycle = tuple(cycle)
+        path = " -> ".join("%s (%s)" % (name, origin) for name, origin in self.cycle)
+        super().__init__("RecursiveGraphFunction (IR6, validate): %s reaches its own elaboration "
+                         "again: %s; a recursion is written as iterate" % (self.cycle[0][0], path))
+
+
 __all__ = ["ClassNotReached", "ConservationNotStructural", "CoverageNotExact",
-           "DeliveryNotStructural", "GeneralAccessOnPatches", "PropertyNotDerived",
-           "RegionRefusal", "ScheduleIllegal", "TermNotAdditive"]
+           "DeliveryNotStructural", "GeneralAccessOnPatches", "HierarchyInstancesMixed",
+           "PropertyNotDerived", "RecursiveGraphFunction", "RegionRefusal", "ScheduleIllegal",
+           "TermNotAdditive"]

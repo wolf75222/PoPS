@@ -282,19 +282,28 @@ def _emit_contiguous_rhs_group(
         lines: list[str], group_identity: int, target: Any = "system", model: Any = None) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index, _rhs_flux_temporal_family
+    from pops.codegen.program_emit_totals import decode_total_rate_input, encode_total_rate_output
 
     stage = _stage_fraction(values[0])
     lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
     requests = []
+    rate_inputs: dict[int, str] = {}
+    total_rates: set[int] = set()
     from .program_source_map import operation, operation_group
     for value in values:
         with operation(value, lines, environment=var, channel="rhs_group_preparation"):
             state = value.inputs[0]
-            var[value.id] = "r%d" % value.id
-            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
-                         % (var[value.id], int(value.id), var[state.id]))
             index = _required_block_index(
                 block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+            density = decode_total_rate_input(
+                value, var[state.id], lines, model=model, block=index)
+            if density is not None:
+                total_rates.add(value.id)
+            rate_input = density if density is not None else var[state.id]
+            rate_inputs[value.id] = rate_input
+            var[value.id] = "r%d" % value.id
+            lines.append("pops::MultiFab<pops::kNativeDimension>& %s = ctx.rhs_scratch(%d, 0, %s);"
+                         % (var[value.id], int(value.id), rate_input))
             requested = value.attrs.get("sources")
             default_source = requested is None or "default" in requested
             family = (
@@ -304,14 +313,14 @@ def _emit_contiguous_rhs_group(
             from pops.codegen.program_models import model_for_node
             from pops.codegen.program_emit_kernels import prepare_default_rhs_providers
             lines += prepare_default_rhs_providers(
-                model_for_node(model, value), value, index, var[state.id],
+                model_for_node(model, value), value, index, rate_input,
                 var.get(("program_provider_plans",)), target=target,
                 flux=True, source=default_source)
             from pops.codegen.program_transport_quadrature import declare_transport_faces
             faces = declare_transport_faces(value, model_for_node(model, value), var, lines)
             capture = "" if faces is None else ", &"+faces
             from pops.codegen.program_rhs_input_trace import emit_rhs_input_trace
-            input_trace = emit_rhs_input_trace(value, index, var[state.id], lines, target)
+            input_trace = emit_rhs_input_trace(value, index, rate_input, lines, target)
             var[("rhs_input_trace", value.id)] = input_trace
             trace = ""
             if input_trace is not None:
@@ -319,7 +328,7 @@ def _emit_contiguous_rhs_group(
                     capture = ", nullptr"
                 trace = ", " + input_trace
             requests.append("{%d, &%s, &%s, %d, %d%s%s%s}" % (
-                index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1,
+                index, rate_input, var[value.id], int(value.id), 0 if default_source else 1,
                 family, capture, trace))
     from .program_value_authority import begin_value_write_cpp, complete_value_cpp
     for value in values:
@@ -331,7 +340,12 @@ def _emit_contiguous_rhs_group(
     if model is not None:
         for value in values:
             emit_transport_frequency(value, var, lines, model=model_for_node(model, value),
-                                     block_index=block_idx[value.block], target=target)
+                                     block_index=block_idx[value.block], target=target,
+                                     state=rate_inputs[value.id])
+    for value in values:
+        if value.id in total_rates:
+            with operation(value, lines, environment=var, channel="rhs_group_total_encoding"):
+                encode_total_rate_output(var[value.id], lines)
     for value in values:
         lines.extend(complete_value_cpp(value, var))
 
@@ -523,7 +537,8 @@ def _chunk_step_body(lines, boundaries):
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
-               provider_plans: Any = None, value_authority: Any = None) -> tuple:
+               provider_plans: Any = None, value_authority: Any = None,
+               exchange_metadata: list[str] | None = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
@@ -687,6 +702,13 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     rhs_plan = plan_rhs_coherence(program, values, model=model)
     rhs_schedule = rhs_plan.schedule
     rhs_grouped = rhs_plan.grouped_ids
+    from .program_owned_guard_fold import emit_owned_guard_fold, owned_guard_folds
+    guard_folds = {
+        start: fold for start, fold in owned_guard_folds(program, values, var).items()
+        if not any(position in rhs_schedule for position in range(start + 1, start + len(fold.prefix) + 1))
+    } if target == "system" else {}
+    if guard_folds:
+        prelude.insert(0, "const bool owned_guard_host_lane = ctx.prepare_owned_guard_host_lane();")
     # Top-level operation boundaries where the step body may continue in a new native function.
     chunk_boundaries = []
     while index < len(values):
@@ -707,6 +729,11 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         if v.id in rhs_grouped or v.op == "post_synchronization":
             index += 1
             continue
+        if index in guard_folds:
+            fold = guard_folds[index]
+            emit_owned_guard_fold(fold, program, var, model, lines, block_idx)
+            index += len(fold.prefix)
+            v = fold.guard
         if target == "amr_system" and v.op in ("branch", "structured_fold", "capture_result", "structured_iterate") and has_suspension(v):
             from .program_source_map import operation
             with operation(v, lines, prelude, environment=var):
@@ -812,8 +839,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     lines.extend(emit_accepted_stencil_exchanges(program, var, block_idx, target=target))
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
-    from .program_integral_transfers import emit_integral_transfers
-    integral_transfers = emit_integral_transfers(program, var, model_authority=model)
+    from .program_integral_transfers import integral_transfers
+    transfer_rows = integral_transfers(program, var, model_authority=model)
+    integral_transfers = [row.cpp(program) for row in transfer_rows]
     if target == "system":
         lines.extend(integral_transfers)
     # Continuation mode publishes its complete native image and generated carrier projections.
@@ -858,7 +886,15 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     post_sync_src = "\n".join("        " + ln for ln in post_sync_lines)
     authorities = tuple(dict.fromkeys(
         var.get(("compiled_program_operator_authorities",), ())))
+    # A root table cannot describe repeated or deferred consumption in a nested region.
+    if (exchange_metadata is not None and target == "system" and transfer_rows
+            and not continuation_closers and not legacy_path_prefix
+            and len(transfer_rows) == len(program._integral_transfers)
+            and not any(value.op == "subcycle" for value in all_ops(program))):
+        from .program_integral_transfers import emit_uniform_exchange_incidence
+        exchange_metadata.append(emit_uniform_exchange_incidence(program, transfer_rows))
     return prelude_src, body_src, post_sync_src, authorities
+
 
 def _emit_post_synchronization_phase(
     program: Any,
@@ -1286,7 +1322,7 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
     from pops.time._program.versioned_values import CAPABILITY_TYPES
 
-    if (is_finite_index(v) or v.vtype in ("product", "variant", "int64", "result", "field_topology")
+    if (is_finite_index(v) or v.vtype in ("product", "variant", "int64", "result")
             or v.vtype in CAPABILITY_TYPES
             or v.inputs[0].op == "variant_is" or var.get(("structured_control",), False)):
         from .program_emit_structured_control import emit_structured_branch

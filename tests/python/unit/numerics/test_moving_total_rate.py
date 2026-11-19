@@ -86,3 +86,51 @@ def test_a_step_rule_on_a_transported_total_is_refused_naming_lot_t():
     with pytest.raises((CellTotalNotYetElaborated, MovingMembersNotYetElaborated),
                        match="G03 lot T"):
         pops.resolve(pops.validate(case), layout=layout)
+
+
+@pytest.mark.parametrize("change", ["scaled", "negated", "retimed"])
+def test_a_member_rate_alias_must_preserve_its_exact_value_and_stage(change):
+    case, _, _, geometry = build_transport()
+    program = case._time
+    original = next(value for value in all_ops(program) if value.op == OPERATION)
+    total, member, member_rate = original.inputs
+    owner = geometry.declared
+    assert owner is not None
+    if change == "retimed":
+        changed = program.value(change, member_rate, at=program.stage("later", c=1 / 3))
+    else:
+        coefficient = 2 if change == "scaled" else -1
+        changed = program.value(change, coefficient * member_rate, at=member_rate.point)
+    transport = owner.transport(original.attrs["operator_handle"])
+    with pytest.raises(ValueError, match="rate of its members"):
+        transport(total, member, changed)
+
+
+def test_a_transport_cannot_use_another_moving_configurations_members():
+    from pops.mesh.moving_configuration import MovingConfiguration
+
+    case, _, _, geometry = build_transport()
+    program = case._time
+    original = next(value for value in all_ops(program) if value.op == OPERATION)
+    total, _, member_rate = original.inputs
+    owner = geometry.declared
+    assert owner is not None and geometry.node_rate is not None
+    other = MovingConfiguration(geometry.base, node_rate=2 * geometry.node_rate)
+    foreign = other.members(case, name="foreign_motion")
+    assert foreign is not None and foreign.block != owner.block
+    member = program.state(foreign.block[foreign.state]).n
+    rate = program.value("foreign_motion_rate", foreign.rate(member), at=member_rate.point)
+    transport = owner.transport(original.attrs["operator_handle"])
+    with pytest.raises(ValueError, match="owner of the moving members"):
+        transport(total, member, rate)
+
+
+def test_a_transport_refuses_a_layout_with_different_patches_from_the_declared_members():
+    from pops.layouts import Uniform
+    from pops.mesh import CartesianGrid
+
+    case, _, _, configuration = build_transport()
+    layout = Uniform(CartesianGrid(frame=configuration.frame, cells=(2*CELLS,)))
+    with pytest.raises(MovingMembersNotYetElaborated, match="co-located layout") as refused:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert refused.value.reason == "moving_layout"
