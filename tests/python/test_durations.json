@@ -6745,7 +6745,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1236,
+    "estimated_count": 1238,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7982,7 +7982,9 @@
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
       "tests/python/unit/time/test_variant_temporal_envelope.py",
-      "tests/python/unit/time/test_variant_types_v09.py"
+      "tests/python/unit/time/test_variant_types_v09.py",
+      "tests/python/integration/runtime/test_surface_n15_sources_native.py",
+      "tests/python/unit/surface/test_n15_sources.py"
     ],
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact. Migration additions use explicit 5/120/300/600 s estimates recorded in migration_estimates. Local source/native qualification timings are not substituted for CI per-file measurements.",
     "measured_source": "borrowed _pops.so locally plus GitHub Actions run 30190778708 per-test timings",
@@ -8184,7 +8186,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1303,
+    "total_files": 1305,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -9796,6 +9798,32 @@
         "tests/python/integration/runtime/test_l1_program_a_dim1_native.py": "351c6399bd52292b205615415955864a2e3a07298180b1085f1b235a6372c252",
         "tests/python/integration/runtime/test_cell_step_rule_n8_native.py": "cd46abbae3a5d32133d006ece50b20722bfba715e158d69890dcde01bedbaf3c"
       }
+    },
+    "n15_20261113_faceflux_cellrate_fc1": {
+      "basis": "Unmeasured CI scheduling estimates for N15 FaceFlux/CellRate lot FC-1 (ROM-98): model.source, CellRate and pointwise() at the surface. The native file compiles five surface cases once in a module fixture (a source under CellAverage(), CellTotal() and PointValue(), - S, and a source alone by forward Euler): 300 s, the tier of one module of compiles, as its analogue test_surface_n16_three_words_native.py. The unit file elaborates, resolves and emits the C++ of about twenty surface and b6 cases without compiling: 60 s, the upper source-only tier. The local receipts are pytest sessions on a 4-core container (Python 3.12, gcc 13.3, Kokkos 4.4.01 Serial, native module of rank one, the native session contended by a concurrent unit run); they are not GitHub CI file wall times. Existing weights, shard count, MPI inventories and watchdogs are unchanged; replace only from complete CI per-file receipts.",
+      "analogues": {
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": "tests/python/integration/runtime/test_surface_n16_three_words_native.py",
+        "tests/python/unit/surface/test_n15_sources.py": "tests/python/unit/surface/test_representation_n16.py"
+      },
+      "estimates_seconds": {
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": 300,
+        "tests/python/unit/surface/test_n15_sources.py": 60
+      },
+      "local_receipts": {
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": {
+          "pytest_seconds": 267.27,
+          "tests": 4,
+          "note": "before its fifth test, the NumPy oracle of the average; the five ran with test_g03_cell_totals_native.py and test_surface_n16_three_words_native.py in one session of 898.59 s, 15 passed"
+        },
+        "tests/python/unit/surface/test_n15_sources.py": {
+          "pytest_seconds": 37.34,
+          "tests": 28
+        }
+      },
+      "source_sha256": {
+        "tests/python/integration/runtime/test_surface_n15_sources_native.py": "4479d8a929e4a51940639bbe62f7668a0c739df98e9e9f92342321cd8cc088dc",
+        "tests/python/unit/surface/test_n15_sources.py": "0eac7f2d9bc0eb22714b3ad147d038b4a749db339d43ad822f4a2a66a2294622"
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -11100,5 +11128,7 @@
   "tests/python/unit/numerics/test_product_read_footprints_g09.py": 5,
   "tests/python/integration/runtime/test_n15_film_face_coordinates_dim1_native.py": 70,
   "tests/python/integration/runtime/test_n15_rotation_face_coordinates_native.py": 60,
-  "tests/python/unit/surface/test_n15_face_coordinates.py": 2
+  "tests/python/unit/surface/test_n15_face_coordinates.py": 2,
+  "tests/python/integration/runtime/test_surface_n15_sources_native.py": 300,
+  "tests/python/unit/surface/test_n15_sources.py": 60
 }
