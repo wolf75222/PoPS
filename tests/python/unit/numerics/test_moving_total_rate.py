@@ -225,17 +225,18 @@ def test_an_independent_static_layout_does_not_require_cell_totals():
 
 def test_native_moving_faces_require_the_interior_copy_for_the_exact_total_owner():
     from pops.codegen._moving_members_consumers import _has_two_interior_ghost_copies
+    from pops.time.references import canonical_handle
 
     case, layout, _, _ = build_transport()
     resolved = pops.resolve(pops.validate(case), layout=layout)
     moving_rate = next(node for node in all_ops(resolved.time) if node.op == OPERATION)
     total, members, _ = moving_rate.inputs
     block = next(block for block in resolved.blocks if block.name == total.block.local_id)
-    assigned = resolved.layout_plan.layout_for(total.block)
+    assigned = resolved.layout_plan.layout_for(canonical_handle(total.block))
     geometry = resolved.layout_plan.normalized(assigned)
-    assert _has_two_interior_ghost_copies(block.numerics.boundaries, total.state_ref, assigned, geometry)
+    assert _has_two_interior_ghost_copies(block.numerics.boundaries, canonical_handle(total.state_ref), assigned, geometry)
     assert not _has_two_interior_ghost_copies(
-        block.numerics.boundaries, members.state_ref, assigned, geometry)
+        block.numerics.boundaries, canonical_handle(members.state_ref), assigned, geometry)
 
 
 def test_one_flux_closure_cannot_supply_the_moving_interior_copy(monkeypatch):
