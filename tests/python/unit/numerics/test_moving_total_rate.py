@@ -134,3 +134,90 @@ def test_a_transport_refuses_a_layout_with_different_patches_from_the_declared_m
     with pytest.raises(MovingMembersNotYetElaborated, match="co-located layout") as refused:
         pops.resolve(pops.validate(case), layout=layout)
     assert refused.value.reason == "moving_layout"
+
+
+@pytest.mark.parametrize("change, diagnostic", [
+    ("stage", r"stage.*u1.*m1.*coefficient"),
+    ("terminal", r"commit.*coefficient"),
+    ("missing", r"commit.*configuration"),
+])
+def test_moving_total_and_geometry_require_the_same_update(monkeypatch, change, diagnostic):
+    make_value = pops.Program.value
+    commit_many = pops.Program.commit_many
+
+    def value(program, name, expr, **kwargs):
+        if change == "stage" and name.endswith("_m1"):
+            m = next(state for state in program._values if state.name == "configuration")
+            km = next(rate for rate in program._values if rate.name.endswith("_km0"))
+            expr = m + 2*program.dt*km
+        if change == "terminal" and name.endswith("_m_next"):
+            m = next(state for state in program._values if state.name == "configuration")
+            rates = tuple(next(rate for rate in program._values if rate.name.endswith("_km%d" % i))
+                          for i in range(3))
+            expr = m + program.dt*((1/6)*rates[0] + (2/3)*rates[1] + (1/6)*rates[2])
+        return make_value(program, name, expr, **kwargs)
+
+    def commit(program, mapping):
+        if change == "missing":
+            mapping = {key: item for key, item in mapping.items() if not item.name.endswith("_m_next")}
+        return commit_many(program, mapping)
+
+    monkeypatch.setattr(pops.Program, "value", value)
+    monkeypatch.setattr(pops.Program, "commit_many", commit)
+    case, layout, _, _ = build_transport(initial="constant")
+    with pytest.raises(MovingMembersNotYetElaborated, match=diagnostic) as refused:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert refused.value.reason == "moving_update"
+
+
+def test_an_independent_static_layout_does_not_require_cell_totals():
+    from pops.analytic import coordinate, time
+    from pops.domain import CartesianDomain
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import BindArray
+    from pops.mesh import CartesianGrid
+    from pops.mesh.moving_configuration import MovingConfiguration
+    from pops.mesh.layout_plan import LayoutPlanBuilder
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt
+
+    frame = CartesianDomain("mixed", (0.0,), (1.0,)).frame(Cartesian1D())
+    case = pops.Case("mixed-layouts")
+    program = pops.Program("mixed-layouts")
+    x, t = coordinate(frame, frame.axes[0]), time(program.clock)
+    moving_layout = Uniform(CartesianGrid(frame=frame, cells=(4,)))
+    fixed_layout = Uniform(CartesianGrid(frame=frame, cells=(8,)))
+    motion = MovingConfiguration(moving_layout, node_rate=x * (1 - x)).members(case, "motion")
+    m = program.state(motion.block[motion.state])
+    program.commit(m.next, program.value("new_geometry", m.n + program.dt*motion.rate(m.n),
+                                         at=m.next.point))
+
+    scalar = pops.Model("independent-scalar", frame=frame)
+    u = scalar.state("u", components=("u",))
+    scalar.source("decay", on=u, value=(-u[0],))
+    b = case.block("fixed", scalar)
+    case.initials.add(InitialCondition(state=b[u], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    q = program.state(b[u])
+    decay = scalar.module.operator_handle("decay")
+    program.commit(q.next, program.value("new_scalar", q.n + program.dt*decay(q.n), at=q.next.point))
+    program.step_strategy(FixedDt(1e-3))
+    case.program(program)
+
+    checked = pops.validate(case)
+    subjects = checked.layout_subjects()
+    layout_builder = LayoutPlanBuilder(checked.owner_path.canonical())
+    layouts = {"motion": moving_layout, "fixed": fixed_layout}
+    handles = {name: layout_builder.layout(name, layout) for name, layout in layouts.items()}
+    for block in subjects.blocks:
+        layout_builder.assign_block(block, handles[block.local_id])
+    for state in subjects.states:
+        layout_builder.assign_state(state, handles[state.block_ref.local_id])
+    plan = layout_builder.resolve(**subjects.to_dict())
+    resolved = pops.resolve(checked, layout=plan, layout_providers={
+        handle: layouts[name] for name, handle in handles.items()
+    })
+    assert [block.name for block in resolved.blocks] == ["motion", "fixed"]
+    assert tuple(resolved.layout_targets.values()) == ("system", "system")
