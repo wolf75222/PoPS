@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid=False,
               tau_scale=1, derivative_route="finite_difference", commit_mode="solved",
-              failure_action=None, solver=None):
+              failure_action=None, solver=None, publish=None):
     from pops.numerics import Diffusion
 
     frame = Rectangle("implicit_heat_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
@@ -87,7 +87,10 @@ def make_case(n, *, method="backward_euler", dt=0.0001, nonlinear=False, invalid
         candidate = program.transform(solved, transform=seed_op)
     elif commit_mode == "mutated_alias":
         program.project(candidate)
-    program.commit(temporal.next, candidate)
+    if publish is None:
+        program.commit(temporal.next, candidate)
+    else:
+        publish(program, temporal, candidate)
     program.step_strategy(FixedDt(dt))
     case.program(program)
     case.initials.add(InitialCondition(state=block[state], value=BindArray(),
