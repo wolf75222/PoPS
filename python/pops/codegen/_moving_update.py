@@ -1,7 +1,7 @@
 """Cold proof of a common time update for totals and moving members (D21)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from pops.identity.scalar import scalar_data
 from pops.time._program.moving_total_rate import OPERATION, _same_stage, member_source
@@ -30,7 +30,7 @@ def validate_moving_updates(program: Any) -> None:
     if not transports:
         return
 
-    def refuse(where: str, cause: str) -> None:
+    def refuse(where: str, cause: str) -> NoReturn:
         raise MovingMembersNotYetElaborated("moving_update", "moving %s: %s" % (where, cause))
 
     if (program._cadence is not None or program._cell_local_time is not None

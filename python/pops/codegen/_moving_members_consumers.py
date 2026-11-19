@@ -267,7 +267,8 @@ def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -
     from pops.time.references import canonical_handle
 
     member_block = value.attrs.get("members_block")
-    owner = members.get(getattr(member_block, "local_id", None))
+    member_name = getattr(member_block, "local_id", None)
+    owner = members.get(member_name) if isinstance(member_name, str) else None
     geometry = value.attrs.get("members_state")
     if owner is None or geometry is None or geometry.qualified_id not in owner.state_identities:
         raise MovingMembersNotYetElaborated(
