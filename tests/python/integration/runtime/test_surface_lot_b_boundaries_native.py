@@ -386,11 +386,12 @@ def test_subcycled_scalar_ghost_reads_its_child_stage_clock(native_cache):
     dt = 1 / 128
     program = pops.Program("advection_clocked_child")
     child = Clock("child", owner=program.owner_path)
+    phase = time(child) / dt
 
     def laws(state, g, depth):
         del g
         return (SourceGhost(state=state, depth=depth,
-                            body=lambda inner, k: (1 + time(child),)),
+                            body=lambda inner, k: (1 + phase * phase,)),
                 SourceGhost(state=state, depth=depth, body=lambda inner, k: (inner(1)[0],)))
 
     case, layout, _ = _hand_case(
@@ -407,7 +408,7 @@ def test_subcycled_scalar_ghost_reads_its_child_stage_clock(native_cache):
     assert report.accepted_steps == 2 and runtime.time() == 2 * dt and runtime.macro_step() == 2
 
     def rhs(state, physical_time):
-        return .25 * CELLS[1] * (np.r_[1 + physical_time, state[:-1]] - state)
+        return .25 * CELLS[1] * (np.r_[1 + (physical_time / dt)**2, state[:-1]] - state)
 
     expected = _check_time_oracle(line, dt / 2, rhs, subcycles=2)
     actual = state_array(runtime, "advection", initial.shape)
@@ -446,7 +447,9 @@ def _euler_ghost_trajectory(*, subcycled):
     plan = DiscretizationPlan()
     plan.rates.add(rate, b6_numerics.rusanov(flux, state))
     energy_offset = (1 + gamma * pressure_offset) / (gamma - 1)
-    density = 1 + time(clock)
+    elapsed = time(clock)
+    phase = elapsed / dt
+    density = 1 + phase * phase if subcycled else 1 + elapsed
     inlet = SourceGhost(
         state=subject, depth=1,
         body=lambda inner, k: (density, vx * density, vy * density, energy_offset + 0.05 * density))
@@ -469,7 +472,8 @@ def _euler_ghost_trajectory(*, subcycled):
     def rhs(rho, physical_time):
         # The full Euler flux on the constant-pressure/velocity entropy manifold reduces
         # to the Rusanov mass flux. The four components then follow from this density.
-        states = np.r_[1 + physical_time, rho, rho[-1]]
+        inlet_value = 1 + (physical_time / dt)**2 if subcycled else 1 + physical_time
+        states = np.r_[inlet_value, rho, rho[-1]]
         left, right = states[:-1], states[1:]
         speeds = vx + np.sqrt(gamma * (1 + pressure_offset) / np.minimum(left, right))
         mass_flux = 0.5 * vx * (left + right) - 0.5 * speeds * (right - left)
