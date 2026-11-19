@@ -30,14 +30,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._ir.effects import EFFECTS
 from pops.time._program.control import ADVANCE_ASSESSMENT_CONTRACT
 from pops.time._program.traced_method import NotYetElaborated
 from pops.time.solve_outcome import RejectAttempt
 
-# The operations that a Program of a total may hold: the state, its combinations, and the rates
-# that read the decoded density (program_emit_totals.TOTAL_RATE_OPS), a named source among them
-# (N15 FaceFlux/CellRate lot FC-1).
-CELL_TOTAL_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs", "source"})
+CELL_TOTAL_PROGRAM_OPS = frozenset(op for op, row in EFFECTS.items()
+                                   if row.cell_total is not None)
 
 # The owner of the projection of an initial value by the encode of its representation.
 _PROJECTION_BY_ENCODE = ("N16 lot 2 (the projection of an initial value by the encode of its "
