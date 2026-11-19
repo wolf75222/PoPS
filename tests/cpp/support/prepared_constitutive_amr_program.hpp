@@ -18,6 +18,12 @@ inline constexpr const char* kPreparedConstitutiveAmrClock = "tests.amr.prepared
 template <int Dim>
 void install_prepared_constitutive_step(
     const std::shared_ptr<pops::runtime::program::AmrProgramContext<Dim>>& context) {
+  // As in the generated AMR install, resolve these tuples on the loader's block map
+  // before installing the step and consuming the candidate binding.
+  // The shared RHS has distinct constitutive and transport temporal families, as in codegen.
+  context->install_flux_temporal_families(
+      {{0, 3000, 1, "tests.amr.prepared-diffusion/transport"},
+       {0, 3000, 4, "tests.amr.prepared-diffusion/constitutive"}});
   context->install(
       [context](double macro_dt) {
         context->advance_hierarchy(macro_dt, [context](double level_dt) {
@@ -48,11 +54,6 @@ void install_prepared_constitutive_step(
         });
       },
       context);
-  // Declare the exact (block, RHS identity, provider) tuples before either producer runs.
-  // The shared RHS has distinct constitutive and transport temporal families, as in codegen.
-  context->install_flux_temporal_families(
-      {{0, 3000, 1, "tests.amr.prepared-diffusion/transport"},
-       {0, 3000, 4, "tests.amr.prepared-diffusion/constitutive"}});
 }
 
 }  // namespace pops::test
