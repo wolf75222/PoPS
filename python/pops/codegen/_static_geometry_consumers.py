@@ -15,6 +15,8 @@ an allowlist: a consumer joins it when it reads the arrays and a test shows it.
   the face; a trace authored in source reads a stencil of the logical box and stays refused;
 * transport boundaries that extend the interior state alone, including a generated ghost that
   copies each component directly from the nearest interior cell at every depth;
+* a named cell source whose expression reads only its conservative state and numbers, both in a
+  joint rate and on its own. A StateStorage rate method may select these sources alone;
 * the two-point diffusion of a Program, of one component with a diagonal coefficient, on node
   positions (a graded box, of rank one to three) and, with one coefficient on every logical axis,
   on a chart of rank two (DN35), with conormal, value or periodic ends whose data reads no
@@ -57,7 +59,7 @@ from pops.time._program.stencil_flux import OPERATION as _STENCIL_OPERATION
 
 # The operations of a stencil flux and of centred differences are named once, by the modules that
 # build them.
-STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "diffusive_rhs",
+STATIC_GEOMETRY_PROGRAM_OPS = frozenset({"state", "linear_combine", "rhs", "source", "diffusive_rhs",
                                          _STENCIL_OPERATION, "reduce", "scalar_isfinite",
                                          "acceptance_guard", _CENTRED_DIFFERENCES, "scalar_field",
                                          "pointwise_expression"})
@@ -333,12 +335,155 @@ def _check_diffusion(layout: Any, block: Any, method: Any, rank: int, kind: str)
                     "would read a logical position" % block.name)
 
 
+def _source_reads_state(module: Any, state: Any, name: str) -> bool:
+    """Prove the inputs of an exact named source in its owner's operator registry."""
+    from pops._ir.control_expr import Rounded, Where
+    from pops._ir.expr import Abs, BooleanNot, Const, Exp, Neg, Sign, Sqrt, UnaryMath, Var, _Bin
+    from pops._ir.primitive_expansion import expand_primitive_recipes
+    from pops._ir.quantity import QuantityRef
+    from pops._ir.visitors import _children
+
+    if state is None or name == "default":
+        return False
+    spaces = module.state_spaces()
+    space = spaces.get(state.local_id)
+    if space is None or state != module.state_handle(space):
+        return False
+    try:
+        operator = module.operator_registry().get(name)
+    except KeyError:
+        return False
+    if (operator.kind != "local_source" or operator.signature.inputs != (space,)
+            or operator.requirements or not isinstance(operator.body, tuple)
+            or len(operator.body) != len(space.components)):
+        return False
+    # Follow only the owned primitive recipes reachable from this body. A provider or
+    # parameter inside a recipe remains a typed leaf after expansion.
+    pending = list(expand_primitive_recipes(operator.body, module.primitive_recipes()))
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if type(node) is Const:
+            continue
+        if type(node) is QuantityRef and node.handle == state:
+            continue
+        if (type(node) is Var and node.kind == "cons" and len(spaces) == 1
+                and node.name in space.components):
+            continue
+        if not isinstance(node, (_Bin, Abs, BooleanNot, Exp, Neg, Rounded, Sign, Sqrt,
+                                 UnaryMath, Where)):
+            return False
+        children = _children(node)
+        if not children:
+            return False
+        pending.extend(children)
+    return True
+
+
+def _source_module(block: Any) -> Any:
+    from pops.model.module import Module
+
+    model = block.model
+    return model if isinstance(model, Module) else getattr(model, "module", None)
+
+
+def _check_program_sources(layout: Any, blocks: dict[str, Any], value: Any, names: Any) -> None:
+    from pops.model.handles import OperatorHandle
+    from pops.problem.handles import BlockHandle
+
+    owner = value.block
+    block = (blocks.get(str(owner.instance_owner_path.canonical()))
+             if type(owner) is BlockHandle else None)
+    module = None if block is None else _source_module(block)
+    operator = value.attrs.get("operator_handle")
+    if (block is not None and module is not None and len(value.inputs) == 1
+            and value.inputs[0].block == owner
+            and (operator is None or isinstance(operator, OperatorHandle)
+                 and operator.owner_path.canonical().to_data() in
+                 (block.model_owner, block.instance_owner))):
+        state = getattr(value.inputs[0].state_ref, "declaration_ref", None)
+        if all(_source_reads_state(module, state, name) for name in names):
+            return
+    _refuse(layout, "static_geometry_consumer_unavailable",
+            "Program %s sources %r require a named law of their own conservative state and "
+            "numbers on static geometry" % (value.op, tuple(names)), operation=value.op)
+
+
+def _check_source_selection(layout: Any, block: Any, rate: Any) -> None:
+    from pops.model.expression_language import source_balance_supported
+    from pops.model.handles import OperatorHandle
+    from pops.physics.board_handles import SourceHandle
+
+    module = _source_module(block)
+    if module is not None and rate.rate.owner_path.canonical().to_data() == block.instance_owner:
+        registered = module.operator_handle(rate.rate.registered_operator_name)
+        contract = module.rate_contract(registered)
+        state, sources = contract["state"], contract["sources"]
+        balance_contract = getattr(block.model, "balance_contract", None)
+        if callable(balance_contract):
+            try:
+                view: Any = balance_contract(registered)
+            except ValueError:
+                view = None
+            if (not source_balance_supported(view) or not view.occurrences
+                    or any(term.target != state or term.payload not in sources
+                           for term in view.occurrences)):
+                sources = ()
+        if not contract["flux"] and not contract.get("nonconservative_products") and sources:
+            for source in sources:
+                if not isinstance(source, (SourceHandle, OperatorHandle)):
+                    break
+                if isinstance(source, OperatorHandle) and source.kind != "local_source":
+                    break
+                name = (source.reg_name if isinstance(source, SourceHandle)
+                        else source.registered_operator_name)
+                if source.owner_path != module.owner_path or not _source_reads_state(module, state, name):
+                    break
+            else:
+                return
+    _refuse(layout, "static_geometry_spatial_unavailable",
+            "block %r uses StateStorage for a selection other than named sources of its own "
+            "conservative state and numbers" % block.name, method="StateStorage")
+
+
+def _check_source_binding(layout: Any, block: Any, binding: Any) -> None:
+    from pops.model.handles import Handle
+    from pops.numerics.terms import SourceTerm
+
+    module = _source_module(block)
+    if module is not None and type(binding.method) is SourceTerm:
+        operator = binding.method.operator
+        subject = binding.subject
+        if (isinstance(subject, Handle) and subject.owner_path.canonical().to_data() in
+                (block.model_owner, block.instance_owner)
+                and operator.kind == "local_source" and operator.signature is not None
+                and operator.owner_path.canonical().to_data() in
+                (block.model_owner, block.instance_owner)):
+            inputs = operator.signature.inputs
+            if len(inputs) == 1 and inputs[0] in module.state_spaces().values():
+                state = module.state_handle(inputs[0])
+                if ((subject.kind == "state" and subject.local_id == state.local_id)
+                        or (subject.kind in ("source", "local_source") and
+                            getattr(subject, "reg_name", subject.local_id)
+                            == operator.registered_operator_name)):
+                    if _source_reads_state(module, state, operator.registered_operator_name):
+                        return
+    _refuse(layout, "static_geometry_consumer_unavailable",
+            "block %r has a source binding without a named law of its own conservative state "
+            "and numbers" % block.name, operation="source_binding")
+
+
 def validate_static_geometry_consumers(plan: Any) -> None:
     """Refuse, before any C++, every consumer of a mapped layout that the arrays do not serve."""
     from pops.codegen.program_lowerability import all_ops
+    from pops.codegen.program_emit_kernels import _named_fluxes
     from pops.fields.aux import AnalyticAux
     from pops.mesh.boundaries.providers import BoundaryProviderKind
     from pops.numerics.diffusion import Diffusion
+    from pops.numerics.state_storage import StateStorage
     from pops.time._step.strategy import FixedDt
 
     layouts = static_geometry_layouts(plan.layout_plan)
@@ -350,15 +495,20 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                 "a mapped layout is served alone in one runtime")
     handle, reading = next(iter(layouts.items()))
     layout = by_handle[handle]
+    blocks = {block.instance_owner_qid: block for block in plan.blocks}
     ops = sorted({value.op for value in all_ops(plan.time)} - STATIC_GEOMETRY_PROGRAM_OPS)
     if ops:
         _refuse(layout, "static_geometry_consumer_unavailable",
                 "Program operation(s) %s" % ops, operations=ops)
     for value in all_ops(plan.time):
-        if value.op == "rhs" and (value.attrs.get("named_fluxes") or any(
-                source != "default" for source in (value.attrs.get("sources") or ()))):
-            _refuse(layout, "static_geometry_consumer_unavailable",
-                    "a rate with named fluxes or named sources")
+        if value.op == "rhs":
+            if value.attrs.get("named_fluxes") or _named_fluxes(value):
+                _refuse(layout, "static_geometry_consumer_unavailable", "a rate with named fluxes")
+            sources = value.attrs.get("sources") or ()
+            if any(source != "default" for source in sources):
+                _check_program_sources(layout, blocks, value, sources)
+        if value.op == "source":
+            _check_program_sources(layout, blocks, value, (value.attrs["source"],))
         if value.op == _STENCIL_OPERATION:
             _check_stencil(layout, value, reading.rank, reading.kind)
         if value.op == "reduce" and value.block is None:
@@ -390,13 +540,16 @@ def validate_static_geometry_consumers(plan: Any) -> None:
                     "block %r has an analytic auxiliary input, which reads the cell coordinates "
                     "of the logical box" % block.name)
         numerics = block.numerics
-        if numerics.sources or numerics.fields or numerics.interfaces \
-                or numerics.principal_groups:
+        if numerics.fields or numerics.interfaces or numerics.principal_groups:
             _refuse(layout, "static_geometry_consumer_unavailable",
-                    "block %r has sources, fields, interfaces or principal groups" % block.name)
+                    "block %r has fields, interfaces or principal groups" % block.name)
+        for binding in numerics.sources:
+            _check_source_binding(layout, block, binding)
         for rate in numerics.rates:
             if isinstance(rate.method, Diffusion):
                 _check_diffusion(layout, block, rate.method, reading.rank, reading.kind)
+            elif type(rate.method) is StateStorage:
+                _check_source_selection(layout, block, rate)
             else:
                 _check_finite_volume(layout, block, rate.method)
         ghost_copies = _proved_ghost_copies(numerics.boundaries)

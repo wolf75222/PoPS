@@ -31,10 +31,106 @@ from pops.numerics import (
 from pops.numerics.stencil_flux import StencilFlux
 from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL, FixedDt
+from pops.time._program.traversal import all_ops
 
 from examples.api_v02.models_static_geometry import (
     _initial, _ssprk2, build_annulus_diffusion, build_annulus_free_stream, build_graded_diffusion,
     build_graded_slope)
+
+
+def _source_consumer(route, reading):
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Outflow
+    from pops.fields.aux import AnalyticAux
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.lib.initial import BindArray
+    from pops.params import RuntimeParam
+    from pops.projection import ConservativeCellAverage
+
+    from examples.api_v02.models_G03_totals import _finite_volume
+    from examples.api_v02.models_static_geometry import GRADED_CELLS, graded_map
+
+    frame = CartesianDomain("line", (0.0,), (1.0,)).frame(Cartesian1D())
+    model = pops.Model("transport", frame=frame)
+    state = model.state("state", components=("u",))
+    (u,) = state
+    flux = model.flux("flux", state=state, frame=frame, components={frame.x: (u,)},
+                      waves={frame.x: (1.0,)})
+    if reading == "parameter":
+        coefficient = model.value(model.param(RuntimeParam("coefficient", default=2.0)))
+    elif reading in ("auxiliary", "primitive_auxiliary"):
+        # The auxiliary and the state component deliberately have the same spelling.
+        coefficient = model.auxiliary("u", frame=frame.canonical_id)
+    else:
+        coefficient = 2.0
+    density = coefficient * u
+    if reading in ("primitive", "primitive_auxiliary"):
+        density = model.primitive("local_density", density)
+    source = model.source("decay", on=state, value=(-density,))
+    rate = model.rate("balance", equation=pm.ddt(state) == -pm.div(flux) + source)
+    if reading in ("auxiliary", "primitive_auxiliary"):
+        module = model.module
+        (x,) = coordinates(frame)
+        target = module.aux_handle(module.aux()["u"])
+        module.aux_provider(AnalyticAux(target, 2 + x, frame=frame))
+    numerics = DiscretizationPlan()
+    transport = _finite_volume(flux, state)
+    if route == "selection":
+        numerics.rates.add(rate.select(flux), transport)
+        numerics.rates.add(rate.select(source), StateStorage())
+    else:
+        numerics.rates.add(rate, transport)
+    case = pops.Case("source_on_static_geometry")
+    block = case.block("line", model)
+    numerics.boundaries.add(TransportBoundarySet({
+        face: Outflow(state=block[state]) for face in frame.boundaries.all
+    }))
+    case.numerics(numerics, block=block)
+    case.initials.add(InitialCondition(state=block[state], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    program = pops.Program("local_source")
+    t = program.state(block[state])
+    candidate = t.n
+    if route == "rhs":
+        candidate += 1e-4 * rate(t.n)
+    elif route == "source":
+        operator = model.module.operator_handle(source.reg_name)
+        candidate += 1e-4 * program.source(operator, state=t.n)
+    # The selection-only case has no source operation to let the earlier checks reject it.
+    program.commit(t.next, program.value("candidate", candidate, at=t.next.point))
+    program.step_strategy(FixedDt(1e-4))
+    case.program(program)
+    base = Uniform(CartesianGrid(frame=frame, cells=(GRADED_CELLS,)))
+    return case, MovingControlVolumes(base, evolution=graded_map(frame))
+
+
+@pytest.mark.parametrize("route,reading", [
+    ("rhs", "state"), ("source", "state"), ("selection", "state"), ("source", "primitive"),
+])
+def test_a_source_of_its_conservative_state_resolves_on_static_geometry(route, reading):
+    case, layout = _source_consumer(route, reading)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    if route == "selection":
+        assert any(type(row.method) is StateStorage for row in resolved.blocks[0].numerics.rates)
+    else:
+        assert any(value.op == route for value in all_ops(resolved.time))
+
+
+@pytest.mark.parametrize("route,reading", [
+    ("rhs", "parameter"), ("source", "parameter"), ("selection", "parameter"),
+    ("rhs", "auxiliary"), ("source", "auxiliary"), ("source", "primitive_auxiliary"),
+])
+def test_a_source_reading_a_parameter_or_auxiliary_is_refused_on_static_geometry(route, reading):
+    case, layout = _source_consumer(route, reading)
+    with pytest.raises(StaticGeometryConsumerError, match="conservative state and numbers") as error:
+        pops.resolve(pops.validate(case), layout=layout)
+    if route == "selection":
+        assert error.value.code == "static_geometry_spatial_unavailable"
+        assert error.value.evidence == {"method": "StateStorage"}
+    else:
+        assert error.value.code == "static_geometry_consumer_unavailable"
+        assert error.value.evidence == {"operation": route}
 
 
 def _refusal(layout, owner="pops-static-geometry"):

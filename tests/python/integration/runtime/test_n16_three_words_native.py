@@ -11,8 +11,8 @@ Under one constant mode c the Riesz map 1/(c² μ(K)) and the weight c of the te
 with F the Rusanov flux of Burgers (FaceFlux) and S(u) = -DECAY u a density (CellRate). Each
 word runs from the encode of u0 that the example computes from its closed form and binds as data.
 
-- On N17's 32 graded cells (widths in a ratio of about 92), FaceFlux: a mapped layout refuses a
-  named source today, so CellRate is not run there.
+- On N17's 32 graded cells (widths in a ratio of about 92), FaceFlux alone and with a CellRate
+  density in the same rate.
 - On 16 uniform cells of [0, 3], μ(K) = 3/16, FaceFlux and CellRate: the density enters a total
   multiplied by μ(K) and an average as it is.
 - A sample and a stated rule have the rate of an average, so each runs bit for bit as the case
@@ -33,22 +33,24 @@ pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loade
 _RUNS = {"graded": (GRADED_STEPS, GRADED_DT), "uniform": (UNIFORM_STEPS, UNIFORM_DT)}
 
 
-def _run(layout, represent, coefficients=None):
+def _run(layout, represent, coefficients=None, *, source=None):
     steps, dt = _RUNS[layout]
     world, runtime, report, initial = run_graph(
-        lambda: build_words(represent=represent, layout=layout, coefficients=coefficients),
+        lambda: build_words(represent=represent, layout=layout, coefficients=coefficients,
+                            source=source),
         dimension=1, scope="N16 three words %s %s" % (layout, represent), steps=steps, dt=dt)
     state = collective_call(world, lambda: runtime.state_global("line"))
     return world, report, np.asarray(state)[0], initial[0]
 
 
-def words_oracle(coefficients, layout, represent, *, scaled=True):
+def words_oracle(coefficients, layout, represent, *, scaled=True, source=None):
     """SSPRK2 of first-order Rusanov faces with outflow ends (the ghost is the interior value), and
     on the uniform layout the decay density, written on the coefficients of each word.
     ``scaled=False`` adds the density to a total without μ(K), the error that A1 names."""
     steps, dt = _RUNS[layout]
     measures = np.diff(layout_nodes(layout))
-    decay = DECAY if layout == "uniform" else 0.0
+    enabled = (layout == "uniform") if source is None else source
+    decay = DECAY if enabled else 0.0
 
     def faces(u):
         extended = np.concatenate(([u[0]], u, [u[-1]]))
@@ -115,6 +117,24 @@ def test_a_sample_and_a_stated_rule_run_bit_for_bit_as_the_average_from_the_same
     with collective_check(world):
         assert report.accepted_steps == UNIFORM_STEPS
         np.testing.assert_array_equal(state, bare)
+
+
+def test_a_joint_named_source_uses_the_physical_measure_on_graded_cells(
+        isolated_native_cache, native_cxx, kokkos_root):
+    world, total_report, total, initial_total = _run("graded", "total", source=True)
+    _, average_report, average, initial_average = _run("graded", "average", source=True)
+    measures = np.diff(layout_nodes("graded"))
+    with collective_check(world):
+        assert measures.max() / measures.min() > 90
+        assert total_report.accepted_steps == average_report.accepted_steps == GRADED_STEPS
+        np.testing.assert_allclose(
+            total, words_oracle(initial_total, "graded", "total", source=True), rtol=1e-13, atol=0)
+        np.testing.assert_allclose(
+            average, words_oracle(initial_average, "graded", "average", source=True),
+            rtol=1e-13, atol=0)
+        np.testing.assert_allclose(total / measures, average, rtol=1e-13, atol=0)
+        unscaled = words_oracle(initial_total, "graded", "total", scaled=False, source=True)
+        assert np.max(abs(total - unscaled)) > 1e-3 * np.max(abs(total))
 
 
 def test_finite_rejects_an_overflowing_candidate_with_a_finite_base(
