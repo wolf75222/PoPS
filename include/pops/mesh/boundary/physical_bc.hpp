@@ -240,9 +240,11 @@ struct ApplyPhysicalRegion {
 template <int Dim>
 class PreparedPhysicalBoundary {
  public:
+  // A moved schedule can still share its entries with references retained by the caller.
+  // Validate the owned copy that fills will reuse.
   PreparedPhysicalBoundary(PhysicalBoundaryConditions<Dim> conditions,
-                           BoundarySchedule<Dim> schedule)
-      : conditions_(std::move(conditions)), schedule_(std::move(schedule)) {
+                           const BoundarySchedule<Dim>& schedule)
+      : conditions_(std::move(conditions)), schedule_(schedule) {
     if (conditions_.topology() != schedule_.topology())
       throw std::invalid_argument(
           "prepared physical boundary topology disagrees with its region schedule");
@@ -304,7 +306,7 @@ PreparedPhysicalBoundary<Dim> prepare_physical_boundary(const Box<Dim>& domain,
                                                         BoundaryScheduleBudget budget) {
   BoundarySchedule<Dim> schedule =
       prepare_boundary_schedule(domain, ghosts, conditions.topology(), budget);
-  return PreparedPhysicalBoundary<Dim>{std::move(conditions), std::move(schedule)};
+  return PreparedPhysicalBoundary<Dim>{std::move(conditions), schedule};
 }
 
 /// Fill physical destination regions after the authenticated same-level/periodic halo exchange.

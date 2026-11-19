@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -224,4 +225,23 @@ TEST(test_physical_bc, public_schedule_cannot_supply_an_unbounded_operation_tabl
   EXPECT_THROW((void)(PreparedPhysicalBoundary<2>{
                    conditions, BoundarySchedule<2>{domain, ghosts, topology, {wrong_count}}}),
                std::invalid_argument);
+}
+
+TEST(test_physical_bc, prepared_schedule_owns_the_validated_entries) {
+  const Box<2> domain = cube<2>(0, 0);
+  const Extent<2> ghosts{1, 1};
+  const auto topology = BoundaryTopology<2>::physical();
+  const auto conditions = PhysicalBoundaryConditions<2>{
+      topology, uniform_faces<2>(PhysicalBoundaryFace{}), unit_spacing<2>()};
+  auto entries =
+      prepare_boundary_schedule(domain, ghosts, topology, BoundaryScheduleBudget{8}).entries();
+  ASSERT_FALSE(entries.empty());
+  ASSERT_GT(entries.front().operation_count, 0);
+  auto& source_face = entries.front().operations.front().face;
+  ASSERT_EQ(source_face.axis, 0);
+
+  BoundarySchedule<2> source{domain, ghosts, topology, std::move(entries)};
+  const PreparedPhysicalBoundary<2> prepared{conditions, std::move(source)};
+  source_face.axis = 1;
+  EXPECT_EQ(prepared.schedule().entries().front().operations.front().face.axis, 0);
 }
