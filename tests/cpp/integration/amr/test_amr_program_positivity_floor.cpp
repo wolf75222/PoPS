@@ -9,20 +9,16 @@
 
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "explicit_amr_program.hpp"
+#include "positivity_floor_program_fixture.hpp"
+
+#include <pops/runtime/dynamic/dynlib.hpp>
 
 #include <pops/core/foundation/native_dimension.hpp>
-#include <pops/core/identity/prepared_provider.hpp>
-#include <pops/core/state/state.hpp>
-#include <pops/core/state/variables.hpp>
-#include <pops/numerics/elliptic/linear/solve_outcome.hpp>
-#include <pops/numerics/fv/flux_interfaces.hpp>
-#include <pops/numerics/spatial/nd/conservation_laws.hpp>
-#include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/program/amr_program_context.hpp>
 #include <pops/runtime/system/derived_aux_provider.hpp>
 
 #include <algorithm>
@@ -43,88 +39,10 @@
 #endif
 
 namespace {
+using namespace pops::test::positivity;
 
 constexpr int kCells = 32;
 constexpr double kFloor = 1e-6;
-constexpr char kProviderOwner[] = "test.amr.positivity";
-constexpr char kProviderSpaceKind[] = "input";
-constexpr char kProviderSpaceName[] = "transport";
-constexpr char kProviderComponent[] = "speed";
-constexpr char kProviderRepresentation[] = "cell-average";
-constexpr char kProviderCentering[] = "cell";
-constexpr char kProviderUnit[] = "length/time";
-constexpr char kProviderLayout[] = "amr-transport";
-constexpr char kProviderValueKind[] = "scalar";
-constexpr char kProviderIdentity[] = "test.amr.positivity.speed@1";
-constexpr char kProviderConsumer[] = "test.amr.positivity/physical-flux";
-
-template <int Dim>
-struct DensityAdvection {
-  using Law = pops::nd::ScalarAdvection<Dim>;
-  using Schema = typename Law::Schema;
-  using State = typename Law::State;
-  using Primitive = typename Law::Primitive;
-  static constexpr int dimension = Dim;
-  static constexpr int n_vars = Law::n_vars;
-  static constexpr int n_providers = 1;
-  static constexpr int n_flux_providers = 1;
-  static constexpr std::array<pops::QualifiedProviderRequirement, 1> flux_provider_requirements{{
-      {kProviderOwner, kProviderSpaceKind, kProviderSpaceName, kProviderComponent,
-       kProviderRepresentation, kProviderCentering, kProviderUnit, kProviderLayout,
-       kProviderValueKind, kProviderIdentity, true, 0},
-  }};
-
-  Law conversion{};
-
-  [[nodiscard]] static constexpr pops::PreparedProviderIdentity provider_identity() noexcept {
-    return {"test.amr.density-advection", 2};
-  }
-  void serialize_exact_parameters(pops::ExactContractBuilder& contract) const {
-    contract.scalar(std::int32_t{Dim});
-  }
-
-  static pops::VariableSet conservative_vars() {
-    return {pops::VariableKind::Conservative, {"rho"}, 1, {pops::VariableRole::Density}};
-  }
-  static pops::VariableSet primitive_vars() {
-    return {pops::VariableKind::Primitive, {"rho"}, 1, {pops::VariableRole::Density}};
-  }
-  POPS_HD pops::nd::StateConversion<Primitive> recover(const State& state) const {
-    return conversion.recover(state);
-  }
-  POPS_HD pops::nd::StateConversion<State> make_conservative(const Primitive& primitive) const {
-    return conversion.make_conservative(primitive);
-  }
-  POPS_HD pops::nd::StateConversionStatus admissibility(const State& state) const {
-    return conversion.admissibility(state);
-  }
-
-  template <int Axis>
-  POPS_HD State flux(const State& state,
-                     const pops::BoundFluxProviders<DensityAdvection<Dim>>& providers) const {
-    static_assert(Axis >= 0 && Axis < Dim);
-    return State{providers.template provider<0>() * state[Schema::scalar]};
-  }
-  template <int Axis>
-  POPS_HD pops::Real max_wave_speed(
-      const State&, const pops::BoundFluxProviders<DensityAdvection<Dim>>& providers) const {
-    static_assert(Axis >= 0 && Axis < Dim);
-    const pops::Real speed = providers.template provider<0>();
-    return speed < pops::Real(0) ? -speed : speed;
-  }
-  template <int Axis>
-  POPS_HD void wave_speeds(const State&,
-                           const pops::BoundFluxProviders<DensityAdvection<Dim>>& providers,
-                           pops::Real& lower, pops::Real& upper) const {
-    static_assert(Axis >= 0 && Axis < Dim);
-    const pops::Real speed = providers.template provider<0>();
-    lower = speed;
-    upper = speed;
-  }
-  POPS_HD State source(const State&, const pops::ProviderValues<1>&) const { return State{}; }
-  POPS_HD pops::Real elliptic_rhs(const State&) const { return pops::Real(0); }
-};
-
 template <int Dim>
 std::size_t cell_count(const pops::Extent<Dim>& shape) {
   std::size_t result = 1;
@@ -174,14 +92,17 @@ std::vector<double> contrast_state(const pops::Extent<Dim>& shape) {
   return density;
 }
 
+pops::runtime::system::AuxiliaryComponentKey transport_speed_key() {
+  return {kProviderOwner, kProviderSpaceKind, kProviderSpaceName, kProviderComponent};
+}
+
 template <int Dim>
 pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSystem<Dim>& system) {
   using namespace pops::runtime::system;
   AuxiliaryStorageShape<Dim> shape;
   for (int axis = 0; axis < Dim; ++axis)
     shape.halo[axis] = 3;
-  const AuxiliaryComponentKey key{kProviderOwner, kProviderSpaceKind, kProviderSpaceName,
-                                  kProviderComponent};
+  const auto key = transport_speed_key();
   const AuxiliaryComponentContract contract{kProviderRepresentation, kProviderCentering,
                                             kProviderUnit, kProviderLayout, kProviderValueKind};
   system.install_prepared_auxiliary_provider(PreparedAuxiliaryProvider<Dim>{
@@ -194,57 +115,6 @@ pops::runtime::system::AuxiliaryComponentKey install_transport_speed(pops::AmrSy
       AuxiliaryConsumerProviderPlan<Dim>{kProviderConsumer, {{{key, contract, shape}, 0}}});
   system.seal_auxiliary_providers();
   return key;
-}
-
-struct ProgramEvidence {
-  int accepted_source_solves = 0;
-  int nonzero_block_provider_binds = 0;
-};
-
-template <int Dim>
-std::shared_ptr<ProgramEvidence> install_program(pops::AmrSystem<Dim>& system) {
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  auto evidence = std::make_shared<ProgramEvidence>();
-  context->configure_primary_clock("test.amr.positivity.clock");
-  context->install([context, evidence](double macro_dt) {
-    context->advance_hierarchy(macro_dt, [context, evidence](double level_dt) {
-      const int selected = context->level();
-      context->set_stage_time(0, 1);
-      std::vector<pops::MultiFab<Dim>*> states;
-      std::vector<pops::MultiFab<Dim>*> residuals;
-      states.reserve(static_cast<std::size_t>(context->n_blocks()));
-      residuals.reserve(static_cast<std::size_t>(context->n_blocks()));
-      for (int block = 0; block < context->n_blocks(); ++block) {
-        pops::MultiFab<Dim>& state = context->state(block);
-        if (selected > 0) {
-          const auto provider_at = [context, block](std::size_t local_patch) {
-            return context->template provider_values_view<1>(kProviderConsumer, block, local_patch);
-          };
-          if (block != 0)
-            ++evidence->nonzero_block_provider_binds;
-          pops::SolveOutcome source = pops::backward_euler_source(
-              DensityAdvection<Dim>{}, provider_at, state, pops::Real(level_dt),
-              pops::NewtonOptions{}, context->prepared_execution_lane());
-          const pops::SolveReport accepted = source.consume(pops::SolveConsumption::kAccept);
-          if (!accepted.solved())
-            throw std::runtime_error("positivity test Program source solve failed: " +
-                                     accepted.reason);
-          ++evidence->accepted_source_solves;
-        }
-        pops::MultiFab<Dim>& residual = context->rhs_scratch(1000 + block, 0, state);
-        context->rhs_into(block, state, residual, 3000 + block);
-        states.push_back(&state);
-        residuals.push_back(&residual);
-      }
-      for (std::size_t block = 0; block < states.size(); ++block)
-        context->axpy(*states[block], pops::Real(level_dt), *residuals[block]);
-    });
-  });
-  system.set_program_block_map({0, 1});
-  using Budget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "test.amr.positivity/actual-flux-budget@1", std::vector<Budget>{{1, 1}, {1, 1}}, 0, 0);
-  return evidence;
 }
 
 bool all_finite(const std::vector<double>& values) {
@@ -280,13 +150,23 @@ struct RunResult {
 };
 
 template <int Dim>
-RunResult advance_with_floor(double positivity_floor) {
-  const pops::AmrSystemConfig<Dim> system_config = config<Dim>();
-  pops::AmrSystem<Dim> system(system_config);
+void bootstrap_density(pops::AmrSystem<Dim>& system,
+                       const pops::AmrSystemConfig<Dim>& system_config, double positivity_floor,
+                       const std::vector<double>& density,
+                       const std::vector<double>& peer_density) {
   pops::test::install_amr_runtime_authority(system, "test.amr.positivity/runtime@1");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto speed_key = install_transport_speed(system);
-  system.install_block_state_route("density", "test.amr.positivity/state/density");
+  const auto& group = pops::test::positivity_floor;
+  const auto& field = group.fields.front();
+  const auto schema = DensityAdvection<Dim>::conservative_vars();
+  ASSERT_STREQ(field.block, "density");
+  ASSERT_STREQ(field.variable, "rho");
+  ASSERT_EQ(field.component, 0);
+  ASSERT_EQ(schema.names.at(0), field.variable);
+  ASSERT_EQ(schema.roles.at(0), pops::VariableRole::Density);
+  const char* state_route = field.state;
+  system.install_block_state_route("density", state_route);
   system.install_block_state_route("density_peer", "test.amr.positivity/state/density-peer");
   pops::add_compiled_model<Dim>(system, "density", DensityAdvection<Dim>{}, "weno5", "rusanov",
                                 "conservative", "explicit", 1.4, 1, 1, {}, {}, positivity_floor,
@@ -294,16 +174,14 @@ RunResult advance_with_floor(double positivity_floor) {
   pops::add_compiled_model<Dim>(system, "density_peer", DensityAdvection<Dim>{}, "weno5", "rusanov",
                                 "conservative", "explicit", 1.4, 1, 1, {}, {}, positivity_floor,
                                 static_cast<double>(pops::kWenoEpsilon), false, kProviderConsumer);
-  pops::test::install_prepared_threshold_union(system, {{"density", "rho", 0.25}},
-                                               "test.amr.positivity.tagging@1");
-  constexpr const char* state_route = "test.amr.positivity/state/density";
+  group.template install<Dim>(system, "test.amr.positivity.clock");
   constexpr const char* peer_state_route = "test.amr.positivity/state/density-peer";
   system.bind_bootstrap_subject(state_route, "density", "bound_level_zero");
   system.bind_bootstrap_subject(peer_state_route, "density_peer", "bound_level_zero");
   system.stage_bootstrap_array(state_route, "density", "cell", "cell", 1, system_config.shape,
-                               contrast_state(system_config.shape));
+                               density);
   system.stage_bootstrap_array(peer_state_route, "density_peer", "cell", "cell", 1,
-                               system_config.shape, contrast_state(system_config.shape));
+                               system_config.shape, peer_density);
   pops::Extent<Dim> transfer_ghosts{};
   for (int axis = 0; axis < Dim; ++axis)
     transfer_ghosts[axis] = 1;
@@ -319,6 +197,11 @@ RunResult advance_with_floor(double positivity_floor) {
       system_config.transition_ratios.front());
   const std::vector<double> speed(cell_count(system_config.shape), 1.0);
   system.stage_auxiliary_input(speed_key, speed);
+  ASSERT_FALSE(system.uses_runtime_engine());
+  system.install_program(POPS_TEST_POSITIVITY_FLOOR_PROGRAM_SO);
+  ASSERT_TRUE(system.uses_runtime_engine());
+  ASSERT_EQ(system.n_levels(), 1);
+  ASSERT_EQ(system.program_block_map(), (std::vector<int>{0, 1}));
   system.refresh_auxiliary({"test.amr.positivity.clock", 0, 0, 0, 0, 0, 0,
                             pops::runtime::system::AuxiliaryEvaluationEvent::initialization});
   system.begin_bootstrap_plan();
@@ -338,8 +221,31 @@ RunResult advance_with_floor(double positivity_floor) {
   system.stage_auxiliary_input(speed_key, speed);
   system.refresh_auxiliary({"test.amr.positivity.clock", 0, 0, 0, 0, 0, 0,
                             pops::runtime::system::AuxiliaryEvaluationEvent::initialization});
-  const std::shared_ptr<ProgramEvidence> evidence = install_program(system);
+  EXPECT_EQ(system.n_levels(), 2);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(system.time(), 0.);
+  system.mark_bound();
+}
 
+template <int Dim>
+RunResult advance_with_floor(double positivity_floor) {
+  const auto system_config = config<Dim>();
+  pops::AmrSystem<Dim> system(system_config);
+  const auto density = contrast_state(system_config.shape);
+  bootstrap_density(system, system_config, positivity_floor, density, density);
+  if (::testing::Test::HasFatalFailure())
+    throw std::runtime_error("positivity fixture failed explicit Program bootstrap");
+  const pops::dynlib::UniqueHandle image(pops::dynlib::open(POPS_TEST_POSITIVITY_FLOOR_PROGRAM_SO));
+  if (!pops::dynlib::valid(image.get()))
+    throw std::runtime_error("cannot reopen the installed positivity fixture");
+  const auto get = reinterpret_cast<void (*)(pops::AmrSystem<Dim>*, ProgramEvidence*)>(
+      pops::dynlib::sym(image.get(), "pops_test_positivity_evidence"));
+  if (get == nullptr)
+    throw std::runtime_error("installed positivity fixture lacks its evidence export");
+  ProgramEvidence evidence;
+  get(&system, &evidence);
+  EXPECT_EQ(evidence.accepted_source_solves, 0);
+  EXPECT_EQ(evidence.nonzero_block_provider_binds, 0);
   RunResult result;
   result.levels = system.n_levels();
   auto& runtime = *system.engine();
@@ -375,7 +281,7 @@ RunResult advance_with_floor(double positivity_floor) {
     return selected;
   };
 
-  const auto provider_values = system.auxiliary_component(speed_key, 1);
+  const auto provider_values = system.auxiliary_component(transport_speed_key(), 1);
   result.provider_values_exact =
       !fine_interior_indices.empty() &&
       std::all_of(fine_interior_indices.begin(), fine_interior_indices.end(),
@@ -398,8 +304,9 @@ RunResult advance_with_floor(double positivity_floor) {
   result.mass_after = system.mass("density");
   result.fine_after = system.block_level_state_global("density", 1);
   result.fine_interior_after = select_fine_interior(result.fine_after);
-  result.accepted_source_solves = evidence->accepted_source_solves;
-  result.nonzero_block_provider_binds = evidence->nonzero_block_provider_binds;
+  get(&system, &evidence);
+  result.accepted_source_solves = evidence.accepted_source_solves;
+  result.nonzero_block_provider_binds = evidence.nonzero_block_provider_binds;
   return result;
 }
 
@@ -457,6 +364,71 @@ void verify_exact_ranked_trajectory() {
   EXPECT_NEAR(floored.mass_after, floored.mass_before, tolerance);
 }
 
+template <int Dim>
+void cold_contrast() {
+  const pops::AmrSystemConfig<Dim> system_config = config<Dim>();
+  pops::AmrSystem<Dim> system(system_config);
+
+  const double stored_floor = static_cast<double>(static_cast<pops::Real>(kFloor));
+  std::vector<double> density(cell_count(system_config.shape), stored_floor);
+  std::vector<double> peer(density.size(), stored_floor);
+  for (std::size_t cell = 0; cell < density.size(); ++cell) {
+    const auto x = cell % kCells;
+    if (x >= 5 && x < 11)
+      density[cell] = 1.;
+    if (x == 17)
+      density[cell] = .25;
+    if (x >= 23 && x < 27)
+      peer[cell] = 1.;
+  }
+  ASSERT_NO_FATAL_FAILURE(bootstrap_density(system, system_config, kFloor, density, peer));
+  ASSERT_EQ(system.n_levels(), 2);
+  EXPECT_EQ(system.time(), 0.);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_EQ(system.block_level_state_global("density", 0), density);
+  EXPECT_EQ(system.block_level_state_global("density_peer", 0), peer);
+  const auto first = system.patch_boxes();
+  const auto& fine = system.prepared_amr_block_state(0, 1);
+  const auto& peer_fine = system.prepared_amr_block_state(1, 1);
+  EXPECT_EQ(fine.layout(), peer_fine.layout());
+  EXPECT_EQ(fine.distribution(), peer_fine.distribution());
+  EXPECT_EQ(fine.local_size(), peer_fine.local_size());
+  pops::Index<Dim> lower{}, upper{}, owner{};
+  lower[0] = 10;
+  upper[0] = 21;
+  for (int axis = 1; axis < Dim; ++axis)
+    upper[axis] = 63;
+  ASSERT_EQ(first, (std::vector<pops::AmrPatch<Dim>>{{1, {lower, upper}}}));
+  ASSERT_EQ(fine.distribution().owners(), (std::vector<pops::Index<Dim>>{owner}));
+  ASSERT_EQ(fine.local_size(), fine.local_rank() == owner ? 1u : 0u);
+  if (fine.local_size() != 0)
+    EXPECT_EQ(fine.box(0), (pops::Box<Dim>{lower, upper}));
+  const auto covered = [&](int x) {
+    pops::Index<Dim> point{};
+    point[0] = 2 * x;
+    for (int axis = 1; axis < Dim; ++axis)
+      point[axis] = 32;
+    return std::any_of(first.begin(), first.end(), [&](const auto& patch) {
+      return patch.level == 1 && patch.box.contains(point);
+    });
+  };
+  EXPECT_TRUE(covered(7));
+  EXPECT_FALSE(covered(17));
+  EXPECT_FALSE(covered(24));
+  const auto selected = system.execute_prepared_tagging(0);
+  EXPECT_EQ(pops::all_reduce_sum(static_cast<long>(
+                pops::test::expect_fixture_tag_mask(selected.refine, system_config.shape,
+                                                    [](std::size_t cell) {
+                                                      const auto x = cell % kCells;
+                                                      return x >= 5 && x < 11;
+                                                    }))),
+            static_cast<long>(density.size()));
+  EXPECT_EQ(pops::all_reduce_sum(static_cast<long>(pops::test::expect_fixture_tag_mask(
+                selected.coarsen, system_config.shape, [](std::size_t) { return false; }))),
+            static_cast<long>(density.size()));
+  EXPECT_EQ(system.patch_boxes(), first);
+}
+
 }  // namespace
 
 TEST(test_amr_program_positivity_floor, RefinedProgramTrajectoryUsesFloorAndRollsBackExactly) {
@@ -466,4 +438,5 @@ TEST(test_amr_program_positivity_floor, RefinedProgramTrajectoryUsesFloorAndRoll
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
   verify_exact_ranked_trajectory<pops::kNativeDimension>();
+  ASSERT_NO_FATAL_FAILURE(cold_contrast<pops::kNativeDimension>());
 }

@@ -27,7 +27,7 @@ from pops.identity import make_identity
 from pops.identity.artifact import binary_identity
 from pops.identity.semantic import semantic_value
 from pops.mesh._amr.refinement_criterion import resolve_refinement_criterion
-from pops.physics import Scalar
+from pops.physics import Density, Scalar
 
 
 def cpp_string(value):
@@ -150,6 +150,7 @@ def euler(output, dimension):
         ("magnetic", ("fluid",), euler_state, "rho", 1.5),
         ("magnetic_union", ("ions", "electrons"), euler_state, "rho", 1.5),
         ("fickian", ("heat",), ("scalar",), "scalar", 1.15),
+        ("positivity_floor", ("density",), ("rho",), "rho", 0.25),
         ("noop_history", ("tracer",), ("u",), "u", 2.0),
         ("declared_subcycling", ("tracer",), ("u",), "u", 1.5),
         ("mixed_cfl", ("tracer",), ("u",), "u", 1.5),
@@ -163,6 +164,8 @@ def euler(output, dimension):
         roles = {field: Scalar()} if model_name in (
             "fickian", "mixed_norm", "mixed_cfl", "noop_history", "declared_subcycling"
         ) else None
+        if model_name == "positivity_floor":
+            roles = {field: Density()}
         state = model.state("U", components=variables, roles=roles)
         case = pops.Case(model_name)
         handles = tuple(case.block(block, model, states=(state,))[state] for block in blocks)
