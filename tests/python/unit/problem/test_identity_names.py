@@ -435,6 +435,44 @@ def test_the_map_refuses_a_name_it_does_not_know():
         == "pops.handle.v1::case:%24case/descriptor:a::field::a"
 
 
+def test_presentation_rules_keep_priority_and_distinguish_list_items():
+    names = PresentationMap(case="a", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    data = {"row": {"name": "a", "[]": "literal", "list": ["item"]}}
+    values = {("...", "*"): "case", ("row", "name"): "block"}
+    assert names.project({"row": {"name": "a"}}, values=values)["row"]["name"] == "$case"
+    assert names.project({"row": {"name": "a"}}, values={**values, ("...", "*"): None}) == {
+        "row": {"name": "a"},
+    }
+    assert names.project(data, derived=(("...", "[]"),)) == {
+        "row": {"name": "a", "[]": "literal", "list": [None]},
+    }
+    assert names.project(data, derived=((),)) is None
+    assert names.project(data, derived=(("...",),)) is None
+
+
+def test_presentation_rules_preserve_nonexact_equality_in_ancestors_and_rules():
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    comparisons = []
+
+    class Alias(str):
+        def __eq__(self, other):
+            comparisons.append(other)
+            return other == "group"
+
+        __hash__ = str.__hash__
+
+    data = {Alias("alias"): {"target": "a"}}
+    values = {("group", "first"): "case", ("group", "target"): "block"}
+    assert list(names.project(data, values=values).values()) == [{"target": "$block0"}]
+    assert comparisons == ["group", "group"]
+    comparisons.clear()
+    assert names.project({"group": {"a": 1}}, keys=((Alias("alias"),),)) == {
+        "group": {"$block0": 1},
+    }
+    # The root comparison reads the prefix before rejecting its shorter path.
+    assert comparisons == ["...", "...", "[]", "*", "group"]
+
+
 def test_an_owner_name_cannot_take_the_form_of_a_label():
     """Review A2 of #797: a name kept in a preimage can never equal a generated label.
 
