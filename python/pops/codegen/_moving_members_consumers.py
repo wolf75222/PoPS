@@ -355,7 +355,7 @@ def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -
             or plan.layout_plan.normalized(layout).geometry != declared.configuration.layout.normalized_geometry()):
         raise MovingMembersNotYetElaborated(
             "moving_layout", "the totals and moving members require their co-located layout without interfaces")
-    _validate_incidence_route(plan, resolved, declared.configuration, geometry, layout)
+    _validate_incidence_route(plan, resolved, declared.configuration, geometry, state, layout)
     handle = value.attrs["operator_handle"]
     rows = [row for row in resolved.numerics.rates
             if row.rate.registered_operator_name == handle.registered_operator_name]
@@ -377,7 +377,7 @@ def _validate_face(plan: Any, value: Any, block: str, members: dict[str, Any]) -
 
 
 def _validate_incidence_route(
-    plan: Any, block: Any, configuration: Any, owner: Any, layout: Any,
+    plan: Any, block: Any, configuration: Any, owner: Any, state: Any, layout: Any,
 ) -> None:
     geometry = plan.layout_plan.normalized(layout)
     if (configuration.form != "expression"
@@ -398,13 +398,69 @@ def _validate_incidence_route(
         raise MovingMembersNotYetElaborated(
             "moving_incidence_initial",
             "moving transport requires a BindArray for the exact geometry state")
-    closures = tuple(
-        (row["ordinal"], row["condition_type"], row["type"])
-        for boundary in block.numerics.boundaries
-        for row in boundary.compile_boundary_data()["faces"])
-    if closures != ((0, "outflow", "foextrap"), (1, "outflow", "foextrap")):
+    if not _has_two_interior_ghost_copies(block.numerics.boundaries, state, layout, geometry):
         raise MovingMembersNotYetElaborated(
-            "moving_incidence_closure", "moving transport requires the two native Outflow faces")
+            "moving_incidence_closure",
+            "moving transport requires a native copy of the interior state at both physical faces")
+
+
+def _has_two_interior_ghost_copies(boundaries: Any, state: Any, layout: Any, geometry: Any) -> bool:
+    from pops.boundary.transport import ResolvedTransportBoundarySet
+    from pops.mesh.boundaries import ClosureMode, GhostProducerPlan, GhostState
+    from pops.mesh.boundaries.topology import BoundarySide
+
+    if len(boundaries) != 1 or type(boundaries[0]) is not GhostProducerPlan:
+        return False
+    plan = boundaries[0]
+    authority = plan.execution_authority
+    if (type(authority) is not ResolvedTransportBoundarySet
+            or authority.frame_id != geometry.geometry.frame_id
+            or len(authority.conditions) != 2 or len(authority.plan.bindings) != 2
+            or plan.interfaces or plan.residual_contributions or plan.linearization_contributions
+            or plan.component_bindings
+            or plan.topology.boundaries != authority.plan.topology.boundaries
+            or any(row.producer.periodic or row.producer.interfaces
+                   or (row.region.boundary is None and row.producer.boundary_providers)
+                   for row in plan.productions)):
+        return False
+    physical = tuple(row for row in plan.productions if row.region.boundary is not None)
+    if len(physical) != 2:
+        return False
+    sides = set()
+    for row in physical:
+        region = row.region
+        boundary = region.boundary
+        if region.subject != state or region.layout != layout or boundary is None:
+            return False
+        orientation = boundary.orientation
+        providers = row.producer.boundary_providers
+        if orientation.axis != 0 or orientation.side in sides or len(providers) != 1:
+            return False
+        sides.add(orientation.side)
+        (provider,) = providers
+        conditions = tuple(condition for condition in authority.conditions
+                           if condition.provider is provider)
+        if len(conditions) != 1:
+            return False
+        (condition,) = conditions
+        dependency = provider.dependencies
+        if (not condition.copies_nearest_interior or condition.state != state
+                or condition.geometry.domain_geometry_id != authority.domain_geometry_id
+                or condition.geometry.axis.index != orientation.axis
+                or condition.geometry.side.value != orientation.side.value
+                or condition.requirement.ghost_depth < 1 or region.depth.depth[0] < 1
+                or condition.prescribed_trace or condition.values or condition.source_ghost is not None
+                or dependency.states != (state,) or dependency.fields or dependency.time
+                or dependency.runtime_params or dependency.characteristic.mode is not ClosureMode.NONE
+                or dependency.representation.source != dependency.representation.target
+                or dependency.representation.converter is not None or len(provider.outputs) != 1):
+            return False
+        (port,) = provider.outputs
+        if (type(port) is not GhostState or port.subject != state or port.boundary != boundary
+                or not any(binding.provider is provider and binding.need == port
+                           for binding in authority.plan.bindings)):
+            return False
+    return sides == {BoundarySide.LOWER, BoundarySide.UPPER}
 
 
 __all__ = ["MovingMembersNotYetElaborated", "lower_moving_member_guards", "member_blocks",

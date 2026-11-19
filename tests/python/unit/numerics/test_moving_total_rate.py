@@ -221,3 +221,30 @@ def test_an_independent_static_layout_does_not_require_cell_totals():
     })
     assert [block.name for block in resolved.blocks] == ["motion", "fixed"]
     assert tuple(resolved.layout_targets.values()) == ("system", "system")
+
+
+def test_native_moving_faces_require_the_interior_copy_for_the_exact_total_owner():
+    from pops.codegen._moving_members_consumers import _has_two_interior_ghost_copies
+
+    case, layout, _, _ = build_transport()
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    moving_rate = next(node for node in all_ops(resolved.time) if node.op == OPERATION)
+    total, members, _ = moving_rate.inputs
+    block = next(block for block in resolved.blocks if block.name == total.block.local_id)
+    assigned = resolved.layout_plan.layout_for(total.block)
+    geometry = resolved.layout_plan.normalized(assigned)
+    assert _has_two_interior_ghost_copies(block.numerics.boundaries, total.state_ref, assigned, geometry)
+    assert not _has_two_interior_ghost_copies(
+        block.numerics.boundaries, members.state_ref, assigned, geometry)
+
+
+def test_one_flux_closure_cannot_supply_the_moving_interior_copy(monkeypatch):
+    from examples.api_v02 import models_G03_moving_transport as fixture
+    from pops.boundary.transport import NoFlux
+
+    closures = iter((fixture.Outflow, NoFlux))
+    monkeypatch.setattr(fixture, "Outflow", lambda **kwargs: next(closures)(**kwargs))
+    case, layout, _, _ = fixture.build_transport()
+    with pytest.raises(MovingMembersNotYetElaborated, match="both physical faces") as refused:
+        pops.resolve(pops.validate(case), layout=layout)
+    assert refused.value.reason == "moving_incidence_closure"
