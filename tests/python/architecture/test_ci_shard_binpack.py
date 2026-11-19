@@ -331,19 +331,22 @@ def test_explicit_case_inventory_is_expanded_and_covered_exactly_once():
     units = _load("ci_python_test_units")
     contract = units.load_contract()
     expected_counts = {
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 3,
         "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": 38,
         "tests/python/integration/runtime/test_public_evolved_original_stage.py": 8,
         "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 8,
         "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": 7,
         "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 2,
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py": 9,
     }
     assert {file: len(nodes) for file, nodes in contract.items()} == expected_counts
+    expected_total = sum(expected_counts.values())
     expanded = units.expand(list(expected_counts), contract)
-    assert len(expanded) == len(set(expanded)) == 63
+    assert len(expanded) == len(set(expanded)) == expected_total
     costs = units.weights({}, contract)
     shards = binpack.assign_shards(expanded, 9, costs)
     binpack.verify_partition(expanded, shards, excluded=())
-    assert sum(len(group) for group in shards) == 63
+    assert sum(len(group) for group in shards) == expected_total
     for group in shards:
         owners = {units.owner(node) for node in group}
         collected = [node for file in owners for node in contract[file]]
