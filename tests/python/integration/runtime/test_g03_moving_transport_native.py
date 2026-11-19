@@ -16,6 +16,7 @@ from examples.api_v02.models_G03_moving_transport import (
     CELLS, CONSTANT, DT, GRADED_DT, STEPS, build_transport, initial_density, ssprk3_oracle)
 from tests.python.integration.runtime.test_n17_static_geometry_graphs import run_graph
 from tests.python.support.collective_checks import collective_call, collective_check
+from tests.python.support.integral_state_receipts import collective_directory
 from tests.python.support.native_execution_context import artifact_execution_context
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
@@ -92,7 +93,8 @@ def test_a_constant_density_keeps_the_total_equal_to_u0_times_v_bit_for_bit(
     collective_call(world, lambda: refuse(
         {**values, geometry_key: bad_measure}, "moving geometry initial volume"))
 
-    restart = collective_call(world, lambda: runtime.checkpoint(str(tmp_path / "continuation")))
+    directory = collective_directory(world, tmp_path)
+    restart = collective_call(world, lambda: runtime.checkpoint(str(directory / "continuation")))
     restored = collective_call(world, lambda: bind(values))
     collective_call(world, lambda: restored.restart(restart))
     assert restored.time() == runtime.time() and restored.macro_step() == runtime.macro_step()
