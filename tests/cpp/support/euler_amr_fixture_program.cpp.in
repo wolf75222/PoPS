@@ -99,9 +99,17 @@ extern "C" int pops_program_checkpoint_history_ghost_depth(int) {
   return -1;
 }
 extern "C" int pops_program_checkpoint_logical_clock_count() {
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  return 2;
+#else
   return 1;
+#endif
 }
 extern "C" const char* pops_program_checkpoint_logical_clock_identity(int index) {
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  if (index == 1)
+    return POPS_TEST_EULER_FINE_CLOCK;
+#endif
   return index == 0 ? "test.clock.macro" : "";
 }
 extern "C" const char* pops_program_checkpoint_primary_clock_identity() {
@@ -160,4 +168,7 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   const auto context = pops::runtime::program::make_program_execution_provider(system);
   context->configure_primary_clock("test.clock.macro");
   pops::test::install_forward_euler_step(context, POPS_TEST_EULER_SOLVE_DEFAULT);
+#if defined(POPS_TEST_EULER_FINE_CLOCK)
+  context->declare_clock_relation("test.clock.macro", POPS_TEST_EULER_FINE_CLOCK, 2);
+#endif
 }

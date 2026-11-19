@@ -36,9 +36,14 @@ int main(int argc, char** argv) {
         write_definitions(source, pops::test::regrid_parity);
       else if (variant == "gravity")
         write_definitions(source, pops::test::gravity);
+      else if (variant == "riemann")
+        write_definitions(source, pops::test::riemann);
       else
         throw std::invalid_argument("unknown Forward Euler Program fixture");
-      source << "#define POPS_TEST_EULER_SOLVE_DEFAULT " << (variant == "gravity") << '\n';
+      source << "#define POPS_TEST_EULER_SOLVE_DEFAULT "
+             << (variant == "gravity" || variant == "riemann") << '\n';
+      if (variant == "riemann")
+        source << "#define POPS_TEST_EULER_FINE_CLOCK \"tests.amr-riemann-native/clock/level-1\"\n";
       append(source, argv[2]);
       append(source, argv[3]);
     }

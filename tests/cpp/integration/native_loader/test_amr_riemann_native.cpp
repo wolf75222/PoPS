@@ -17,7 +17,7 @@
 
 #include "gtest_compat.hpp"
 #include "native_dso_compiler.hpp"
-#include "explicit_amr_program.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "component_abi_test_helpers.hpp"
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/core/foundation/native_dimension.hpp>
@@ -27,7 +27,7 @@
 #include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 
-#include "amr_tagging_test_authority.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -38,6 +38,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -53,7 +54,7 @@ using NativeEuler = EulerND<kDim>;
 using ProdModel = CompositeModel<NativeEuler, NoSource, BackgroundDensity>;
 constexpr double kGamma = 1.4;
 constexpr const char* kProviderConsumerQid = "tests.amr-riemann-native/physical-flux";
-constexpr const char* kStateIdentity = "tests.amr-riemann-native/gas/state@1";
+constexpr const char* kTaggingClock = "test::prepared-tagging-clock";
 constexpr const char* kPrimaryClock = "test.clock.macro";
 constexpr const char* kFineClock = "tests.amr-riemann-native/clock/level-1";
 constexpr const char* kDsoRouteIdentity =
@@ -132,7 +133,7 @@ void install_compiled_model(AmrSystem<Dim>& system, const char* riemann,
   auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
       prepared_execution()->for_lane(*lane));
   system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
-  system.install_block_state_route("gas", kStateIdentity);
+  system.install_block_state_route("gas", test::riemann.state_for("gas"));
   system.install_prepared_amr_block(prepare_compiled_amr_system_block<Dim>(
       "gas", make_model(), "minmod", riemann, reconstruction, "explicit", kGamma, 1, 1, 0.0,
       static_cast<double>(kWenoEpsilon), false, kProviderConsumerQid));
@@ -164,14 +165,33 @@ struct Snap {
 };
 
 template <int Dim>
-Snap run(AmrSystem<Dim>& s, int nsteps) {
+Snap run(AmrSystem<Dim>& s, int nsteps, bool exercise_wrong_program = false) {
   // Time subcycling is an independent execution contract. Keep it explicit even though this test
   // deliberately chooses the same value as the spatial refinement ratio.
   s.set_temporal_relations({2}, {1}, {"integral_only"});
   s.set_poisson("charge_density", "geometric_mg");
-  test::install_prepared_threshold_union(s, {{"gas", "rho", 1.2}});
-  auto context = test::install_forward_euler_program_context(s, true);
-  context->declare_clock_relation(kPrimaryClock, kFineClock, 2);
+  EXPECT_FALSE(s.uses_runtime_engine());
+  EXPECT_TRUE(s.installed_program_hash().empty());
+  test::riemann.install<Dim>(s, kTaggingClock);
+  if (exercise_wrong_program) {
+    try {
+      s.install_program(POPS_TEST_RIEMANN_WRONG_PROGRAM_SO);
+      ADD_FAILURE() << "an unrelated Program was installed with the Riemann refinement authority";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string_view(error.what()).find("refinement criterion of the compiled Program"),
+                std::string_view::npos);
+    }
+    EXPECT_FALSE(s.uses_runtime_engine());
+    EXPECT_TRUE(s.installed_program_hash().empty());
+    EXPECT_EQ(s.checkpoint_topology_epoch(), 0);
+    EXPECT_EQ(s.checkpoint_regrid_count(), 0);
+    EXPECT_EQ(s.macro_step(), 0);
+    EXPECT_DOUBLE_EQ(s.time(), 0.0);
+  }
+  s.install_program(POPS_TEST_RIEMANN_PROGRAM_SO);
+  EXPECT_TRUE(s.uses_runtime_engine());
+  EXPECT_EQ(s.installed_program_hash(),
+            std::string("test-forward-euler-amr/") + test::riemann.identity);
 
   // Installing the explicit Program materializes the engine and performs the automatic initial
   // hierarchy bootstrap.  The cadence witness must therefore advance strictly after this baseline,
@@ -242,6 +262,31 @@ Snap run(AmrSystem<Dim>& s, int nsteps) {
   return snap;
 }
 
+template <int Dim>
+void check_refinement_at_threshold(AmrSystem<Dim>& system, std::vector<double> state) {
+  const Real threshold = Real(1.2);
+  const Real below = std::nextafter(threshold, Real(0));
+  const Real above = std::nextafter(threshold, Real(2));
+  state[0] = static_cast<double>(below);
+  state[1] = static_cast<double>(threshold);
+  state[2] = static_cast<double>(above);
+  system.set_conservative_state("gas", state);
+  const auto actual = system.density("gas");
+  ASSERT_GE(actual.size(), 3u);
+  EXPECT_EQ(actual[0], static_cast<double>(below));
+  EXPECT_EQ(actual[1], static_cast<double>(threshold));
+  EXPECT_EQ(actual[2], static_cast<double>(above));
+
+  const auto tags = system.execute_prepared_tagging(0);
+  const auto shape = system.spatial_shape();
+  EXPECT_EQ(test::expect_fixture_tag_mask(
+                tags.refine, shape,
+                [&](std::size_t cell) { return actual[cell] > static_cast<double>(threshold); }),
+            actual.size());
+  EXPECT_EQ(test::expect_fixture_tag_mask(tags.coarsen, shape, [](std::size_t) { return false; }),
+            actual.size());
+}
+
 double maxdiff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size() && k < b.size(); ++k)
@@ -269,6 +314,7 @@ std::string loader_source() {
 #include <pops/physics/bricks/bricks.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 namespace pops_generated {
 constexpr int Dim = pops::kNativeDimension;
@@ -351,7 +397,8 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     AmrSystem<kDim> Ref(make_cfg<kDim>(n));
     install_compiled_model(Ref, "rusanov", "conservative");
     Ref.set_conservative_state("gas", initial_state);
-    d_rusanov = run(Ref, nsteps).density;
+    d_rusanov = run(Ref, nsteps, /*exercise_wrong_program=*/true).density;
+    check_refinement_at_threshold(Ref, initial_state);
   }
 
   // Le second chemin est un vrai DSO source-built charge par add_native_block. Son symbole de test
@@ -410,7 +457,7 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
     auto execution = std::make_shared<const pops::component::PreparedExecutionContextV1>(
         prepared_execution()->for_lane(*lane));
     loaded.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
-    loaded.install_block_state_route("gas", kStateIdentity);
+    loaded.install_block_state_route("gas", test::riemann.state_for("gas"));
     const pops::dynlib::AuthenticatedNativeFile authenticated(so);
     loaded.add_native_block("gas", so, kModelIdentity, authenticated.binary_identity(), "minmod",
                             riem, recon, "explicit", kGamma, 1);
