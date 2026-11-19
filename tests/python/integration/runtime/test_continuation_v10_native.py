@@ -97,42 +97,47 @@ def test_compiled_fixed_grid_survives_public_restart(
         collective_call(world, split)
     state = original._executor._temporal_restart_state
     grid = state.controller_state["fixed_dt_grid"]
-    assert grid["steps"] == segment_steps
-    assert grid["origin"] == (cut if segment_steps == 0 else 0.0).hex()
-    assert grid["time"] == original.time().hex()
-    assert grid["macro_step"] == original.macro_step()
-    last_begin = 0.0
-    for _ in range(original.macro_step() - 1):
-        last_begin += dt
-    assert state.controller_state["last_accepted_dt"] == (original.time() - last_begin).hex()
-    manifest = original.last_run_manifest
-    assert manifest.controls["step_transaction"]["compiled_advance"]["schema"] == (
-        simulation.control.to_data()["schema"]
-    )
+    with collective_check(world):
+        assert grid["steps"] == segment_steps
+        assert grid["origin"] == (cut if segment_steps == 0 else 0.0).hex()
+        assert grid["time"] == original.time().hex()
+        assert grid["macro_step"] == original.macro_step()
+        last_begin = 0.0
+        for _ in range(original.macro_step() - 1):
+            last_begin += dt
+        assert state.controller_state["last_accepted_dt"] == (original.time() - last_begin).hex()
+        manifest = original.last_run_manifest
+        assert manifest.controls["step_transaction"]["compiled_advance"]["schema"] == (
+            simulation.control.to_data()["schema"]
+        )
 
     directory = collective_directory(world, tmp_path)
     checkpoint = collective_call(world, lambda: original.checkpoint(str(directory / "compiled")))
     restored = _bind(spec, artifact, world)
     collective_call(world, lambda: restored.restart(checkpoint))
     restored_state = restored._executor._temporal_restart_state
-    assert restored_state.controller_state == state.controller_state
     actual = collective_call(world, restored._executor._s._checkpoint_continuation_image)
     expected = collective_call(world, original._executor._s._checkpoint_continuation_image)
-    assert actual == expected
+    with collective_check(world):
+        assert restored_state.controller_state == state.controller_state
+        assert actual == expected
 
     resumed = Simulation(restored)
     empty = collective_call(world, lambda: resumed.run(until=restored.time()))
-    assert empty.steps == 0
-    assert restored_state.controller_state == state.controller_state
+    with collective_check(world):
+        assert empty.steps == 0
+        assert restored_state.controller_state == state.controller_state
     for driver, runtime in ((simulation, original), (resumed, restored)):
         outcome = collective_call(world, lambda: driver.run(until=until))
-        assert outcome.time == runtime.time() == until
-        assert runtime.macro_step() == steps
+        with collective_check(world):
+            assert outcome.time == runtime.time() == until
+            assert runtime.macro_step() == steps
     original_state = collective_call(world, lambda: original.state_global("method"))
     restored_values = collective_call(world, lambda: restored.state_global("method"))
     _require_owned_array(world, original_state)
     _require_owned_array(world, restored_values)
-    if original_state is not None:
-        np.testing.assert_array_equal(restored_values, original_state)
-        np.testing.assert_array_equal(restored_values, steps * (steps + 1) * (steps + 2) // 6)
-    assert restored_state.to_data() == state.to_data()
+    with collective_check(world):
+        if original_state is not None:
+            np.testing.assert_array_equal(restored_values, original_state)
+            np.testing.assert_array_equal(restored_values, steps * (steps + 1) * (steps + 2) // 6)
+        assert restored_state.to_data() == state.to_data()
