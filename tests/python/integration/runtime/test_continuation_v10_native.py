@@ -111,6 +111,21 @@ def test_compiled_fixed_grid_survives_public_restart(
             simulation.control.to_data()["schema"]
         )
 
+    if dt == 0.125 and world is not None and int(world.size) > 1:
+        publication = original.last_run_identity
+        horizon = 0.5 if int(world.rank) == 0 else 0.625
+        _, failures = collective_attempt(world, lambda: simulation.run(until=horizon))
+        with collective_check(world):
+            assert all(row and "arguments differ between ranks" in row[1] for row in failures)
+            assert original.last_run_identity == publication
+            assert (original.time(), original.macro_step()) == (cut, 2)
+        _, rejected = collective_attempt(
+            world, lambda: pops.run(original, t_end=until, max_steps=8, console=False),
+        )
+        with collective_check(world):
+            assert all(row and "historical step controller" in row[1] for row in rejected)
+            assert (original.time(), original.macro_step()) == (cut, 2)
+
     directory = collective_directory(world, tmp_path)
     checkpoint = collective_call(world, lambda: original.checkpoint(str(directory / "compiled")))
     restored = _bind(spec, artifact, world)
