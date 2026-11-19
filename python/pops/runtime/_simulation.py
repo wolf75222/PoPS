@@ -514,6 +514,8 @@ class Simulation:
                 rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
                 failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
             )
+        for name in ("last_accepted_begin", "segment_proposal", "segment_time", "segment_macro_step"):
+            report.pop(name, None)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
         for sample in report.pop("outputs"):
             region = self._outputs[sample["output"]]
