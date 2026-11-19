@@ -169,7 +169,7 @@ class RunManifest:
         raise AttributeError("RunManifest is immutable")
 
 
-def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
+def prepare_run_manifest(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
               output_dir: Any, stop_condition: str | None = None) -> RunManifest:
     snapshot = getattr(engine, "bound_snapshot", None)
     if snapshot is None:
@@ -177,7 +177,7 @@ def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
     bind_identity = getattr(snapshot, "bind_identity", None)
     if type(bind_identity) is not Identity or bind_identity.domain != "bind":
         raise RuntimeError("bound runtime carries no canonical bind identity")
-    manifest = RunManifest(
+    return RunManifest(
         bind_identity=bind_identity,
         continuation_identity=getattr(engine, "_restart_lineage_identity", None),
         start_time=engine.time(),
@@ -189,9 +189,22 @@ def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
             **({"stop_condition": stop_condition} if stop_condition is not None else {}),
         },
     )
+
+
+def publish_run_manifest(engine: Any, manifest: RunManifest) -> None:
     engine._last_run_manifest = manifest
     engine._last_run_identity = manifest.run_identity
+
+
+def begin_run(engine: Any, *, t_end: Any, step_transaction: Any, max_steps: Any,
+              output_dir: Any, stop_condition: str | None = None) -> RunManifest:
+    manifest = prepare_run_manifest(
+        engine, t_end=t_end, step_transaction=step_transaction, max_steps=max_steps,
+        output_dir=output_dir, stop_condition=stop_condition,
+    )
+    publish_run_manifest(engine, manifest)
     return manifest
 
 
-__all__ = ["RUN_MANIFEST_SCHEMA_VERSION", "RunManifest", "begin_run"]
+__all__ = ["RUN_MANIFEST_SCHEMA_VERSION", "RunManifest", "begin_run", "prepare_run_manifest",
+           "publish_run_manifest"]
