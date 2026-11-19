@@ -3161,7 +3161,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 2,
-          "estimated_seconds": 5100,
+          "estimated_seconds": 920,
           "ci_ranks": [
             1,
             2
@@ -4030,7 +4030,7 @@
           "registration": "completion_20261015",
           "native_dimension": 2,
           "declared_cases": 1,
-          "estimated_seconds": 1940,
+          "estimated_seconds": 1860,
           "ci_ranks": [
             1,
             2
@@ -9836,6 +9836,10 @@
       "stock_m1_cold_job": 831143,
       "stock_m1_cold_wall_seconds": 1684.83,
       "stock_m1_largest_historical_final_node_phase_seconds": 2399.295,
+      "superseded_api_v02_estimated_seconds": {
+        "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 5100,
+        "tests/python/integration/runtime/test_finite_structural_depth_native.py": 1940
+      },
       "observed_weights": {
         "tests/python/integration/runtime/test_public_drift_diffusion_matrix.py": {
           "weight_seconds": 730,
