@@ -101,6 +101,14 @@ def test_compiled_fixed_grid_survives_public_restart(
     assert grid["origin"] == (cut if segment_steps == 0 else 0.0).hex()
     assert grid["time"] == original.time().hex()
     assert grid["macro_step"] == original.macro_step()
+    last_begin = 0.0
+    for _ in range(original.macro_step() - 1):
+        last_begin += dt
+    assert state.controller_state["last_accepted_dt"] == (original.time() - last_begin).hex()
+    manifest = original.last_run_manifest
+    assert manifest.controls["step_transaction"]["compiled_advance"]["schema"] == (
+        simulation.control.to_data()["schema"]
+    )
 
     directory = collective_directory(world, tmp_path)
     checkpoint = collective_call(world, lambda: original.checkpoint(str(directory / "compiled")))
