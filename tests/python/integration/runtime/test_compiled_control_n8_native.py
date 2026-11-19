@@ -314,6 +314,12 @@ def test_the_compiled_run_refuses_what_it_cannot_run(artifacts):
     runtime = _bind(world, spec, traced)
     simulation = collective_call(world, lambda: Simulation(runtime))
     collective_call(world, lambda: simulation.run(spec.t_end))
+    with collective_check(world):
+        publication = runtime.last_run_identity
+        assert publication is not None
+        with pytest.raises(TypeError):
+            simulation.run(2 * spec.t_end, max_steps=2**64)
+        assert runtime.last_run_identity == publication
     # The b6 run loop of pops.run does not continue a clock that a compiled run advanced.
     with collective_check(world):
         with pytest.raises(RuntimeError):

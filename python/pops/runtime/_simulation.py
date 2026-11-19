@@ -496,12 +496,13 @@ class Simulation:
             and dt == self._control.first_dt == installed_strategy.dt == temporal.fixed_dt()
             and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
         )
+        manifest = None
         if project_fixed and until > start and max_steps > 0:
-            from pops.runtime._run_manifest import begin_run
+            from pops.runtime._run_manifest import prepare_run_manifest
             from pops.runtime._step_strategy import prepare_program_run
 
             prepared = prepare_program_run(runtime._executor, compiled=True)
-            begin_run(
+            manifest = prepare_run_manifest(
                 runtime._executor, t_end=until, max_steps=max_steps, output_dir=None,
                 step_transaction={
                     **prepared.control_payload,
@@ -528,6 +529,10 @@ class Simulation:
                 rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
                 failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
             )
+        if manifest is not None and report["steps"] > 0:
+            from pops.runtime._run_manifest import publish_run_manifest
+
+            publish_run_manifest(runtime._executor, manifest)
         for name in ("last_accepted_begin", "segment_proposal", "segment_time", "segment_macro_step"):
             report.pop(name, None)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
