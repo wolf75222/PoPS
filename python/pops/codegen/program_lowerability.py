@@ -82,6 +82,38 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
             )
 
 
+def require_uniform_trial_authority(trials: Any, model: Any) -> None:
+    """Authenticate the symbolic operation selected by each provisional Uniform rate."""
+    if not trials:
+        return
+    from pops.codegen.program_models import ProgramModelGraph
+    from pops.time.references import canonical_handle
+
+    if type(model) is not ProgramModelGraph:
+        raise ValueError("Uniform continuation trials require their resolved block model authority")
+    for value in trials:
+        owner = model.owner_for_block(value.block)
+        module = model.source_module_for_owner(owner)
+        handle = value.attrs["operator_handle"]
+        declaration = handle.declaration_ref if handle.is_instance else handle
+        issued = module.operator_handle(declaration.name)
+        if (canonical_handle(issued).canonical_identity() != canonical_handle(declaration).canonical_identity()
+                or handle.signature != issued.signature or handle.kind != issued.kind
+                or handle.registered_operator_name != issued.registered_operator_name):
+            raise ValueError("Uniform continuation trial changes its declared operator authority")
+        operator = module.operator_registry().get(issued.registered_operator_name)
+        if value.op == "source":
+            if value.attrs["source"] != operator.lowering.get("source", operator.name):
+                raise ValueError("Uniform continuation trial changes its declared source")
+        else:
+            balance = operator.lowering.get("physical_balance")
+            captured = value.attrs["physical_balance"]
+            # The emitted Program may already have dropped its authoring registries.
+            if (balance is None or balance.resolve_references(canonical_handle).to_data()
+                    != captured.resolve_references(canonical_handle).to_data()):
+                raise ValueError("Uniform continuation trial changes its declared diffusive balance")
+
+
 def _check_amr_flux_weights(program: Any) -> None:
     """Prove every conservative contribution reaches a commit as exact ``weight * dt * flux``."""
     from pops.codegen.program_emit_kernels import _coeff_metadata_terms

@@ -262,8 +262,44 @@ def _same(expected, actual, where):
         raise ValueError(where + ": exact structural payload/authority mismatch")
 
 
+def _uniform_trial(program, value, publication):
+    """Recognize a root scratch rate with one exact State operand and no deferred phase."""
+    from pops.model import OperatorHandle
+    from pops._ir.balance import BalanceView
+    from pops.model.balance_analysis import diffusion_balance_supported
+    from .value_validation import rate_space_for
+
+    if value.op not in ("source", "diffusive_rhs"):
+        return False
+    handle = value.attrs.get("operator_handle")
+    if (value.region or value.clock != program.clock or value.id >= publication.id
+            or value.vtype != "rhs" or value.field_context is not None or len(value.inputs) != 1
+            or any(key in value.attrs for key in ("schedule", "physical_global_inputs_v1"))
+            or not isinstance(handle, OperatorHandle)):
+        return False
+    state, = value.inputs
+    if (state.vtype != "state" or state.region or state.block is None
+            or value.block != state.block or value.point != state.point
+            or value.state_ref != state.state_ref or state.state_ref not in program._commits
+            or value.space != rate_space_for(state.space)):
+        return False
+    declaration = handle.declaration_ref if handle.is_instance else handle
+    if (not isinstance(declaration, OperatorHandle)
+            or declaration.owner_path.canonical() != value.block.model_owner_path.canonical()
+            or (handle.is_instance and handle.block_ref != value.block)
+            or handle.signature is None or handle.signature.inputs != (state.space,)
+            or handle.signature.output != value.space):
+        return False
+    if value.op == "source":
+        return declaration.kind == "local_source" and isinstance(value.attrs.get("source"), str)
+    view = value.attrs.get("physical_balance")
+    return (type(view) is BalanceView and value.attrs.get("fitted") is False
+            and diffusion_balance_supported(view)
+            and all(row.kind == "diffusion" for row in view.occurrences))
+
+
 def validate_continuations(program, *, target=None):
-    """Check the closed executable profile and unique root publication after deserialization too."""
+    """Check the closed profile and return trial rates requiring resolved operator authentication."""
     def walk(values):
         pending = list(reversed(values))
         keys = ("body_block", "cond_block", "true_block", "false_block", "apply_block", "residual_block")
@@ -311,7 +347,7 @@ def validate_continuations(program, *, target=None):
     opened = [value for value in values if value.op == "continuation_open"]
     active = any(value.op in VERSIONED_OPS - BUNDLE_OPS or value.attrs.get("continuation_scope") for value in values)
     if not active:
-        return
+        return ()
     from .continuation_forest import forest_node
     forest = forest_node(program)
     if target is not None and target != "system" and not (target == "amr_system" and forest is not None):
@@ -349,6 +385,7 @@ def validate_continuations(program, *, target=None):
                 selected = [v for v in regrid_values if v.op == op]
                 if len(selected) != 1 or selected[0].attrs["schema"] != metadata[key]:
                     raise ValueError("AMR regrid requires one exact child and parent publication")
+    trials = []
     for value in values:
         # An AMR trial may compose the existing typed spatial/solver operators;
         # their native effects are owned by the enclosing hierarchy attempt.
@@ -356,7 +393,9 @@ def validate_continuations(program, *, target=None):
         # History stores retain their top-level effect contract; the enclosing
         # System attempt owns them together with the continuation image.
         if value.op not in allowed and not has_graph_contract(value.op) and forest is None:
-            raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
+            if not _uniform_trial(program, value, publications[0]):
+                raise NotImplementedError("Continuation operation %r is not a qualified pure trial/projection" % value.op)
+            trials.append(value)
         if value.op == "reached_duration" and value.id > publications[0].id:
             raise ValueError("reached duration must precede the complete continuation publication")
         if value.attrs.get("continuation_scope"):
@@ -389,6 +428,20 @@ def validate_continuations(program, *, target=None):
         node = node.inputs[0]
         if node.op != "continuation_accepted_candidate" or node.inputs != publication.inputs:
             raise ValueError("continuation carrier projects a different accepted candidate")
+    if trials:
+        # Name equality never creates a dependency on the candidate. Follow the
+        # same ordered operands and structured references as Program liveness.
+        pending = list(publication.inputs)
+        dependencies = set()
+        while pending:
+            value = pending.pop()
+            if value.id not in dependencies:
+                dependencies.add(value.id)
+                pending.extend(value.inputs)
+                pending.extend(program._subblock_value_refs(value))
+        if any(value.id not in dependencies for value in trials):
+            raise ValueError("Uniform continuation trial does not contribute to its root candidate")
+    return tuple(trials)
 
 
 class _ProgramVersionedValues(_ProgramBase):

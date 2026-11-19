@@ -92,7 +92,7 @@ def _is_local_source(value):
     return value.op == "source" or (value.op == "rhs" and not value.attrs.get("flux", True)) or _is_pointwise_rate(value)
 
 
-def explicit_update_consumption(program):
+def explicit_update_consumption(program, *, commit_sources=None):
     """Identify state combinations that can advance accepted explicit state.
 
     An RHS is an observation until a state combination consumes it. Follow the
@@ -168,7 +168,8 @@ def explicit_update_consumption(program):
         elif node.vtype == "state" and len(node.inputs) == 1:
             walk(node.inputs[0], state_consumer=state_consumer, admitted=admitted)
 
-    for value in program._commits.values():
+    commits = program._commits if commit_sources is None else commit_sources
+    for value in commits.values():
         walk(value)
     return (frozenset(updates), frozenset(protected-unprotected),
             frozenset(protected_rates-unprotected_rates),

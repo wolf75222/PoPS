@@ -188,7 +188,7 @@ def _independent_effect(program, value):
 
 
 def prove_accepted_update_ssp(
-    program: Any, *, model_authority: Any = None
+    program: Any, *, model_authority: Any = None, commit_sources: Any = None
 ) -> tuple[AcceptedUpdateSSP | AcceptedSSPPlan | None, str]:
     """Prove each independently owned diffusive accepted State.
 
@@ -273,7 +273,8 @@ def prove_accepted_update_ssp(
                 out[reference] = out.get(reference, Fraction()) + weight * amount
             return True
 
-        for reference, value in program._commits.items():
+        commits = program._commits if commit_sources is None else commit_sources
+        for reference, value in commits.items():
             atoms = {}
             if frozen_atoms(value, Fraction(1), atoms) and atoms == {reference: Fraction(1)}:
                 frozen.add(reference)
@@ -386,7 +387,7 @@ def prove_accepted_update_ssp(
             return ((child, bound) for child in value.inputs)
 
         certificates = []
-        for state_ref, accepted in program._commits.items():
+        for state_ref, accepted in commits.items():
             closure, rates, visiting = {}, {}, set()
             owner, clock = state_ref.block_ref, accepted.clock
 

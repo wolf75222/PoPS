@@ -67,7 +67,8 @@ def _single_forward_euler_with_frozen_inputs(program, rows):
 
 
 def accepted_diffusive_quadrature(program, *, partition_stability_checked=(),
-                                  authored_stability_rates=(), model_authority=None):
+                                  authored_stability_rates=(), model_authority=None,
+                                  commit_sources=None):
     """Stop at each fresh residual: a predictor's ancestry is not an accepted exchange."""
     selected = {}
 
@@ -126,13 +127,15 @@ def accepted_diffusive_quadrature(program, *, partition_stability_checked=(),
                 children.append((child, product, False))
             pending.extend(reversed(children))
 
-    for value in program._commits.values():
+    commits = program._commits if commit_sources is None else commit_sources
+    for value in commits.values():
         walk(value, {0: Fraction(1)})
     rows = tuple((value, {power: coefficient for power,coefficient in weight.items() if coefficient})
                  for value,weight in selected.values())
     if rows:
         from .program_accepted_ssp import prove_accepted_update_ssp
-        certificate, reason = prove_accepted_update_ssp(program, model_authority=model_authority)
+        certificate, reason = prove_accepted_update_ssp(
+            program, model_authority=model_authority, commit_sources=commit_sources)
         if certificate is None and not all(rate.id in partition_stability_checked
                 or rate.id in authored_stability_rates for rate, _ in rows):
             raise ValueError("explicit diffusive acceptance needs an SSP coefficient-one convex proof: " + reason)
@@ -144,10 +147,11 @@ def accepted_diffusive_quadrature(program, *, partition_stability_checked=(),
 
 def emit_accepted_diffusive_exchanges(program, *, target="system", block_indices=None,
                                      partition_stability_checked=(), authored_stability_rates=(),
-                                     model_authority=None):
+                                     model_authority=None, commit_sources=None):
     rows = accepted_diffusive_quadrature(
         program, partition_stability_checked=partition_stability_checked,
-        authored_stability_rates=authored_stability_rates, model_authority=model_authority)
+        authored_stability_rates=authored_stability_rates, model_authority=model_authority,
+        commit_sources=commit_sources)
     if rows and target not in {"system", "amr_system"}:
         raise ValueError("diffusive accepted exchanges require a native install scope")
     lines = []

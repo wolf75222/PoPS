@@ -292,7 +292,7 @@ def _emit_cpp_program_impl(
             "emit_cpp_program balance_due_contract must be an exact BalanceDueContract"
         )
     program.validate()
-    _check_lowerable(program, authority, field_plans or {}, target=target)
+    commit_sources = _check_lowerable(program, authority, field_plans or {}, target=target)
     from pops.codegen.program_emit_kernels import ProgramProviderPlans
 
     from pops.codegen._native_auxiliary_shapes import native_auxiliary_halos
@@ -318,6 +318,7 @@ def _emit_cpp_program_impl(
         provider_plans=provider_plans,
         value_authority=value_authority,
         exchange_metadata=exchange_metadata,
+        commit_sources=commit_sources,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -751,7 +752,7 @@ def _check_lowerable(
     field_plans: Any = None,
     *,
     target: str | None = None,
-) -> None:
+) -> Any:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
@@ -762,7 +763,11 @@ def _check_lowerable(
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
     declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
     from pops.time._program.versioned_values import validate_continuations
-    validate_continuations(program, target=target)
+    from .program_lowerability import require_uniform_trial_authority
+    from .program_structural_flux import uniform_trial_commit_sources
+    trials = validate_continuations(program, target=target)
+    require_uniform_trial_authority(trials, model)
+    commit_sources = uniform_trial_commit_sources(program, trials)
     _check_model_owner_dispatch(program, model)
     from .program_emit_moving import check_moving_program
     check_moving_program(program, model, target)
@@ -781,6 +786,7 @@ def _check_lowerable(
     # Dense local linear solves and prepared local nonlinear solves are specialized to the complete
     # manifest-sized system. Their stack storage and loops use exactly N; no central component-count
     # allowlist, truncating buffer, or scientific-model branch selects N.
+    return commit_sources
 
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work

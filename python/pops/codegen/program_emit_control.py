@@ -538,7 +538,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
                provider_plans: Any = None, value_authority: Any = None,
-               exchange_metadata: list[str] | None = None) -> tuple:
+               exchange_metadata: list[str] | None = None, commit_sources: Any = None) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
@@ -576,7 +576,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from .program_emit_moving import deferred_moving_rates
     var[("moving_deferred_rates",)] = deferred_moving_rates(program)
     from pops.codegen.program_partition_stability import explicit_update_consumption
-    updates, admitted_updates, admitted_rates, consumed_rates = explicit_update_consumption(program)
+    updates, admitted_updates, admitted_rates, consumed_rates = explicit_update_consumption(
+        program, commit_sources=commit_sources)
     var[("explicit_state_updates",)] = updates
     var[("authored_stability_updates",)] = admitted_updates
     var[("authored_stability_rates",)] = admitted_rates
@@ -833,6 +834,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_diffusion_exchanges import emit_accepted_diffusive_exchanges
     lines.extend(emit_accepted_diffusive_exchanges(
         program, target=target, block_indices=block_idx, model_authority=model,
+        commit_sources=commit_sources,
         partition_stability_checked=var.get(("partition_stability_checked",), ()),
         authored_stability_rates=var.get(("authored_stability_rates",), ())))
     from .program_emit_stencil_flux import emit_accepted_stencil_exchanges
@@ -840,7 +842,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     from pops.codegen.program_transport_quadrature import emit_accepted_transport_exchanges
     lines.extend(emit_accepted_transport_exchanges(program, var, block_idx, model, target=target))
     from .program_integral_transfers import integral_transfers
-    transfer_rows = integral_transfers(program, var, model_authority=model)
+    transfer_rows = integral_transfers(program, var, model_authority=model,
+                                       commit_sources=commit_sources)
     integral_transfers = [row.cpp(program) for row in transfer_rows]
     if target == "system":
         lines.extend(integral_transfers)
