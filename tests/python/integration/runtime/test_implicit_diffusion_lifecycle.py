@@ -18,9 +18,10 @@ from pops.numerics import DiscretizationPlan
 from pops.projection import ConservativeCellAverage
 from pops.solvers import Newton
 from pops.time import (
-    DerivativeStrategy, FailRun, FixedDt, ImplicitDiffusionStage, SolveUnknown,
+    DerivativeStrategy, FailRun, FixedDt, ImplicitDiffusionStage, RejectAttempt, SolveUnknown,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.uniform_continuation_trial import publish_trial
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
@@ -126,6 +127,80 @@ def test_same_physical_flux_explicit_implicit_fourier_parity(isolated_native_cac
         actual, _ = run_case(n, 1 + wave, method=method, dt=dt)
         np.testing.assert_allclose(actual, 1 + amplitude * wave, rtol=0, atol=1e-9)
         record_property(method + "_max_error", float(np.max(np.abs(actual - (1 + amplitude * wave)))))
+
+
+def test_uniform_continuation_fourier_keeps_oriented_exchanges_and_rolls_back(
+        isolated_native_cache, native_cxx, kokkos_root, record_property):
+    n, dt, nu = 8, 1/64, 0.1
+    initial = mode(n)
+    eigenvalue = 8 * nu * n**2 * math.sin(math.pi/n)**2
+    gain = 1 - dt * eigenvalue
+
+    def guard_trial(program, temporal, trial):
+        change = program.value("heat_trial_increment", trial - temporal.n, at=temporal.next.point)
+        return program.guard("heat_trial_error", trial, program.norm_inf(change) <= 0.125,
+                             action=RejectAttempt())
+
+    def publish(program, temporal, trial):
+        publish_trial(program, temporal, guard_trial(program, temporal, trial))
+
+    def commit(program, temporal, trial):
+        program.commit(temporal.next, guard_trial(program, temporal, trial))
+
+    actual, trial = run_case(n, initial, method="forward_euler", dt=dt, publish=publish)
+    control, direct = run_case(n, initial, method="forward_euler", dt=dt, publish=commit)
+    np.testing.assert_array_equal(actual, control)
+    np.testing.assert_allclose(actual, gain * initial, rtol=0, atol=1e-12)
+    native = trial._executor
+    system = native._s
+    rows = native._program_exchange_records()
+    assert rows == direct._executor._program_exchange_records()
+    assert len(rows) == 4 * n**2
+    assert len({row["occurrence_identity"] for row in rows}) == 1
+    assert len({row["evaluation_context"] for row in rows}) == 1
+    incidences = set()
+    cell_exchange = np.zeros_like(initial)
+    for row in rows:
+        cell_token, axis_token, side_token = row["quadrature_identity"].split("/")
+        i, j = map(int, cell_token.split(":")[1:])
+        axis, side = int(axis_token.split(":")[1]), int(side_token.split(":")[1])
+        assert 0 <= i < n and 0 <= j < n and axis in (0, 1) and side in (0, 1)
+        incidences.add((i, j, axis, side))
+        orientation = 1 if side else -1
+        assert row["orientation"] == orientation and row["multiplicity"] == 1
+        assert row["temporal_weight"] == dt and row["face_measure"] == 1/n
+        neighbor = [j, i]
+        neighbor[1-axis] = (neighbor[1-axis] + orientation) % n
+        here, other = initial[j, i], initial[tuple(neighbor)]
+        left, right = (here, other) if side else (other, here)
+        assert abs(row["numerical_flux"] - nu*n*(right-left)) <= 2e-11
+        expected_amount = orientation * row["numerical_flux"] * dt/n
+        assert abs(row["integrated_amount"] - expected_amount) <= 2e-15
+        cell_exchange[j, i] += row["integrated_amount"]
+    assert len(incidences) == len(rows)
+    np.testing.assert_allclose(cell_exchange, (actual-initial)/n**2, rtol=0, atol=2e-11)
+
+    def accepted_envelope():
+        return (trial.time(), trial.macro_step(), np.asarray(trial.state_global("material")).tobytes(),
+                native._program_exchange_records(), native._checkpoint_program_exchanges(),
+                system._checkpoint_continuation_image())
+
+    before = accepted_envelope()
+    assert before[-1]
+    for duration, diagnostic in ((2*dt, "heat_trial_error"),
+                                 (4*dt, "combined_transport_diffusion_stability")):
+        with pytest.raises(RuntimeError, match=diagnostic):
+            system.step(duration)
+        assert accepted_envelope() == before
+
+    for runtime in (trial, direct):
+        assert pops.run(runtime, t_end=2*dt, max_steps=1, console=False).accepted_steps == 1
+        assert runtime.time() == 2*dt and runtime.macro_step() == 2
+    np.testing.assert_array_equal(trial.state_global("material"), direct.state_global("material"))
+    np.testing.assert_allclose(trial.state_global("material")[0], gain**2 * initial, rtol=0, atol=1e-12)
+    assert native._program_exchange_records() == direct._executor._program_exchange_records()
+    assert system._checkpoint_continuation_image() != before[-1]
+    record_property("accepted_fourier_exchanges", len(rows))
 
 
 @pytest.mark.parametrize("method", ["forward_euler", "backward_euler"])

@@ -3,45 +3,10 @@ import pops
 import pytest
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
-from pops.continuations import ContinuationSchema
-from pops.graph_functions import graph
 from pops.time._program.detach import detach_compiled_program
-from pops.time.variant_types import Bool, Product, type_of
 from tests.python.integration.runtime import test_implicit_diffusion_lifecycle as diffusion
 from tests.python.integration.runtime import test_native_retry_transactions as source
-
-
-def publish_trial(program, temporal, trial, *, attest_sibling=False):
-    memory = program.product(previous=program.float64(1.0), next_dt=program.float64(0.125))
-    initial = program.product(state=temporal.n, time=program.float64(0.0),
-                              step=program.int64(0), controller=memory)
-    schema = ContinuationSchema(
-        initial, time=("time",), step=("step",), fields=((temporal.next, ("state",)),),
-        roles=((("controller", "previous"), "retry_control"),
-               (("controller", "next_dt"), "retry_control")),
-    )
-    base = program.continuation_open(initial, schema)
-    old = program.continuation_read(base)
-    duration = program.requested_dt()
-    proposal = program.product(h=duration)
-    continuation = program.product(state=trial, time=old["time"] + duration,
-                                   step=old["step"] + program.int64(1),
-                                   controller=old["controller"])
-    envelope = program.product(continuation=continuation, increment=program.product(),
-                               observations=program.product(), checks=program.product())
-    candidate = program.continuation_freeze(base, proposal, envelope)
-
-    @graph(inputs=Product(base=schema.read_type, proposal=type_of(proposal),
-                          candidate=type_of(envelope)),
-           output=Product(accepted=Bool, checks=Product()))
-    def attest(builder, args):
-        expected = args["base"]["time"] + args["proposal"]["h"]
-        return builder.product(accepted=args["candidate"]["continuation"]["time"] == expected,
-                               checks=builder.product())
-
-    assessed = program.continuation_freeze(base, proposal, envelope) if attest_sibling else candidate
-    program.continuation_publish(program.continuation_accept(
-        candidate, program.continuation_attest(assessed, attest)))
+from tests.python.support.uniform_continuation_trial import publish_trial
 
 
 @pytest.mark.parametrize("op", ["source", "diffusive_rhs"])
