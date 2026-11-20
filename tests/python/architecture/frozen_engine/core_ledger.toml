@@ -799,3 +799,73 @@ paths = [
   "include/pops/runtime/program/module_metadata.hpp",
   "src/runtime/system/system_io.cpp",
 ]
+
+[[mechanism]]
+id = "affine-oriented-uniform-halo-images"
+issue = "ROM-27"
+rule = "IR26"
+pre_freeze = true
+what = """
+Prepare an oriented image for each required Cartesian Uniform ghost region.
+The exact identification topology owns signed axis maps and offsets at the
+bound extents. The plan assigns an owned source to each portion of the image
+and composes the component action from the field's declared representation.
+A corner requires matching images and component actions for every admissible
+crossing order. Each identification preserves the ordinary translation axes.
+The geometry bounds the crossing proof by rank and the number of these axes.
+The same action is used in local copy and MPI pack before the
+generated finite-volume rate reads its traces. Translation-only schedules
+keep their execution order and exchange bytes.
+"""
+structures = [
+  { case = "shifted-scalar-transport", builder = "tests/python/integration/runtime/test_g09_oriented_identification_native.py::build_g09_twisted_transport", structure = "Linear Upwind transport with a shifted and wrapped tangential trace, combined by SSPRK2" },
+  { case = "rotated-m03-euler", builder = "tests/python/integration/runtime/test_g09_oriented_identification_native.py::build_g09_quarter_euler", structure = "Stiffened Euler with authored Rusanov, two polar moments and two orthogonal signed face pairs" },
+]
+measurement = """
+The builders and independent oracles were committed at 438a8796b before
+the mechanism. The stock native receipt 829457, on dad07cb14, reads (0,1)
+at the scalar ghost (8,1) where the identified support requires (0,7);
+the torus gives 1.0 at the receiving cell against 1.125 on the identified
+support. Its M03 state differs from the signed-map oracle by 0.010960493820325379
+on the torus and refuses each signed row in native installation. The Dim2
+Serial wheel of 237c8bc9e completes both scientific trajectories in 830942.
+The shifted scalar agrees bitwise with its oracle and preserves its inventory.
+M03 matches the independent Rusanov/SSPRK2 calculation, including both
+moments, and preserves mass and energy to the existing roundoff bound.
+The same job passes the old coordinate torus and physical SlipWall controls.
+The local Kokkos halo suite checks depths one and two, a conflicting corner
+before mutation, and two independently interleaved polar families.
+"""
+refusal_set = """
+Refuse an identification that exchanges an ordinary translation axis and
+another axis, inconsistent corner images or component actions, incompatible
+extents or depth, partial vector families and roles without an admitted
+action before publishing the schedule. The admitted transport is the
+fixed-step host finite-volume route on one closed Cartesian Uniform
+support. Field solves, auxiliary providers, mixed physical corners,
+embedded boundaries, adaptive layouts and charted geometry need their
+own qualified consumers.
+"""
+paths = [
+  "include/pops/core/state/variables.hpp",
+  "include/pops/mesh/boundary/affine_index_transform.hpp",
+  "include/pops/mesh/boundary/fill_boundary.hpp",
+  "include/pops/mesh/boundary/halo_exchange.hpp",
+  "include/pops/mesh/boundary/halo_schedule.hpp",
+  "include/pops/mesh/boundary/identified_halo_images.hpp",
+  "include/pops/mesh/boundary/periodicity.hpp",
+  "include/pops/mesh/nd_proof/periodicity.hpp",
+  "include/pops/mesh/topology/boundary_topology.hpp",
+  "include/pops/runtime/builders/compiled/dsl_block.hpp",
+  "include/pops/runtime/builders/compiled/generated_system_block.hpp",
+  "include/pops/runtime/program/prepared_scalar_boundary_session.hpp",
+  "include/pops/runtime/program/program_context.hpp",
+  "include/pops/runtime/system.hpp",
+  "include/pops/runtime/system/native_package_capability.hpp",
+  "include/pops/runtime/system/system_domain.hpp",
+  "python/bindings/core/init/init_core.cpp",
+  "python/pops/codegen/_identified_halo_consumers.py",
+  "python/pops/codegen/_phases.py",
+  "src/runtime/system/system_install.cpp",
+  "src/runtime/system/system_program.cpp",
+]

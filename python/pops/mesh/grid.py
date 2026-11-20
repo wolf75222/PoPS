@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Any, ClassVar
 
 from pops._geometry_contracts import cartesian_geometry_contract
@@ -12,7 +13,8 @@ from pops.frames import CartesianAxis
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 
-from ._layout_plan_contracts import NormalizedGeometry
+from ._layout_plan_contracts import NormalizedGeometry, freeze, thaw
+from .boundaries.topology import BoundaryTopology
 
 
 _SCHEMA_VERSION = 3
@@ -142,8 +144,10 @@ class CartesianGrid:
     frame: RectangleFrame | CartesianDomainFrame
     cells: tuple[int, ...]
     periodic: PeriodicAxes | None
+    _identification_data: Mapping[str, Any] = field(compare=False, repr=False)
 
-    def __init__(self, *, frame: Any, cells: Any, periodic: Any = None) -> None:
+    def __init__(self, *, frame: Any, cells: Any, periodic: Any = None,
+                 identifications: BoundaryTopology | None = None) -> None:
         if not isinstance(frame, (RectangleFrame, CartesianDomainFrame)):
             raise TypeError(
                 "CartesianGrid.frame must be returned by a bounded Cartesian domain")
@@ -154,7 +158,46 @@ class CartesianGrid:
             raise ValueError("CartesianGrid periodic axes must belong to its exact frame")
         object.__setattr__(self, "frame", frame)
         object.__setattr__(self, "cells", _cells(cells, dimension=len(frame.axes)))
+        if identifications is not None:
+            if type(identifications) is not BoundaryTopology:
+                raise TypeError("CartesianGrid.identifications must be an exact BoundaryTopology")
+            if {(face.orientation.axis, face.orientation.side.value)
+                    for face in identifications.boundaries} != {
+                        (axis.index, side) for axis in frame.axes for side in ("lower", "upper")
+                    } or len(identifications.boundaries) != 2 * len(frame.axes):
+                raise ValueError("CartesianGrid.identifications must classify its exact ranked faces")
+            if not any(not row.axis_translation for row in identifications.periodic):
+                raise ValueError("ordinary Cartesian translations use PeriodicAxes")
+            if identifications.physical:
+                raise NotImplementedError(
+                    "G09 I1 cannot compose an identified and a physical face at a corner")
+            axes = tuple(axis for axis in frame.axes if any(
+                row.axis_translation and row.source.orientation.axis == axis.index
+                for row in identifications.periodic))
+            derived = PeriodicAxes(axes) if axes else None
+            if periodic is not None and periodic != derived:
+                raise ValueError("CartesianGrid periodic translations differ from its topology")
+            periodic = derived
         object.__setattr__(self, "periodic", periodic)
+        if identifications is not None:
+            object.__setattr__(self, "_identification_data", freeze(
+                identifications.canonical_identity()))
+            self._resolved_identifications()
+
+    @property
+    def identifications(self) -> BoundaryTopology | None:
+        from .boundaries.topology import BoundaryTopology
+
+        data = getattr(self, "_identification_data", None)
+        return None if data is None else BoundaryTopology.from_data(thaw(data))
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not CartesianGrid:
+            return NotImplemented
+        return (self.frame == other.frame and self.cells == other.cells and
+                self.periodic == other.periodic and
+                getattr(self, "_identification_data", None) ==
+                getattr(other, "_identification_data", None))
 
     @property
     def name(self) -> str:
@@ -201,7 +244,7 @@ class CartesianGrid:
         })
 
     def options(self) -> dict[str, Any]:
-        return {
+        result = {
             "frame_id": self.frame.canonical_id,
             "cells": list(self.cells),
             "axis_order": [axis.name for axis in self.axis_order],
@@ -209,6 +252,57 @@ class CartesianGrid:
             "cell_widths": list(self.cell_widths),
             "topology": self.topology.to_dict(),
         }
+        if hasattr(self, "_identification_data"):
+            result["identifications"] = thaw(self._identification_data)
+        return result
+
+    def _resolved_identifications(self) -> tuple[tuple[int, ...], ...]:
+        """Resolve the exact authored isometry to the integer cell lattice."""
+        if self.identifications is None:
+            return ()
+        width = tuple((Fraction(hi) - Fraction(lo)) / n
+                      for lo, hi, n in zip(self.frame.lower, self.frame.upper, self.cells, strict=True))
+        flags = () if self.periodic is None else tuple(axis.index for axis in self.periodic.axes)
+        rows = []
+        for row in self.identifications.periodic:
+            if row.axis_translation:
+                continue
+            orientation = row.orientation
+            rank = len(self.cells)
+            if len(orientation.permutation) != rank:
+                raise ValueError("periodic orientation rank differs from CartesianGrid")
+            source, target = row.source.orientation, row.target.orientation
+            source_face = 2 * source.axis + int(source.outward_sign > 0)
+            target_face = 2 * target.axis + int(target.outward_sign > 0)
+            shift = row.tangential_shifts or (Fraction(0),) * rank
+            offsets = [0] * rank
+            for j, k in enumerate(orientation.permutation):
+                if self.cells[j] != self.cells[k] or width[j] != width[k]:
+                    raise ValueError("identified axes require equal extents and spacing at axis %d" % k)
+                if (j in flags) != (k in flags):
+                    raise ValueError(
+                        "G09 I1 identification must preserve the ordinary translation axes; "
+                        "a mixed tangent needs a normalized corner proof")
+                sign = orientation.signs[j]
+                if j == source.axis:
+                    interior = self.cells[j] - 1 if source.outward_sign > 0 else 0
+                    exterior = self.cells[k] if target.outward_sign > 0 else -1
+                    offsets[k] = exterior - sign * interior
+                    continue
+                units = shift[k] / width[k]
+                if units.denominator != 1:
+                    raise ValueError("tangential identification offset on axis %d is %s cells" %
+                                     (k, units))
+                if units and k not in flags:
+                    raise ValueError("identification offset requires an axis translation on axis %d" % k)
+                offset = units.numerator % self.cells[k]
+                offsets[k] = (self.cells[k] - 1 if sign < 0 else 0) + offset
+            if (orientation.permutation == tuple(range(rank)) and orientation.signs == (1,) * rank
+                    and not any(offset for axis, offset in enumerate(offsets) if axis != target.axis)):
+                raise ValueError("an identity tangential shift on the lattice uses PeriodicAxes")
+            rows.append((source_face, target_face, *orientation.permutation,
+                         *orientation.signs, *offsets))
+        return tuple(sorted(rows))
 
     def normalized_geometry(self) -> NormalizedGeometry:
         """Project the exact framed grid without relying on runtime-engine internals."""
@@ -227,7 +321,7 @@ class CartesianGrid:
     def native_spatial_data(self) -> dict[str, Any]:
         """Exact topology and base decomposition consumed by native layout normalization."""
         periodic_indices = {axis.index for axis in self.topology.periodic_axes}
-        return {
+        result = {
             "schema_version": 1,
             "periodicity": [index in periodic_indices for index in range(len(self.cells))],
             "centering": "cell",
@@ -240,6 +334,10 @@ class CartesianGrid:
                 }],
             },
         }
+        rows = self._resolved_identifications()
+        if rows:
+            result["identifications"] = [list(row) for row in rows]
+        return result
 
     def validate(self, context: Any = None) -> bool:
         del context
@@ -285,7 +383,7 @@ class CartesianGrid:
             "schema_version", "grid_type", "frame", "frame_id", "cells", "axis_order",
             "extent", "cell_widths", "topology",
         }
-        if not isinstance(data, Mapping) or set(data) != required:
+        if not isinstance(data, Mapping) or set(data) - {"identifications"} != required:
             raise TypeError("CartesianGrid data has an unsupported shape")
         if data["schema_version"] != _SCHEMA_VERSION or data["grid_type"] != "cartesian":
             raise ValueError("CartesianGrid data uses an unsupported schema")
@@ -309,6 +407,8 @@ class CartesianGrid:
             frame=frame,
             cells=data["cells"],
             periodic=None if not periodic_axes else PeriodicAxes(periodic_axes),
+            identifications=(BoundaryTopology.from_data(data["identifications"])
+                             if "identifications" in data else None),
         )
         if result.to_dict() != dict(data):
             raise ValueError("CartesianGrid data is not canonical")

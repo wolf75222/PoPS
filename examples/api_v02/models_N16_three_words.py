@@ -2,8 +2,8 @@
 a decay source, under each representation of one constant mode that the lowering serves (N16 5.1,
 A1), on two layouts:
 
-- ``"graded"``: the 32 graded cells of N17's segment (widths in a ratio of about 92), FaceFlux
-  only, since a mapped layout refuses a named source today (``_static_geometry_consumers.py``);
+- ``"graded"``: the 32 graded cells of N17's segment (widths in a ratio of about 92). The default
+  is FaceFlux alone, and ``source=True`` also advances the decay on the physical volumes;
 - ``"uniform"``: 16 cells of [0, 3], μ(K) = 3/16, neither 1 nor a logical spacing, FaceFlux and the
   decay source, so the scale μ(K) of a total under CellRate is seen.
 
@@ -112,7 +112,7 @@ def encoded_initial(represent, layout="graded"):
 def build_words(*, represent="total", layout="graded", source=None, initial="bound",
                 coefficients=None, name=None):
     """Burgers on ``layout`` with outflow ends, under the row that ``represent`` names, with the
-    decay source -DECAY u on the uniform layout (``source`` defaults to it there). The step is
+    decay source -DECAY u when ``source=True`` (the default on the uniform layout). The step is
     fixed. ``initial="analytic"`` projects u0 on b6's analytic route instead, which a total, a
     sample and a stated rule refuse (it projects cell averages). ``coefficients`` binds the given
     coefficients in place of the encode of u0, and ``name`` names the case in place of its

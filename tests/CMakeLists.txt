@@ -1090,7 +1090,8 @@ set(_euler_dir "${CMAKE_CURRENT_BINARY_DIR}/euler-amr-fixtures")
 set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
   "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp"
   "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp"
-  "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp")
+  "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp"
+  "${_euler_dir}/empty_cadence.cpp" "${_euler_dir}/scalar_history.cpp")
 if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
   set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
     "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
@@ -1112,7 +1113,9 @@ target_compile_definitions(pops_build_euler_amr_fixture_program PRIVATE ${_euler
 add_dependencies(pops_build_euler_amr_fixture_program pops_euler_amr_criteria)
 target_include_directories(pops_build_euler_amr_fixture_program PRIVATE "${_euler_dir}")
 set(_fixture_support "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support")
-set(_euler_variants gravity riemann fickian)
+set(_euler_variants gravity riemann fickian empty_cadence
+  scalar_history scalar_history_ghost scalar_history_output_2 scalar_history_dense_1
+  scalar_history_dense_2)
 if(POPS_NATIVE_DIM LESS_EQUAL 2)
   list(APPEND _euler_variants magnetic prepared_constitutive)
 endif()
@@ -1126,7 +1129,9 @@ foreach(_variant IN LISTS _euler_variants)
   set(_stem "${_euler_dir}/${_variant}-program")
   set(_fragment "${_euler_dir}/${_variant}.cpp")
   set(_step_headers cpp/support/explicit_amr_program.hpp)
-  if(_variant STREQUAL "prepared_constitutive")
+  if(_variant MATCHES "^scalar_history")
+    set(_fragment "${_euler_dir}/scalar_history.cpp")
+  elseif(_variant STREQUAL "prepared_constitutive")
     set(_fragment "${_euler_dir}/fickian.cpp")
     list(APPEND _step_headers cpp/support/prepared_constitutive_amr_program.hpp)
   endif()
@@ -1150,6 +1155,12 @@ function(pops_use_euler_amr_fixture target variant program_macro)
   set_target_properties(${target} PROPERTIES ENABLE_EXPORTS ON)
 endfunction()
 pops_use_euler_amr_fixture(test_amr_distribute_coarse_serial gravity POPS_TEST_GRAVITY_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_seed_no_refine empty_cadence POPS_TEST_EMPTY_CADENCE_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history POPS_TEST_SCALAR_HISTORY_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_output_2 POPS_TEST_SCALAR_HISTORY_OUTPUT_2_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_dense_1 POPS_TEST_SCALAR_HISTORY_DENSE_1_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_dense_2 POPS_TEST_SCALAR_HISTORY_DENSE_2_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_history_remap_collective scalar_history_ghost POPS_TEST_SCALAR_HISTORY_GHOST_PROGRAM_SO)
 pops_use_euler_amr_fixture(test_amr_riemann_native riemann POPS_TEST_RIEMANN_PROGRAM_SO)
 pops_use_euler_amr_fixture(test_amr_riemann_native gravity POPS_TEST_RIEMANN_WRONG_PROGRAM_SO)
 pops_use_euler_amr_fixture(test_amr_program_diffusion fickian POPS_TEST_FICKIAN_PROGRAM_SO)

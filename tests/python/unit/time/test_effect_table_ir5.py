@@ -78,10 +78,12 @@ def test_cell_total_routes_are_facts_without_new_region_effects():
     accesses = {op: row.cell_total for op, row in EFFECTS.items() if row.cell_total is not None}
     assert accesses == {"state": "storage", "linear_combine": "storage",
                         "rhs": "density-rate", "diffusive_rhs": "density-rate",
-                        "source": "density-rate"}
+                        "source": "density-rate", "moving_total_rate": "moving-rate"}
     assert CELL_TOTAL_PROGRAM_OPS == set(accesses)
     assert all(not has_graph_contract(op) and not region_safe(op)
-               for op in ("rhs", "diffusive_rhs", "source"))
+               for op in ("rhs", "diffusive_rhs", "source", "moving_total_rate"))
+    from pops._ir.effects import cell_total_density_rate
+    assert not cell_total_density_rate("moving_total_rate")
     with pytest.raises(ValueError, match="conflicting cell-total access"):
         _row("total-storage total-density-rate")
 

@@ -114,6 +114,7 @@
     "tests/python/integration/runtime/test_finite_structural_depth_native.py": 2,
     "tests/python/integration/runtime/test_g03_cell_totals_native.py": 1,
     "tests/python/integration/runtime/test_g03_moving_members_native.py": 1,
+    "tests/python/integration/runtime/test_g03_moving_transport_native.py": 1,
     "tests/python/integration/runtime/test_g03_nonlinear_accumulation_native.py": 1,
     "tests/python/integration/runtime/test_hierarchy_flux_v14_native.py": 2,
     "tests/python/integration/runtime/test_implicit_arrays_v14_native.py": 2,
@@ -146,6 +147,8 @@
     "tests/python/integration/runtime/test_scientific_spatial_gmres_v14_native.py": 2,
     "tests/python/integration/runtime/test_scientific_spatial_v14_native.py": 2,
     "tests/python/integration/runtime/test_stencil_flux_v02_native.py": 2,
+    "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 1,
+    "tests/python/integration/runtime/test_surface_n15_sources_native.py": 1,
     "tests/python/integration/runtime/test_surface_n16_three_words_native.py": 1,
     "tests/python/integration/runtime/test_uniform_checkpoint_owner_identity.py": 2,
     "tests/python/integration/runtime/test_uniform_cp9_dim1_runtime.py": 1,
@@ -153,8 +156,6 @@
     "tests/python/integration/surface/test_cf17_l1_swaps.py": 1,
     "tests/python/unit/runtime/test_computed_frontier_clipping.py": 2,
     "tests/python/unit/runtime/test_computed_program_frontier.py": 2,
-    "tests/python/unit/runtime/test_step_strategy.py": 2,
-    "tests/python/integration/runtime/test_surface_n15_sources_native.py": 1,
-    "tests/python/integration/runtime/test_surface_n15_cell_load_native.py": 1
+    "tests/python/unit/runtime/test_step_strategy.py": 2
   }
 }

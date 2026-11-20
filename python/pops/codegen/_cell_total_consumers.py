@@ -177,9 +177,11 @@ def validate_cell_total_consumers(plan: Any) -> None:
     _validate_volume_authority(plan, blocks)
     if plan.time is None:
         _refuse("cell_total_program", name, "a case without a Program", "the Program of the case")
+    from pops.codegen._moving_members_consumers import moving_geometry_values
     values = list(all_ops(plan.time))
     guards = finite_guard_values(values)
-    ops = sorted({value.op for value in values if value.id not in guards}
+    geometry = moving_geometry_values(plan, values)
+    ops = sorted({value.op for value in values if value.id not in guards and value.id not in geometry}
                  - CELL_TOTAL_PROGRAM_OPS)
     if any(op in ("geometry_state", "reynolds_update") for op in ops):
         _refuse("cell_total_moving", name, "a moving configuration, whose volume is a member of "

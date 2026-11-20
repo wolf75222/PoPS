@@ -42,6 +42,14 @@ A row is a set of words:
     the encoded rate of that total. These facts only describe the operation. The resolved storage
     owner, volume, geometry and step constraints still control when this route serves it.
 
+``total-moving-rate``
+    a generated face operation on totals and the exact candidate geometry, using the volume
+    member for its decode and returning an undivided rate.
+
+``static-face``
+    a face operation that reads the base layout geometry and cannot evaluate a moving balance.
+    The static cell-total density rates likewise use the base volume for decoding.
+
 A row without words records an emitted operation for which lot L grants none of the checked
 capabilities. It makes no claim about the operation's runtime purity or placement.
 
@@ -57,7 +65,7 @@ from typing import Literal
 
 _WORDS = frozenset(("graph", "fails", "algorithm", "rendezvous", "region", "device", "ordered",
                     "host-region", "accepted-state-inputs", "total-storage",
-                    "total-density-rate"))
+                    "total-density-rate", "total-moving-rate", "static-face"))
 
 
 @dataclass(frozen=True)
@@ -70,7 +78,8 @@ class Effect:
     device: str | None
     host_region: bool
     accepted_state_inputs: bool = False
-    cell_total: Literal["storage", "density-rate"] | None = None
+    cell_total: Literal["storage", "density-rate", "moving-rate"] | None = None
+    static_face: bool = False
 
 
 def _row(words: str) -> Effect:
@@ -79,7 +88,7 @@ def _row(words: str) -> Effect:
         raise ValueError("malformed effect row: %r" % words)
     if {"algorithm", "rendezvous"} <= set(tokens) or {"device", "ordered"} <= set(tokens):
         raise ValueError("conflicting effect words: %r" % words)
-    if {"total-storage", "total-density-rate"} <= set(tokens):
+    if len({"total-storage", "total-density-rate", "total-moving-rate"} & set(tokens)) > 1:
         raise ValueError("conflicting cell-total access words: %r" % words)
     if not {"fails", "algorithm", "rendezvous"}.isdisjoint(tokens) and "graph" not in tokens:
         raise ValueError("an effect word without a GraphFunction contract: %r" % words)
@@ -89,7 +98,9 @@ def _row(words: str) -> Effect:
                   region="region" in tokens, device=device, host_region="host-region" in tokens,
                   accepted_state_inputs="accepted-state-inputs" in tokens,
                   cell_total=("storage" if "total-storage" in tokens else
-                              "density-rate" if "total-density-rate" in tokens else None))
+                              "density-rate" if "total-density-rate" in tokens else
+                              "moving-rate" if "total-moving-rate" in tokens else None),
+                  static_face="static-face" in tokens)
 
 
 # The spatial operations already refused after synchronization. Their operation names and effect
@@ -163,7 +174,7 @@ _ROWS = {
     "continuation_synchronized_fields":    'graph fails rendezvous region',
     "continuation_transform":              'graph fails rendezvous region',
     "continuation_working_value":          'graph fails rendezvous region',
-    "coupled_rate":                         '',
+    "coupled_rate":                         'static-face',
     "coupled_rate_out":                     '',
     "diffusive_rhs":                        'total-density-rate',
     "distributed_balanced_domain":         'graph fails algorithm',
@@ -238,9 +249,10 @@ _ROWS = {
     "logical_and":                          '',
     "matrix_free_operator":                'graph fails algorithm region',
     "max_wave_speed":                       '',
+    "moving_total_rate":                    'total-moving-rate',
     "pointwise_expression":                'graph fails region accepted-state-inputs',
     "post_synchronization":                 '',
-    "principal_rate":                       '',
+    "principal_rate":                       'static-face',
     "product":                             'graph region device',
     "product_get":                         'graph region device',
     "project":                              '',
@@ -283,7 +295,7 @@ _ROWS = {
     "state":                               'region total-storage',
     # PreparedStencilFlux (and acceptance_guard) converges allocation, halo, kernel and validity
     # failures; a guarded capture keeps its exchanges across the region's lexical lifetime.
-    "stencil_flux_divergence":             'graph fails algorithm region',
+    "stencil_flux_divergence":             'graph fails algorithm region static-face',
     "store_history":                        '',
     "structured_fold":                     'graph fails rendezvous region',
     "structured_iterate":                  'graph fails rendezvous region host-region',

@@ -138,7 +138,7 @@ def main(output, dimension):
 
 
 def euler(output, dimension):
-    """Generate the Euler criteria and their binding rows."""
+    """Generate the Program fixture criteria and their binding rows."""
     output.mkdir(parents=True, exist_ok=True)
     declarations = []
     euler_state = ("rho", *("rho_" + axis for axis in "xyz"[:dimension]), "E")
@@ -150,6 +150,8 @@ def euler(output, dimension):
         ("magnetic", ("fluid",), euler_state, "rho", 1.5),
         ("magnetic_union", ("ions", "electrons"), euler_state, "rho", 1.5),
         ("fickian", ("heat",), ("scalar",), "scalar", 1.15),
+        ("empty_cadence", ("tracer",), ("u",), "u", 0.5),
+        ("scalar_history", ("tracer",), ("u",), "u", 0.5),
     ):
         model = pops.Model(name)
         roles = {field: Scalar()} if name == "fickian" else None
@@ -171,8 +173,11 @@ def euler(output, dimension):
                 result = result | (cell.value(read) > threshold)
             return result
 
+        predicates = (("refine", Tag(union).predicate),)
+        if name == "scalar_history":
+            predicates += (("coarsen", Tag(lambda cell: cell.value(reads[0]) < threshold).predicate),)
         criterion = resolve_refinement_criterion(
-            (("refine", Tag(union).predicate),),
+            predicates,
             hysteresis=Hysteresis(min_cycles=0, equality=EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS, dimension=dimension, admit_state=admit,
         )

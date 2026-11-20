@@ -25,6 +25,10 @@ from pops.lib.numerics import pointwise, upwind
 from pops.lib.representations import CellAverage, CellTotal, PointValue
 from pops.lib.time.methods import forward_euler, ssprk2
 from pops.surface.math import ddt, div
+from pops.time._program.traversal import all_ops
+
+from examples.api_v02.models_graded_spacing import wall_nodes
+from examples.api_v02.models_static_geometry import GRADED_CELLS, graded_nodes
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -70,6 +74,43 @@ def _case(word="average", minus=False, transport=True):
 
 ROWS = {"average": {}, "total": {}, "sample": {}, "minus": {"minus": True},
         "alone": {"transport": False}}
+
+
+def test_a_pointwise_source_evolves_totals_on_the_graded_cells(
+        isolated_native_cache, native_cxx, kokkos_root):
+    import pops
+    from pops.numerics import StateStorage
+
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("local_decay")
+    u = model.quantity("u", surface.Scalar(domain))
+    u0 = model.data("u0", surface.Scalar(domain))
+    decay = model.source(of=u, value=-u * u)
+    model.balance(ddt(u) == decay)
+    numerics = surface.Numerics(represent={u: CellTotal()}, schemes={decay: pointwise()})
+    step = 0.125
+    program = surface.Program(
+        advance=surface.Advance(forward_euler(rate=model), dt=step), initial={u: u0})
+    layout = surface.Graded(base=surface.Uniform(cells=GRADED_CELLS),
+                            nodes={domain.x: wall_nodes})
+    case = surface.Case(model=model, numerics=numerics, program=program, layout={domain: layout})
+    authored = case.elaborated
+    resolved = pops.resolve(pops.validate(authored.case), layout=authored.layout)
+    (node,) = (value for value in all_ops(resolved.time) if value.op == "source")
+    assert len(node.inputs) == 1
+    (binding,) = resolved.blocks[0].numerics.rates
+    assert type(binding.method) is StateStorage
+
+    nodes = graded_nodes()
+    measures = np.diff(nodes)
+    assert measures.max() / measures.min() > 90
+    density = 1.0 + 0.25 * (nodes[1:] + nodes[:-1])
+    initial = measures * density
+    expected = initial - step * initial**2 / measures
+    artifact = surface.compile(case, target=surface.OpenMP())
+    result = surface.bind(artifact, data={u0: initial}).run(until=step)
+    assert (result.steps, result.time, result.rejections) == (1, step, 0)
+    np.testing.assert_allclose(result.state[u], expected, rtol=1e-13, atol=0)
 
 
 @pytest.fixture(scope="module")
