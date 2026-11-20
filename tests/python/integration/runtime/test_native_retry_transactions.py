@@ -17,11 +17,12 @@ from pops.numerics import DiscretizationPlan, StateStorage
 from pops.projection import ConservativeCellAverage
 from pops.time import ErrorControlledDt, FixedDt, GuardRole, RejectAttempt
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.support.uniform_continuation_trial import publish_trial
 
 pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
 
 
-def bind_case(*, exhausted=False, direct=False):
+def make_case(*, exhausted=False, direct=False, publish=None):
     frame = Rectangle("retry_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     model = pops.Model("retry_source", frame=frame)
     state = model.state("U", components=("mass",))
@@ -43,7 +44,10 @@ def bind_case(*, exhausted=False, direct=False):
     guarded = program.guard("dt_error_estimate", candidate,
                             program.norm_inf(increment) <= (0.0 if exhausted else 0.0625),
                             action=RejectAttempt(), role=GuardRole.ERROR_ESTIMATE)
-    program.commit(temporal.next, guarded)
+    if publish is None:
+        program.commit(temporal.next, guarded)
+    else:
+        publish(program, temporal, guarded)
     strategy = FixedDt(0.0625) if direct else ErrorControlledDt(
         dt_init=0.125, rtol=1e-3, atol=1e-8, dt_min=0.001, dt_max=0.125,
         max_rejections=1, shrink=0.5, growth=1.0)
@@ -52,6 +56,11 @@ def bind_case(*, exhausted=False, direct=False):
     case.initials.add(InitialCondition(state=block[state], value=BindArray(),
                                       projection=ConservativeCellAverage()))
     layout = Uniform(CartesianGrid(frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes)))
+    return case, layout
+
+
+def bind_case(*, exhausted=False, direct=False, publish=None):
+    case, layout = make_case(exhausted=exhausted, direct=direct, publish=publish)
     artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
     subject = artifact.plan.initial_condition_plan.bindings[0].subject
     return pops.bind(artifact, initial_values={subject: np.ones((1, 16, 16))},
@@ -102,3 +111,34 @@ def test_native_finite_retry_exhaustion_restores_accepted_envelope(
     assert report.action == "reject_attempt"
     record_property("failure", str(rejected.value))
     record_property("retry_transaction", json.dumps(report.to_data()))
+
+
+def test_uniform_continuation_source_restores_provisional_history_on_refusal(
+        isolated_native_cache, native_cxx, kokkos_root):
+    trial = bind_case(direct=True, publish=publish_trial)
+    direct = bind_case(direct=True)
+    native = trial._executor
+    system = native._s
+
+    for runtime in (trial, direct):
+        assert pops.run(runtime, t_end=1/16, max_steps=1, console=False).accepted_steps == 1
+    assert envelope(trial) == envelope(direct)
+    assert native.history_fill_count("attempted") == 1
+    image = system._checkpoint_continuation_image()
+    assert image
+    before = envelope(trial)
+    exchanges = native._checkpoint_program_exchanges()
+
+    with pytest.raises(RuntimeError, match="dt_error_estimate"):
+        system.step(1/8)
+    assert envelope(trial) == before
+    assert system._checkpoint_continuation_image() == image
+    assert native._checkpoint_program_exchanges() == exchanges
+
+    for runtime in (trial, direct):
+        assert pops.run(runtime, t_end=1/8, max_steps=1, console=False).accepted_steps == 1
+    assert envelope(trial) == envelope(direct)
+    np.testing.assert_array_equal(trial.state_global("material"), np.full((1, 16, 16), 1.125))
+    assert trial.time() == 1/8 and trial.macro_step() == 2
+    assert native.history_fill_count("attempted") == 2
+    assert system._checkpoint_continuation_image() != image

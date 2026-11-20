@@ -112,3 +112,66 @@ def field_projection_sources(value: ProgramValue, *, region_origins=None):
         else:
             return None
     return tuple(sources.values())
+
+
+def uniform_trial_commit_sources(program, trials):
+    """Give scientific readers the exact root carrier fields before native publication."""
+    if not trials:
+        return None
+    from pops.time.value_signatures import value_signature
+
+    roots = {value.id: value for value in program._values}
+
+    def issued(node, op=None, arity=None):
+        if (roots.get(node.id) is not node or node.region
+                or (op is not None and node.op != op)
+                or (arity is not None and len(node.inputs) != arity)):
+            raise ValueError("Uniform continuation trial requires a direct issued root projection")
+        return node
+
+    # The continuation validator has already authenticated the only publication
+    # and its schema path. This reader additionally proves the one dynamic
+    # candidate, where equal typed capabilities alone do not establish identity.
+    publication, = (node for node in roots.values() if node.op == "continuation_publish")
+    accepted = issued(publication.inputs[0], "continuation_accept", 2)
+    candidate = issued(accepted.inputs[0], "continuation_freeze", 3)
+    assessment = issued(accepted.inputs[1], "continuation_attest", 3)
+    if assessment.inputs[0] is not candidate:
+        raise ValueError("Uniform continuation trial attestation reads a different frozen candidate")
+    envelope = issued(candidate.inputs[2], "product", 4)
+
+    def member(node, name):
+        issued(node, "product")
+        fields = tuple(node.attrs["fields"])
+        members = tuple(field for field, _ in value_signature(node)["members"])
+        if (fields != members or name not in fields or len(fields) != len(node.inputs)
+                or len(set(fields)) != len(fields)):
+            raise ValueError("Uniform continuation trial changed an ordered candidate product")
+        return node.inputs[fields.index(name)]
+
+    commits = {}
+    for state_ref, path in publication.attrs["schema"]["fields"]:
+        projected = program._commits[state_ref]
+        full_path = ("continuation", *path)
+        cursor = projected
+        for name in reversed(full_path):
+            issued(cursor, "product_get", 1)
+            if cursor.attrs["field"] != name:
+                raise ValueError("Uniform continuation trial changed its commit path")
+            cursor = cursor.inputs[0]
+        issued(cursor, "continuation_candidate_value", 1)
+        carrier = issued(cursor.inputs[0], "continuation_accepted_candidate", 1)
+        if carrier.inputs[0] is not accepted:
+            raise ValueError("Uniform continuation trial commit reads a different accepted candidate")
+        leaf = envelope
+        for name in full_path:
+            leaf = member(leaf, name)
+        issued(leaf)
+        projected_sources = field_projection_sources(projected, region_origins={})
+        if (not projected_sources or len(projected_sources) != 1 or projected_sources[0] is not leaf
+                or leaf.vtype != "state" or leaf.state_ref != state_ref
+                or leaf.block != projected.block or leaf.space != projected.space
+                or leaf.point != projected.point):
+            raise ValueError("Uniform continuation trial requires one direct candidate State field")
+        commits[state_ref] = leaf
+    return commits

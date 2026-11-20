@@ -62,17 +62,20 @@ TEST(test_nd_topology, faces_validate_and_topologies_canonicalize_identity) {
   EXPECT_EQ((Face<3>{2, Side::upper}.ordinal()), 5);
   EXPECT_THROW((Face<2>{2, Side::lower}), std::invalid_argument);
 
-  const PeriodicIdentification<2> forward{Face<2>{0, Side::lower}, Face<2>{0, Side::upper}};
-  const PeriodicIdentification<2> reverse{Face<2>{0, Side::upper}, Face<2>{0, Side::lower}};
-  EXPECT_EQ((PeriodicTopology<2>{std::vector<PeriodicIdentification<2>>{forward}}),
-            (PeriodicTopology<2>{std::vector<PeriodicIdentification<2>>{reverse}}));
+  const mesh::nd_proof::PeriodicIdentification<2> forward{Face<2>{0, Side::lower},
+                                                          Face<2>{0, Side::upper}};
+  const mesh::nd_proof::PeriodicIdentification<2> reverse{Face<2>{0, Side::upper},
+                                                          Face<2>{0, Side::lower}};
+  EXPECT_EQ((PeriodicTopology<2>{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{forward}}),
+            (PeriodicTopology<2>{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{reverse}}));
   EXPECT_TRUE(
       PeriodicTopology<3>::axis_translations({true, false, true}).is_axis_translation_only());
-  EXPECT_THROW(
-      (PeriodicTopology<2>{std::vector<PeriodicIdentification<2>>{
-          forward, PeriodicIdentification<2>{Face<2>{0, Side::upper}, Face<2>{1, Side::lower},
-                                             SignedPermutation<2>{{1, 0}, {1, 1}}}}}),
-      std::invalid_argument);
+  EXPECT_THROW((PeriodicTopology<2>{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{
+                   forward,
+                   mesh::nd_proof::PeriodicIdentification<2>{
+                       Face<2>{0, Side::upper}, Face<2>{1, Side::lower},
+                       SignedPermutation<2>{{1, 0}, {1, 1}}}}}),
+               std::invalid_argument);
 }
 
 TEST(test_nd_topology, signed_permutations_invert_and_compose_in_all_ranks) {
@@ -88,7 +91,8 @@ TEST(test_nd_topology, signed_permutations_invert_and_compose_in_all_ranks) {
 
 TEST(test_nd_topology, affine_identifications_are_exact_for_axis_and_permuted_faces) {
   const Box<2> axis_domain{Index<2>{-4, 10}, Index<2>{1, 13}};
-  const PeriodicIdentification<2> axis_aligned{Face<2>{0, Side::lower}, Face<2>{0, Side::upper}};
+  const mesh::nd_proof::PeriodicIdentification<2> axis_aligned{Face<2>{0, Side::lower},
+                                                               Face<2>{0, Side::upper}};
   const AffineIndexTransform<2> axis_forward =
       axis_aligned.source_interior_to_target_exterior(axis_domain);
   EXPECT_EQ(axis_forward.apply(Index<2>{-4, 11}), (Index<2>{2, 11}));
@@ -96,8 +100,8 @@ TEST(test_nd_topology, affine_identifications_are_exact_for_axis_and_permuted_fa
 
   const Box<3> compatible{Index<3>{-5, 10, -2}, Index<3>{-2, 13, 4}};
   const SignedPermutation<3> permutation{{1, 0, 2}, {1, -1, 1}};
-  const PeriodicIdentification<3> mapped{Face<3>{0, Side::lower}, Face<3>{1, Side::upper},
-                                         permutation};
+  const mesh::nd_proof::PeriodicIdentification<3> mapped{Face<3>{0, Side::lower},
+                                                         Face<3>{1, Side::upper}, permutation};
   const AffineIndexTransform<3> mapped_forward =
       mapped.source_interior_to_target_exterior(compatible);
   EXPECT_EQ(mapped_forward.apply(Index<3>{-5, 10, -2}), (Index<3>{-2, 14, -2}));
@@ -110,7 +114,8 @@ TEST(test_nd_topology, affine_identifications_are_exact_for_axis_and_permuted_fa
   EXPECT_THROW((void)mapped.source_interior_to_target_exterior(incompatible),
                std::invalid_argument);
 
-  const PeriodicIdentification<1> upper_to_lower{Face<1>{0, Side::upper}, Face<1>{0, Side::lower}};
+  const mesh::nd_proof::PeriodicIdentification<1> upper_to_lower{Face<1>{0, Side::upper},
+                                                                 Face<1>{0, Side::lower}};
   EXPECT_EQ(upper_to_lower.source_interior_to_target_exterior(Box<1>{Index<1>{-2}, Index<1>{1}})
                 .apply(Index<1>{1}),
             (Index<1>{-3}));
@@ -174,8 +179,9 @@ TEST(test_nd_topology, axis_translation_image_corners_are_axis_zero_fastest_and_
           .size(),
       27U);
 
-  const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
-      Face<2>{0, Side::lower}, Face<2>{1, Side::upper}, SignedPermutation<2>{{1, 0}, {1, -1}}}}};
+  const PeriodicTopology<2> mapped{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{
+      mesh::nd_proof::PeriodicIdentification<2>{Face<2>{0, Side::lower}, Face<2>{1, Side::upper},
+                                                SignedPermutation<2>{{1, 0}, {1, -1}}}}};
   EXPECT_THROW((void)enumerate_axis_translation_images(plane, Extent<2>{1, 1}, mapped,
                                                        AxisTranslationImageBudget{9}),
                std::invalid_argument);
@@ -235,8 +241,10 @@ TEST(test_nd_topology, local_neighbors_are_exact_unique_and_ordered_for_2d_corne
 
 TEST(test_nd_topology, topology_canonical_reverse_and_affine_round_trips_are_exact) {
   const Box<1> line{Index<1>{-2}, Index<1>{3}};
-  const PeriodicIdentification<1> forward1{Face<1>{0, Side::lower}, Face<1>{0, Side::upper}};
-  const PeriodicIdentification<1> reverse1{Face<1>{0, Side::upper}, Face<1>{0, Side::lower}};
+  const mesh::nd_proof::PeriodicIdentification<1> forward1{Face<1>{0, Side::lower},
+                                                           Face<1>{0, Side::upper}};
+  const mesh::nd_proof::PeriodicIdentification<1> reverse1{Face<1>{0, Side::upper},
+                                                           Face<1>{0, Side::lower}};
   EXPECT_EQ(PeriodicTopology<1>{{forward1}}, PeriodicTopology<1>{{reverse1}});
   const auto map1 = forward1.source_interior_to_target_exterior(line);
   const Box<1> box1{Index<1>{-2}, Index<1>{0}};
@@ -245,10 +253,10 @@ TEST(test_nd_topology, topology_canonical_reverse_and_affine_round_trips_are_exa
 
   const Box<2> plane{Index<2>{0, 0}, Index<2>{3, 3}};
   const SignedPermutation<2> reflected2{{1, 0}, {1, -1}};
-  const PeriodicIdentification<2> forward2{Face<2>{0, Side::lower}, Face<2>{1, Side::upper},
-                                           reflected2};
-  const PeriodicIdentification<2> reverse2{Face<2>{1, Side::upper}, Face<2>{0, Side::lower},
-                                           reflected2.inverse()};
+  const mesh::nd_proof::PeriodicIdentification<2> forward2{Face<2>{0, Side::lower},
+                                                           Face<2>{1, Side::upper}, reflected2};
+  const mesh::nd_proof::PeriodicIdentification<2> reverse2{
+      Face<2>{1, Side::upper}, Face<2>{0, Side::lower}, reflected2.inverse()};
   EXPECT_EQ(PeriodicTopology<2>{{forward2}}, PeriodicTopology<2>{{reverse2}});
   const auto map2 = forward2.source_interior_to_target_exterior(plane);
   const Box<2> box2{Index<2>{0, 1}, Index<2>{2, 3}};
@@ -257,10 +265,10 @@ TEST(test_nd_topology, topology_canonical_reverse_and_affine_round_trips_are_exa
 
   const Box<3> volume{Index<3>{-1, 2, 4}, Index<3>{2, 5, 7}};
   const SignedPermutation<3> reflected3{{1, 2, 0}, {1, -1, 1}};
-  const PeriodicIdentification<3> forward3{Face<3>{0, Side::lower}, Face<3>{1, Side::upper},
-                                           reflected3};
-  const PeriodicIdentification<3> reverse3{Face<3>{1, Side::upper}, Face<3>{0, Side::lower},
-                                           reflected3.inverse()};
+  const mesh::nd_proof::PeriodicIdentification<3> forward3{Face<3>{0, Side::lower},
+                                                           Face<3>{1, Side::upper}, reflected3};
+  const mesh::nd_proof::PeriodicIdentification<3> reverse3{
+      Face<3>{1, Side::upper}, Face<3>{0, Side::lower}, reflected3.inverse()};
   EXPECT_EQ(PeriodicTopology<3>{{forward3}}, PeriodicTopology<3>{{reverse3}});
   const auto map3 = forward3.source_interior_to_target_exterior(volume);
   const Box<3> box3{Index<3>{-1, 3, 4}, Index<3>{1, 5, 6}};
@@ -290,8 +298,9 @@ TEST(test_nd_topology, local_neighbors_cover_3d_multibox_and_deep_corner_images)
 TEST(test_nd_topology, local_neighbors_reject_unmappable_topology_and_checked_ghost_growth) {
   const Box<2> domain{Index<2>{0, 0}, Index<2>{1, 1}};
   const BoxArray<2> boxes = BoxArray<2>::from_domain(domain, Extent<2>{2, 2});
-  const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
-      Face<2>{0, Side::lower}, Face<2>{1, Side::upper}, SignedPermutation<2>{{1, 0}, {1, -1}}}}};
+  const PeriodicTopology<2> mapped{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{
+      mesh::nd_proof::PeriodicIdentification<2>{Face<2>{0, Side::lower}, Face<2>{1, Side::upper},
+                                                SignedPermutation<2>{{1, 0}, {1, -1}}}}};
   EXPECT_THROW(
       (void)enumerate_local_translation_neighbors(boxes, domain, Extent<2>{1, 1}, mapped,
                                                   Extent<2>{2, 2}, kHashBudget, kNeighborBudget),

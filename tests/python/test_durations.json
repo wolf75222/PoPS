@@ -22,6 +22,13 @@
       "previous_weight_seconds": 195,
       "weight_seconds": 310
     },
+    "rom114_uniform_trial_carrier_cold": {
+      "scope": "Complete cold Linux x64 Dim2 Serial module runs for the Uniform continuation carrier (ROM-114).",
+      "basis": "ROMEO job 831467 on 53e3eedd measured 700 s, job 831468 on its first integration with N11 measured 728 s, and job 831475 on 53c9a5a8 measured 811 s. The final module was 10/10 without skips. The weight uses the longest cold observation plus ten percent, rounded up to the next ten seconds. Refresh from a complete CI artifact.",
+      "file": "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py",
+      "previous_weight_seconds": 600,
+      "weight_seconds": 900
+    },
     "accepted_state_inspector_basis": "0.5-second scheduling estimate for five source-only parser cases; observed local pytest receipt 0.16s is not GitHub wall time.",
     "adc": "ADC-623",
     "api040_full_catalog_completion_20261008": {
@@ -6745,7 +6752,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1243,
+    "estimated_count": 1244,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7988,6 +7995,7 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py",
       "tests/python/unit/time/test_uniform_affine_expressions_v02.py",
+      "tests/python/unit/time/test_uniform_continuation_spatial_trials.py",
       "tests/python/unit/time/test_variant_temporal_envelope.py",
       "tests/python/unit/time/test_variant_types_v09.py"
     ],
@@ -8191,7 +8199,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1311,
+    "total_files": 1312,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -10701,7 +10709,7 @@
   "tests/python/integration/runtime/test_imex_checkpoint_sealed_retry.py": 600,
   "tests/python/integration/runtime/test_imex_nonautonomous_field.py": 600,
   "tests/python/integration/runtime/test_implicit_arrays_v14_native.py": 1200,
-  "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py": 600.0,
+  "tests/python/integration/runtime/test_implicit_diffusion_lifecycle.py": 900.0,
   "tests/python/integration/runtime/test_implicit_domain_v14_native.py": 600,
   "tests/python/integration/runtime/test_install_requirement_validation.py": 85,
   "tests/python/integration/runtime/test_integral_diffusion_trace_runtime.py": 600,
@@ -11642,6 +11650,7 @@
   "tests/python/unit/time/test_typed_provenance_guards.py": 1.0,
   "tests/python/unit/time/test_typed_schedule.py": 1.0,
   "tests/python/unit/time/test_uniform_affine_expressions_v02.py": 30,
+  "tests/python/unit/time/test_uniform_continuation_spatial_trials.py": 30,
   "tests/python/unit/time/test_variant_temporal_envelope.py": 30,
   "tests/python/unit/time/test_variant_types_v09.py": 15,
   "tests/python/integration/runtime/test_api_v02_independent_history_native.py": 1200,

@@ -44,7 +44,8 @@ class IntegralTransfer:
         )
 
 
-def integral_transfers(program, var, *, region=None, model_authority=None) -> list[IntegralTransfer]:
+def integral_transfers(program, var, *, region=None, model_authority=None,
+                       commit_sources=None) -> list[IntegralTransfer]:
     from pops.codegen.program_transport_quadrature import accepted_transport_quadrature
 
     captured = {key[1]: item for key, item in var.items()
@@ -61,7 +62,7 @@ def integral_transfers(program, var, *, region=None, model_authority=None) -> li
         from pops.codegen.program_emit_diffusion import _resolved_diffusive_trace_selection
 
         for value, _ in accepted_diffusive_quadrature(
-                program, model_authority=model_authority,
+                program, model_authority=model_authority, commit_sources=commit_sources,
                 partition_stability_checked=var.get(("partition_stability_checked",), ())):
             if value.id in requested and value.id in var:
                 captured[value.id] = (value, None, *_resolved_diffusive_trace_selection(value))

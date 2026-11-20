@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from pops.time._program.traced_method import NotYetElaborated
-from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA
+from pops.time._step.strategy import ComputedDt, FACE_STEP_FREQUENCY_SCHEMA
 
 ADVANCE_CONTROL_SCHEMA = "pops.advance-control@1"
 """Schema of ``AdvanceControl.to_data`` for an Advance without Outputs."""
@@ -258,6 +258,20 @@ _TRIAL_KEYS = frozenset(("site", "guard", "variant", "retry_can_change", "classi
 # The variants that a row lists, by the guard of its site (§3.6).
 _TRIAL_VARIANTS = {"solve": ["BudgetExhausted", "SolveFailed"],
                    "admissibility": ["NotAdmissible"], "field_evaluation": []}
+
+
+def validate_advance_frontier(program: Any) -> None:
+    """Keep the native Advance scheduler and the computed frontier mutually exclusive."""
+    if program._advance_control is None:
+        return
+
+    from .traversal import all_ops
+
+    if type(program._step_strategy) is ComputedDt or any(
+        value.op in {"reached_duration", "accept_increment"} for value in all_ops(program)
+    ):
+        raise ValueError("Compiled Advance owns the step duration and cannot use ComputedDt "
+                         "or publish a reached duration")
 
 
 def _trial_rows(rows: tuple) -> tuple:
