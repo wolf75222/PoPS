@@ -874,7 +874,20 @@ def _canonical_initial_values(artifact: Any, values: Any) -> Mapping[Any, Any]:
     initial_plan = artifact.plan.initial_condition_plan
     if initial_plan is None:
         raise ValueError("pops.bind initial_values requires a resolved InitialConditionPlan")
-    return _canonicalize_initial_value_mapping(initial_plan, values)
+    canonical = _canonicalize_initial_value_mapping(initial_plan, values)
+    incidences = {identity for block in artifact.plan.blocks if block.moving_incidence
+                  for identity in block.state_identities}
+    if not incidences:
+        return canonical
+    import numpy as np
+
+    def snapshot(value: Any) -> Any:
+        array = np.array(value, copy=True, order="C")
+        array.setflags(write=False)
+        return array
+
+    return {handle: snapshot(value) if handle.qualified_id in incidences else value
+            for handle, value in canonical.items()}
 
 
 def _canonical_bind_params(schema: Any, values: Any) -> Mapping[Any, Any]:

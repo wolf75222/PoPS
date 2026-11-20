@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "euler_amr_fixture_criteria.hpp"
 #include "explicit_amr_program.hpp"
 
 #include <pops/core/foundation/native_dimension.hpp>
@@ -190,10 +190,9 @@ double transported_sine_projection(const std::vector<double>& values,
 }
 
 template <int Dim>
-void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
-                                        const pops::AmrSystemConfig<Dim>& config,
-                                        const std::vector<double>& initial) {
-  constexpr const char* state_route = "tests.amr.program-diffusion/state/heat";
+void prepare_conservative_bootstrap(pops::AmrSystem<Dim>& system,
+                                    const pops::AmrSystemConfig<Dim>& config,
+                                    const char* state_route, const std::vector<double>& initial) {
   system.bind_bootstrap_subject(state_route, "heat", "bound_level_zero");
   system.stage_bootstrap_array(state_route, "heat", "cell", "cell", 1, config.shape, initial);
   pops::Extent<Dim> transfer_ghosts{};
@@ -204,6 +203,10 @@ void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
       "tests.amr.program-diffusion/bootstrap/conservative-linear@1", "cell", "cell", "conservative",
       "dense", "prolongation", "conservative_linear", 2, transfer_ghosts,
       config.transition_ratios.front());
+}
+
+template <int Dim>
+void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system, const char* state_route) {
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
                                             "bound_level_zero", 0);
@@ -216,54 +219,6 @@ void materialize_conservative_bootstrap(pops::AmrSystem<Dim>& system,
   system.commit_bootstrap_level();
 }
 
-// Exercise the same constitutive face -> conservative reflux adapter as generated Programs.
-// The older default-provider path below has its own physical flux and cannot detect a reversed
-// sign when +div(G) constitutive faces enter the shared -div(F) reflux ledger.
-template <int Dim>
-void install_prepared_constitutive_program(pops::AmrSystem<Dim>& system) {
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("tests.amr.prepared-diffusion/macro");
-  context->install(
-      [context](double macro_dt) {
-        context->advance_hierarchy(macro_dt, [context](double level_dt) {
-          context->set_stage_time(0, 1);
-          auto& state = context->state(0);
-          auto& rhs = context->rhs_scratch(1000, 0, state);
-          pops::runtime::program::PreparedDiffusion<Dim> prepared(*context, state, {}, true);
-          context->prepare_generated_state(0, state, 3000);
-          prepared.apply(state, rhs, [&](std::size_t local) {
-            const auto values = std::as_const(state).fab(local).view();
-            return [=] POPS_HD(const pops::Index<Dim>& cell) {
-              std::array<pops::Real, Dim + 2> law{};
-              law[0] = values(cell, 0);
-              for (int axis = 0; axis < Dim; ++axis)
-                law[axis + 1] = pops::Real(0.05);
-              law[Dim + 1] = pops::Real(1);
-              return law;
-            };
-          });
-          context->attach_diffusive_flux_basis(0, rhs, 3000, prepared.faces(), pops::Real(1),
-                                               "tests.amr.prepared-diffusion/constitutive");
-          auto& transport = context->rhs_scratch(1000, 1, state);
-          std::vector<pops::nd::FaceField<Dim>> transport_faces;
-          context->neg_div_flux_default_with_faces_into(0, state, transport, 3000, transport_faces,
-                                                        "tests.amr.prepared-diffusion/transport");
-          context->axpy(rhs, pops::Real(1), transport, level_dt, {{0, 1, 1}});
-          context->axpy(state, pops::Real(level_dt), rhs);
-        });
-      },
-      context);
-  system.set_program_block_map({0});
-  // Declare the exact (block, RHS identity, provider) tuples before either producer runs.
-  // The shared RHS has distinct constitutive and transport temporal families, as in codegen.
-  context->install_flux_temporal_families(
-      {{0, 3000, 1, "tests.amr.prepared-diffusion/transport"},
-       {0, 3000, 4, "tests.amr.prepared-diffusion/constitutive"}});
-  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "tests.amr.prepared-diffusion/forward-euler@1", {FluxBudget{2, 2}}, 0, 0);
-}
-
 template <int Dim, bool PreparedConstitutive = false>
 void verify_refined_program_diffusion(double dt = 2.0e-4) {
   const pops::AmrSystemConfig<Dim> config = refined_config<Dim>();
@@ -271,7 +226,8 @@ void verify_refined_program_diffusion(double dt = 2.0e-4) {
   pops::AmrSystem<Dim> system(config);
   pops::test::install_amr_runtime_authority(system, "tests.amr.program-diffusion/runtime@1");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
-  system.install_block_state_route("heat", "tests.amr.program-diffusion/state/heat");
+  const char* state_route = pops::test::fickian.state_for("heat");
+  system.install_block_state_route("heat", state_route);
   pops::RealVector<Dim> velocity{};
   for (int axis = 0; axis < Dim; ++axis)
     velocity[axis] = axis == 0 ? pops::Real(0.35) : pops::Real(-0.2);
@@ -283,12 +239,25 @@ void verify_refined_program_diffusion(double dt = 2.0e-4) {
                                 static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
                                 static_cast<double>(pops::kWenoEpsilon), false,
                                 "tests.amr.program-diffusion/physical-flux");
-  pops::test::install_prepared_threshold_union(
-      system,
-      {{"heat", "scalar", 1.15, pops::test::PreparedThresholdRelation::Above,
-        "tests.amr.program-diffusion/state/heat"}},
-      "tests.amr.program-diffusion/tagging@2");
-  materialize_conservative_bootstrap(system, config, initial);
+  pops::test::fickian.install<Dim>(system, "test::prepared-tagging-clock");
+  prepare_conservative_bootstrap(system, config, state_route, initial);
+  const char* program = POPS_TEST_FICKIAN_PROGRAM_SO;
+#if POPS_NATIVE_DIM <= 2
+  if constexpr (PreparedConstitutive)
+    program = POPS_TEST_CONSTITUTIVE_PROGRAM_SO;
+#endif
+  EXPECT_FALSE(system.uses_runtime_engine());
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  system.install_program(program);
+  const char* program_name =
+      PreparedConstitutive ? "test-prepared-constitutive-amr/" : "test-forward-euler-amr/";
+  EXPECT_EQ(system.installed_program_hash(),
+            std::string(program_name) + pops::test::fickian.identity);
+  ASSERT_EQ(system.n_levels(), 1);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  materialize_conservative_bootstrap(system, state_route);
+  system.mark_bound();
 
   ASSERT_EQ(system.n_levels(), 2);
   const pops::MultiFab<Dim>& coarse = system.prepared_amr_block_state(0, 0);
@@ -305,10 +274,6 @@ void verify_refined_program_diffusion(double dt = 2.0e-4) {
   ASSERT_EQ(coarse.ncomp(), 1);
   ASSERT_EQ(fine.ncomp(), 1);
 
-  if constexpr (PreparedConstitutive)
-    install_prepared_constitutive_program(system);
-  else
-    pops::test::install_forward_euler_program(system, false);
   EXPECT_TRUE(system.program_interface_flux_ledger_manifest().empty());
   const auto accepted_flux_before = system.program_flux_ledger_manifest();
   EXPECT_TRUE(accepted_flux_before.empty());

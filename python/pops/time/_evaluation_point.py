@@ -41,7 +41,7 @@ def qualify_evaluation_attrs(program: Any, op: str, attrs: Any) -> Any:
     return {**attrs, "evaluation_partition": scope[1]}
 
 
-def evaluation_stage_fraction(value: Any, *, ark_partition: str | None = None) -> Fraction:
+def evaluation_time_point(value: Any, *, ark_partition: str | None = None) -> TimePoint:
     """Select an authored partition, a common time, or an exact ARK operator coordinate.
 
     The ARK fallback is only for an operator whose semantics explicitly supplies its partition.
@@ -72,7 +72,12 @@ def evaluation_stage_fraction(value: Any, *, ark_partition: str | None = None) -
                         "an explicit evaluation partition" % point.name) from None
     else:
         raise ValueError("evaluation requires an exact TimePoint or StagePoint")
+    return selected
+
+
+def evaluation_stage_fraction(value: Any, *, ark_partition: str | None = None) -> Fraction:
+    selected = evaluation_time_point(value, ark_partition=ark_partition)
     return Fraction(selected.step) + Fraction(selected.offset.to_python())
 
 
-__all__ = ["evaluation_partition", "evaluation_stage_fraction", "qualify_evaluation_attrs"]
+__all__ = ["evaluation_partition", "evaluation_stage_fraction", "evaluation_time_point", "qualify_evaluation_attrs"]

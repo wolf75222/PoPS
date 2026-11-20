@@ -415,8 +415,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          amr-fixture-python: ${{ contains(steps.asan-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
-                                contains(steps.asan-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs') }}
+          # Every ASan shard may build a target that consumes the generated AMR fixture criteria.
+          amr-fixture-python: 'true'
       - name: Cache ccache (quality/asan)
         uses: actions/cache@v6
         with:

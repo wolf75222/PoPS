@@ -396,8 +396,9 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
-          amr-fixture-python: ${{ contains(steps.test-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
-                                contains(steps.test-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs') }}
+          # Every C++ shard may build a target that consumes the generated AMR fixture criteria
+          # (tests/CMakeLists.txt: pops_amr_fixture_criteria, pops_euler_amr_criteria).
+          amr-fixture-python: 'true'
           extra-apt: mold
 
       # actions/cache est immutable. restore/save separes + cle unique par tentative permettent a
@@ -2414,11 +2415,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev ninja-build ccache mold
 
+      # Every C++ shard may build a target that consumes the generated AMR fixture criteria.
       - name: Install the AMR fixture generator dependency
-        if: >-
-          matrix.kind == 'cpp' &&
-          (contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
-           contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs'))
+        if: matrix.kind == 'cpp'
         run: |
           sudo apt-get install -y python3-numpy
           echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"

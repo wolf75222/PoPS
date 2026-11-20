@@ -216,6 +216,7 @@ class SystemConfig:
     lower: tuple[float, ...]
     upper: tuple[float, ...]
     periodicity: tuple[bool, ...]
+    identifications: tuple[tuple[int, ...], ...]
     boxes: tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]
     coordinate_system: str
     def __init__(self) -> None: ...
