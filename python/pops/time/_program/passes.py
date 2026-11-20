@@ -321,6 +321,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         """Structural validation of the IR. Raises ValueError on a malformed program."""
         from pops.time._program.region_validation import validate_program_regions
         validate_program_regions(self)
+        from pops.time._program.control import validate_advance_frontier
+        validate_advance_frontier(self)
         from pops.realization import validate_realized_outputs
         validate_realized_outputs(self)
         from pops.intervals import validate_intervals

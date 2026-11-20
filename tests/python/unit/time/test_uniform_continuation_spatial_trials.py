@@ -3,10 +3,36 @@ import pops
 import pytest
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen.program_models import ProgramModelGraph
+from pops.time import ComputedDt
+from pops.time._program.control import AdvanceControl
 from pops.time._program.detach import detach_compiled_program
 from tests.python.integration.runtime import test_implicit_diffusion_lifecycle as diffusion
 from tests.python.integration.runtime import test_native_retry_transactions as source
 from tests.python.support.uniform_continuation_trial import publish_trial
+
+
+def test_compiled_advance_and_computed_duration_cannot_own_the_same_trial():
+    def publish_computed_trial(program, temporal, trial):
+        program.reached_duration(0.5 * program.requested_dt())
+        publish_trial(program, temporal, trial)
+
+    case, layout = source.make_case(direct=True, publish=publish_computed_trial)
+    case._time.step_strategy(ComputedDt(1/8))
+    plan = pops.resolve(pops.validate(case), layout=layout)
+    graph = ProgramModelGraph.from_resolved_blocks(plan.blocks)
+    cpp = emit_cpp_program(detach_compiled_program(plan.time), model_graph=graph)
+    assert "ctx.reached_duration(" in cpp and cpp.count("ctx.continuation_publish(") == 1
+
+    case, layout = source.make_case(direct=True, publish=publish_computed_trial)
+    case._time.step_strategy(ComputedDt(1/8))
+    case._time._set_advance_control(AdvanceControl(
+        assessments=(("assessment", "continuation"),), first_dt=1/8,
+        max_attempts=2, max_transforms=0,
+    ))
+    with pytest.raises(ValueError, match="Compiled Advance owns the step duration"):
+        pops.resolve(pops.validate(case), layout=layout)
+    with pytest.raises(ValueError, match="Compiled Advance owns the step duration"):
+        emit_cpp_program(detach_compiled_program(case._time), model_graph=graph)
 
 
 @pytest.mark.parametrize("op", ["source", "diffusive_rhs"])

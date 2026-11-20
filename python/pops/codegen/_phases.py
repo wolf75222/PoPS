@@ -125,6 +125,9 @@ def resolve(
         )
     if backend_token != "production":
         raise ValueError("a resolved whole-system Program requires backend=Production()")
+    from pops.time._program.control import validate_advance_frontier
+
+    validate_advance_frontier(resolved_time)
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     if len(layout_plan.layouts) > 1:
         co_layout_ops = {
