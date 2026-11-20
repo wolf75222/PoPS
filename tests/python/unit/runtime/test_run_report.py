@@ -21,8 +21,12 @@ def _pure_python_rejection_type(monkeypatch):
     class StepAttemptRejected(RuntimeError):
         pass
 
+    class StepTerminalFailure(RuntimeError):
+        pass
+
     bootstrap = ModuleType("pops._bootstrap")
     bootstrap.StepAttemptRejected = StepAttemptRejected
+    bootstrap.StepTerminalFailure = StepTerminalFailure
     sys.modules.pop("pops.runtime._step_strategy", None)
     monkeypatch.setitem(sys.modules, "pops._bootstrap", bootstrap)
     yield
