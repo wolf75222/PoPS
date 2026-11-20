@@ -6,11 +6,12 @@
 
 namespace {
 template <std::size_t Size>
-void write_definitions(std::ostream& output, const pops::test::FixtureCriterionGroup<Size>& group) {
+void write_definitions(std::ostream& output, const pops::test::FixtureCriterionGroup<Size>& group,
+                       std::string_view program = "test-forward-euler-amr") {
   output << "#define POPS_TEST_EULER_BLOCKS {";
   for (const auto& field : group.fields)
     output << '"' << field.block << "\",";
-  output << "}\n#define POPS_TEST_EULER_HASH \"test-forward-euler-amr/" << group.identity << "\"\n";
+  output << "}\n#define POPS_TEST_EULER_HASH \"" << program << '/' << group.identity << "\"\n";
 }
 
 void append(std::ostream& output, const char* path) {
@@ -38,8 +39,32 @@ int main(int argc, char** argv) {
         write_definitions(source, pops::test::gravity);
       else if (variant == "riemann")
         write_definitions(source, pops::test::riemann);
-      else
-        throw std::invalid_argument("unknown Forward Euler Program fixture");
+      else if (variant == "magnetic")
+        write_definitions(source, pops::test::magnetic);
+      else if (variant == "magnetic_union")
+        write_definitions(source, pops::test::magnetic_union);
+      else if (variant == "fickian")
+        write_definitions(source, pops::test::fickian);
+      else if (variant == "prepared_constitutive") {
+        write_definitions(source, pops::test::fickian, "test-prepared-constitutive-amr");
+        source << "#define POPS_TEST_PREPARED_CONSTITUTIVE_AMR\n";
+      } else if (variant == "empty_cadence") {
+        write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
+        source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
+      } else if (variant == "scalar_history" || variant == "scalar_history_ghost" ||
+                 variant == "scalar_history_output_2" || variant == "scalar_history_dense_1" ||
+                 variant == "scalar_history_dense_2") {
+        write_definitions(source, pops::test::scalar_history, std::string("test-") + argv[1]);
+        source << "#define POPS_TEST_SCALAR_HISTORY "
+               << (variant == "scalar_history_ghost" ? 1 : -1) << '\n'
+               << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n"
+               << "#define POPS_TEST_SCALAR_HISTORY_RATIO " << (variant.ends_with("_2") ? 2 : 1)
+               << '\n'
+               << "#define POPS_TEST_SCALAR_HISTORY_DENSE "
+               << (variant == "scalar_history_dense_1" || variant == "scalar_history_dense_2")
+               << '\n';
+      } else
+        throw std::invalid_argument("unknown AMR Program fixture");
       source << "#define POPS_TEST_EULER_SOLVE_DEFAULT "
              << (variant == "gravity" || variant == "riemann") << '\n';
       if (variant == "riemann")

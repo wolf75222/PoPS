@@ -52,9 +52,11 @@ api pops/coupling/source/coupling_operator.hpp
 api pops/coupling/system/amr_system_coupler.hpp
 api pops/diagnostics/fallback_diagnostics.hpp
 api pops/diagnostics/runtime_diagnostics.hpp
+api pops/mesh/boundary/affine_index_transform.hpp
 api pops/mesh/boundary/fill_boundary.hpp
 api pops/mesh/boundary/halo_exchange.hpp
 api pops/mesh/boundary/halo_schedule.hpp
+api pops/mesh/boundary/identified_halo_images.hpp
 api pops/mesh/boundary/nd_boundary_schedule.hpp
 api pops/mesh/boundary/periodicity.hpp
 api pops/mesh/boundary/physical_bc.hpp

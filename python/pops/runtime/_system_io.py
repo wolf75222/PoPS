@@ -30,6 +30,7 @@ class _PreparedUniformRestart:
     program_diagnostic_checkpoint: bytes
     state_carriers: bytes | None
     finite_continuation: bytes | None
+    advance_segment: tuple[float, float, int, float, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,6 +548,17 @@ class _SystemIO(_System):
             macro_step=d["macro_step"],
             program_schedule=installed_schedule,
         )
+        advance_segment = None
+        grid = temporal.controller_state.get("fixed_dt_grid")
+        if grid is not None and self._s._advance_max_attempts() > 0:
+            from pops.time._step.strategy import FixedDt
+            installed = self._step_strategy
+            if type(installed) is not FixedDt or installed.dt != temporal.fixed_dt():
+                raise ValueError("restart: compiled FixedDt grid differs from the installed strategy")
+            advance_segment = (
+                installed.dt, float.fromhex(grid["origin"]), grid["steps"],
+                float.fromhex(grid["time"]), grid["macro_step"],
+            )
         cells = spatial.cells_at_level(0)
         blocks = [str(block) for block in d["blocks"]]
         current_blocks = list(self._s.block_names())
@@ -715,7 +727,10 @@ class _SystemIO(_System):
         diagnostics = prepare_checkpoint_program_diagnostics(self, d)
         from pops.runtime._checkpoint_finite_continuation import prepare_finite_continuation
         finite = prepare_finite_continuation(self, d)
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics, carrier_bytes, finite)
+        return _PreparedUniformRestart(
+            d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges,
+            diagnostics, carrier_bytes, finite, advance_segment,
+        )
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -767,6 +782,8 @@ class _SystemIO(_System):
         # accepted cursor first so time-, schedule- and cursor-dependent nodes see the exact
         # checkpoint context, matching the AMR restart route.
         self._s.set_clock(float(d["t"]), macro_step)
+        if prepared.advance_segment is not None:
+            self._s._restore_advance_segment(*prepared.advance_segment)
         histories = [str(name) for name in d["history_names"]]
         self._last_restart_report = restore_histories(self._s, d) if histories else None
         cache_names = [str(name) for name in d["cache_names"]]

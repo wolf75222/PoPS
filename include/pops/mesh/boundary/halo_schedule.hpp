@@ -3,22 +3,129 @@
 
 #pragma once
 
+#include <pops/core/state/variables.hpp>
+#include <pops/mesh/boundary/identified_halo_images.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/topology/boundary_topology.hpp>
+
+#include <Kokkos_Core.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace pops {
+
+namespace halo_schedule_detail {
+
+/// Use the exact declared component roles to build a signed inverse action on storage slots.
+/// Each complete polar family is discovered from its typed axis-independent identity.
+template <int Dim>
+class ComponentGatherTable {
+ public:
+  explicit ComponentGatherTable(const VariableSet& variables) : components_(variables.size) {
+    if (variables.roles.size() != static_cast<std::size_t>(variables.size))
+      throw std::invalid_argument("identified halo requires the exact declared field roles");
+    for (int component = 0; component < components_; ++component) {
+      const auto role = variables.roles[component];
+      role.template validate_for_dimension<Dim>();
+      if (!role.has_cartesian_value_action())
+        throw std::invalid_argument("identified halo has an unserved field component role");
+      if (!role.has_axis())
+        continue;
+      const int role_family = static_cast<int>(role.kind);
+      const auto family =
+          std::find_if(groups_.begin(), groups_.end(),
+                       [role_family](const auto& group) { return group.family == role_family; });
+      auto& group = family == groups_.end() ? groups_.emplace_back(role_family) : *family;
+      if (group.components[role.axis] != -1)
+        throw std::invalid_argument("identified halo repeats a vector component axis");
+      group.components[role.axis] = component;
+    }
+    for (const auto& group : groups_) {
+      if (std::find(group.components.begin(), group.components.end(), -1) != group.components.end())
+        throw std::invalid_argument("identified halo requires every axis of its polar vector");
+    }
+  }
+
+  std::size_t add(const mesh::SignedPermutation<Dim>& permutation) {
+    const auto existing = std::find(permutations_.begin(), permutations_.end(), permutation);
+    if (existing != permutations_.end())
+      return static_cast<std::size_t>(existing - permutations_.begin()) * components_;
+
+    const std::size_t offset = rows_.size();
+    permutations_.push_back(permutation);
+    // A signed one-based component index represents either identity or reversal, including
+    // component zero. Share the table between all jobs with this signed permutation.
+    for (int component = 0; component < components_; ++component)
+      rows_.push_back(component + 1);
+    for (const auto& group : groups_) {
+      for (int axis = 0; axis < Dim; ++axis) {
+        const auto source = group.components[permutation.target_axes()[axis]];
+        rows_[offset + group.components[axis]] = permutation.signs()[axis] * (source + 1);
+      }
+    }
+    return offset;
+  }
+
+  Kokkos::View<const int*, Kokkos::SharedSpace> prepare() const {
+    Kokkos::View<int*, Kokkos::SharedSpace> device_rows(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, "pops_halo_component_gathers"),
+        rows_.size());
+    std::copy(rows_.begin(), rows_.end(), device_rows.data());
+    return device_rows;
+  }
+
+ private:
+  struct Group {
+    explicit Group(int role_family) : family(role_family) { components.fill(-1); }
+
+    int family;
+    std::array<int, Dim> components{};
+  };
+
+  int components_;
+  std::vector<Group> groups_;
+  std::vector<mesh::SignedPermutation<Dim>> permutations_;
+  std::vector<int> rows_;
+};
+
+}  // namespace halo_schedule_detail
+
+template <int Dim>
+struct OrientedHaloGather {
+  std::array<int, Dim> source_axis{};
+  std::array<int, Dim> signs{};
+  std::array<std::int64_t, Dim> source_offsets{};
+  std::size_t component_offset = 0;
+
+  POPS_HD Index<Dim> index(const Index<Dim>& destination) const {
+    Index<Dim> source{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      const int image_axis = source_axis[axis];
+      source[image_axis] = static_cast<int>(
+          signs[axis] * static_cast<std::int64_t>(destination[axis]) + source_offsets[image_axis]);
+    }
+    return source;
+  }
+
+  POPS_HD static Real value(const FieldView<const Real, Dim>& source, const Index<Dim>& image,
+                            int signed_component) {
+    return signed_component < 0 ? -source(image, -signed_component - 1)
+                                : source(image, signed_component - 1);
+  }
+
+  bool operator==(const OrientedHaloGather&) const = default;
+};
 
 /// Finite preparation budget.  Halo construction is quadratic in the patch count and also visits
 /// every periodic image that can intersect the requested ghost depth.
@@ -48,6 +155,7 @@ struct HaloJob {
   Index<Dim> source_from_destination{};
   std::size_t offset = 0;
   std::size_t elements = 0;
+  std::optional<OrientedHaloGather<Dim>> oriented{};
 
   bool operator==(const HaloJob&) const = default;
 };
@@ -219,7 +327,7 @@ class HaloSchedule {
   HaloSchedule(const mesh::BoxArray<Dim>& layout, const mesh::Distribution<Dim>& distribution,
                Index<Dim> local_rank, Box<Dim> domain, Extent<Dim> ghosts,
                BoundaryTopology<Dim> topology, int ncomp, HaloLayoutCoverage coverage,
-               HaloScheduleBudget budget)
+               HaloScheduleBudget budget, const VariableSet* field_roles = nullptr)
       : layout_(layout),
         distribution_(distribution),
         local_rank_(local_rank),
@@ -245,6 +353,53 @@ class HaloSchedule {
     if (ncomp_ < 1)
       throw std::invalid_argument("pops::HaloSchedule component count must be positive");
 
+    const auto jobs = topology_.has_identifications() ? identified_jobs_(field_roles, budget)
+                                                      : translation_jobs_(budget);
+    canonical_jobs_ = jobs;
+    for (const job_type& job : jobs)
+      classify_(job, budget);
+    sort_peer_plans_(send_);
+    sort_peer_plans_(receive_);
+  }
+
+  const mesh::BoxArray<Dim>& layout() const noexcept { return layout_; }
+  const mesh::Distribution<Dim>& distribution() const noexcept { return distribution_; }
+  const Index<Dim>& local_rank() const noexcept { return local_rank_; }
+  const Box<Dim>& domain() const noexcept { return domain_; }
+  const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
+  const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
+  HaloLayoutCoverage coverage() const noexcept { return coverage_; }
+  int ncomp() const noexcept { return ncomp_; }
+  const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_jobs_; }
+  const std::vector<job_type>& local_jobs() const noexcept { return local_; }
+  const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
+  const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
+  const int* component_gather(const OrientedHaloGather<Dim>& image) const noexcept {
+    return component_gathers_.data() + image.component_offset;
+  }
+  std::size_t local_elements() const noexcept { return local_elements_; }
+  std::size_t send_elements() const noexcept { return send_elements_; }
+  std::size_t receive_elements() const noexcept { return receive_elements_; }
+
+  bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
+
+  void require_local_execution() const {
+    if (has_remote_jobs())
+      throw std::logic_error(
+          "pops::HaloSchedule remote jobs require a prepared HaloExchange and owning "
+          "ExecutionLane");
+  }
+
+  template <class MemorySpace>
+  void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
+    if (fields.layout() != layout_ || fields.distribution() != distribution_ ||
+        fields.local_rank() != local_rank_ || fields.ghosts() != ghosts_ ||
+        fields.ncomp() != ncomp_)
+      throw std::invalid_argument("pops::HaloSchedule does not match the destination MultiFab");
+  }
+
+ private:
+  std::vector<job_type> translation_jobs_(const HaloScheduleBudget& budget) const {
     std::size_t image_count = 0;
     const std::array<std::size_t, Dim> image_count_by_axis =
         halo_schedule_detail::image_counts(domain_, ghosts_, topology_, image_count);
@@ -281,48 +436,68 @@ class HaloSchedule {
         }
       }
     }
-
-    canonical_jobs_ = jobs;
-    for (const job_type& job : jobs)
-      classify_(job, budget);
-    sort_peer_plans_(send_);
-    sort_peer_plans_(receive_);
+    return jobs;
   }
 
-  const mesh::BoxArray<Dim>& layout() const noexcept { return layout_; }
-  const mesh::Distribution<Dim>& distribution() const noexcept { return distribution_; }
-  const Index<Dim>& local_rank() const noexcept { return local_rank_; }
-  const Box<Dim>& domain() const noexcept { return domain_; }
-  const Extent<Dim>& ghosts() const noexcept { return ghosts_; }
-  const BoundaryTopology<Dim>& topology() const noexcept { return topology_; }
-  HaloLayoutCoverage coverage() const noexcept { return coverage_; }
-  int ncomp() const noexcept { return ncomp_; }
-  const std::vector<job_type>& canonical_jobs() const noexcept { return canonical_jobs_; }
-  const std::vector<job_type>& local_jobs() const noexcept { return local_; }
-  const std::vector<peer_plan_type>& send_plans() const noexcept { return send_; }
-  const std::vector<peer_plan_type>& receive_plans() const noexcept { return receive_; }
-  std::size_t local_elements() const noexcept { return local_elements_; }
-  std::size_t send_elements() const noexcept { return send_elements_; }
-  std::size_t receive_elements() const noexcept { return receive_elements_; }
-
-  bool has_remote_jobs() const noexcept { return !send_.empty() || !receive_.empty(); }
-
-  void require_local_execution() const {
-    if (has_remote_jobs())
-      throw std::logic_error(
-          "pops::HaloSchedule remote jobs require a prepared HaloExchange and owning "
-          "ExecutionLane");
+  std::vector<job_type> identified_jobs_(const VariableSet* field_roles,
+                                         const HaloScheduleBudget& budget) {
+    if (coverage_ != HaloLayoutCoverage::full_domain)
+      throw std::invalid_argument("identified halo requires full Cartesian Uniform coverage");
+    if (field_roles == nullptr || field_roles->size != ncomp_)
+      throw std::invalid_argument("identified halo requires exact roles on its field allocation");
+    for (int axis = 0; axis < Dim; ++axis)
+      if (ghosts_[axis] < 0 || ghosts_[axis] > domain_.length(axis))
+        throw std::invalid_argument("identified halo depth exceeds image extent on axis " +
+                                    std::to_string(axis));
+    halo_schedule_detail::ComponentGatherTable<Dim> component_gathers(*field_roles);
+    const auto crossings = identified_halo_detail::prepare_crossings(topology_, domain_);
+    int translations = 0;
+    for (int axis = 0; axis < Dim; ++axis)
+      translations += topology_.is_periodic({axis, BoundarySide::lower});
+    // Each identified crossing removes a nontranslated exterior axis. Its signed tangential
+    // permutation preserves both families of axes, and its shifts on translation axes are each
+    // shorter than one tile. With depths at most one tile, each coordinate can start one tile
+    // outside and every identified crossing can add at most one wrap per translation axis.
+    const int crossing_bound = Dim + translations * (Dim - translations);
+    std::size_t intersections = 0;
+    std::vector<job_type> jobs;
+    for (std::size_t destination = 0; destination < layout_.size(); ++destination) {
+      auto work = budget.periodic_images;
+      const Box<Dim> grown = halo_schedule_detail::grow(layout_[destination], ghosts_);
+      for (const auto& region : halo_schedule_detail::subtract(grown, layout_[destination])) {
+        for (const auto& image : identified_halo_detail::resolve<Dim>(region, domain_, crossings,
+                                                                      {}, crossing_bound, work)) {
+          const auto& gather = image.read_from_destination;
+          const auto inverse = gather.inverse();
+          const auto source_image = gather.apply(image.destination);
+          const auto& permutation = gather.signed_permutation();
+          const OrientedHaloGather<Dim> oriented{permutation.target_axes(), permutation.signs(),
+                                                 gather.target_offsets(),
+                                                 component_gathers.add(permutation)};
+          halo_schedule_detail::checked_add(intersections, layout_.size(), budget.box_image_pairs,
+                                            "identified halo box-image work budget exceeded");
+          for (std::size_t source = 0; source < layout_.size(); ++source) {
+            const Box<Dim> owned = source_image.intersect(layout_[source]);
+            if (owned.empty())
+              continue;
+            if (jobs.size() >= budget.jobs)
+              throw std::length_error("identified halo job budget exceeded");
+            const auto destination_region = inverse.apply(owned);
+            jobs.push_back({source,
+                            destination,
+                            destination_region,
+                            {},
+                            0,
+                            checked_elements_(destination_region),
+                            oriented});
+          }
+        }
+      }
+    }
+    component_gathers_ = component_gathers.prepare();
+    return jobs;
   }
 
-  template <class MemorySpace>
-  void authenticate(const MultiFab<Dim, MemorySpace>& fields) const {
-    if (fields.layout() != layout_ || fields.distribution() != distribution_ ||
-        fields.local_rank() != local_rank_ || fields.ghosts() != ghosts_ ||
-        fields.ncomp() != ncomp_)
-      throw std::invalid_argument("pops::HaloSchedule does not match the destination MultiFab");
-  }
-
- private:
   std::size_t checked_elements_(const Box<Dim>& region) const {
     const std::int64_t cells = region.numPts();
     if (cells <= 0 || static_cast<std::uint64_t>(cells) > std::numeric_limits<std::size_t>::max() /
@@ -391,6 +566,7 @@ class HaloSchedule {
   BoundaryTopology<Dim> topology_{};
   int ncomp_ = 0;
   HaloLayoutCoverage coverage_ = HaloLayoutCoverage::full_domain;
+  Kokkos::View<const int*, Kokkos::SharedSpace> component_gathers_;
   std::vector<job_type> canonical_jobs_{};
   std::vector<job_type> local_{};
   std::vector<peer_plan_type> send_{};
@@ -404,7 +580,8 @@ template <int Dim, class MemorySpace>
 HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields,
                                         const Box<Dim>& domain,
                                         const BoundaryTopology<Dim>& topology,
-                                        HaloLayoutCoverage coverage, HaloScheduleBudget budget) {
+                                        HaloLayoutCoverage coverage, HaloScheduleBudget budget,
+                                        const VariableSet* roles = nullptr) {
   return HaloSchedule<Dim>{fields.layout(),
                            fields.distribution(),
                            fields.local_rank(),
@@ -413,7 +590,8 @@ HaloSchedule<Dim> prepare_halo_schedule(const MultiFab<Dim, MemorySpace>& fields
                            topology,
                            fields.ncomp(),
                            coverage,
-                           budget};
+                           budget,
+                           roles};
 }
 
 /// Uniform compatibility overload with an explicit final meaning: the layout covers the domain.
