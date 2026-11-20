@@ -67,8 +67,8 @@ void fill_periodic(Fab<Dim>& field, Function&& value) {
   field.copy_from_host(host);
 }
 
-template <int Dim>
-std::vector<Real> valid_values(const Fab<Dim>& field, int component = 0) {
+template <int Dim, class MemorySpace>
+std::vector<Real> valid_values(const Fab<Dim, MemorySpace>& field, int component = 0) {
   auto host = field.create_host_mirror();
   field.copy_to_host(host);
   std::vector<Real> result;
@@ -546,6 +546,34 @@ TEST(test_prepared_cartesian_nd, prepared_face_field_is_the_public_boundary_to_d
   EXPECT_THROW(op.assemble_residual_from_face_fluxes(fluxes, residual), std::runtime_error);
   for (const Real value : valid_values(residual))
     EXPECT_EQ(value, Real(9));
+}
+
+template <class MemorySpace>
+void check_cartesian_storage_access() {
+  using State = Fab<1, MemorySpace>;
+  using Faces = nd::FaceField<1, MemorySpace>;
+  const Box<1> domain = Box<1>::from_extents(Extent<1>{4});
+  const auto model = nd::ScalarAdvection<1>::prepare(RealVector<1>{Real(1)});
+  const auto op = nd::prepare_cartesian_operator<1>(unit_geometry(domain), model);
+  static_assert(requires(const State& state, Faces& faces, State& residual) {
+    op.materialize_face_fluxes(state, faces);
+    op.assemble_residual_from_face_fluxes(faces, residual);
+  });
+  State state(domain, 1, Extent<1>{1});
+  state.set_val(Real(3));
+  Faces faces(domain, 1);
+  State residual(domain, 1);
+  op.materialize_face_fluxes(state, faces);
+  op.assemble_residual_from_face_fluxes(faces, residual);
+  for (const Real value : valid_values(faces.template field<0>()))
+    EXPECT_EQ(value, Real(3));
+  for (const Real value : valid_values(residual))
+    EXPECT_EQ(value, Real(0));
+}
+
+TEST(test_prepared_cartesian_nd, accessible_kokkos_spaces_preserve_constant_cartesian_state) {
+  check_cartesian_storage_access<Fab<1>::memory_space>();
+  check_cartesian_storage_access<Kokkos::SharedSpace>();
 }
 
 TEST(test_prepared_cartesian_nd, primitive_euler_hllc_uses_the_same_three_dimensional_path) {

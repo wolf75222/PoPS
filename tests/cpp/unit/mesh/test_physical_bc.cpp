@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -155,4 +156,92 @@ TEST(test_physical_bc, periodic_faces_cannot_hide_conflicting_physical_laws) {
   EXPECT_THROW(((void)PhysicalBoundaryConditions<1>{BoundaryTopology<1>::axis_periodic({true}),
                                                     faces, RealVector<1>{1}}),
                std::invalid_argument);
+}
+
+TEST(test_physical_bc, opposite_laws_and_external_regions_keep_their_orientation_at_corners) {
+  const Box<2> domain = cube<2>(0, 0);
+  const BoxArray<2> layout(std::vector<Box<2>>{domain});
+  const auto distribution = Distribution<2>::replicated(layout, one_rank_space<2>());
+  const Extent<2> ghosts{1, 1};
+  HostMultiFab<2> field(layout, distribution, Index<2>{}, 1, ghosts);
+  const auto interior = [](const Index<2>&, int) { return Real(6); };
+  fill_valid(field, Real(-99), interior);
+
+  const auto topology = BoundaryTopology<2>::physical();
+  const auto spacing = unit_spacing<2>();
+  const Face<2> upper_y{1, BoundarySide::upper};
+  auto faces = uniform_faces<2>(PhysicalBoundaryFace{});
+  faces[static_cast<std::size_t>(Face<2>{0, BoundarySide::lower}.ordinal())] =
+      PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(2)};
+  faces[static_cast<std::size_t>(Face<2>{0, BoundarySide::upper}.ordinal())] =
+      PhysicalBoundaryFace{PhysicalBoundaryKind::neumann, Real(10)};
+  faces[static_cast<std::size_t>(Face<2>{1, BoundarySide::lower}.ordinal())] =
+      PhysicalBoundaryFace{PhysicalBoundaryKind::dirichlet, Real(3)};
+  faces[static_cast<std::size_t>(upper_y.ordinal())] =
+      PhysicalBoundaryFace{PhysicalBoundaryKind::neumann, Real(11)};
+
+  const auto fill = [&] {
+    const auto prepared = prepare_physical_boundary(
+        domain, ghosts, PhysicalBoundaryConditions<2>{topology, faces, spacing},
+        BoundaryScheduleBudget{8});
+    fill_physical_boundary(field, prepared);
+  };
+  fill();
+  EXPECT_EQ(value_at(field, 0, Index<2>{-1, 0}), Real(-2));
+  EXPECT_EQ(value_at(field, 0, Index<2>{1, 0}), Real(16));
+  EXPECT_EQ(value_at(field, 0, Index<2>{0, -1}), Real(0));
+  EXPECT_EQ(value_at(field, 0, Index<2>{0, 1}), Real(17));
+  // Reflect at lower x, then add the upper y increment to the reflected value.
+  EXPECT_EQ(value_at(field, 0, Index<2>{-1, 1}), Real(9));
+
+  fill_valid(field, Real(-99), interior);
+  faces[static_cast<std::size_t>(upper_y.ordinal())] = PhysicalBoundaryFace{};
+  fill();
+  EXPECT_EQ(value_at(field, 0, Index<2>{-1, 0}), Real(-2));
+  EXPECT_EQ(value_at(field, 0, Index<2>{0, 1}), Real(-99));
+  EXPECT_EQ(value_at(field, 0, Index<2>{-1, 1}), Real(-99));
+}
+
+TEST(test_physical_bc, public_schedule_cannot_supply_an_unbounded_operation_table) {
+  const Box<2> domain = cube<2>(0, 0);
+  const Extent<2> ghosts{1, 1};
+  const auto topology = BoundaryTopology<2>::physical();
+  const auto conditions = PhysicalBoundaryConditions<2>{
+      topology, uniform_faces<2>(PhysicalBoundaryFace{}), unit_spacing<2>()};
+  const auto stock = prepare_boundary_schedule(domain, ghosts, topology, BoundaryScheduleBudget{8});
+  ASSERT_FALSE(stock.entries().empty());
+  ASSERT_GT(stock.entries().front().operation_count, 0);
+
+  auto wrong_axis = stock.entries().front();
+  for (const int axis : {-1, 2}) {
+    wrong_axis.operations.front().face.axis = axis;
+    EXPECT_THROW((void)(PreparedPhysicalBoundary<2>{
+                     conditions, BoundarySchedule<2>{domain, ghosts, topology, {wrong_axis}}}),
+                 std::invalid_argument);
+  }
+
+  auto wrong_count = stock.entries().front();
+  wrong_count.operation_count = 3;
+  EXPECT_THROW((void)(PreparedPhysicalBoundary<2>{
+                   conditions, BoundarySchedule<2>{domain, ghosts, topology, {wrong_count}}}),
+               std::invalid_argument);
+}
+
+TEST(test_physical_bc, prepared_schedule_owns_the_validated_entries) {
+  const Box<2> domain = cube<2>(0, 0);
+  const Extent<2> ghosts{1, 1};
+  const auto topology = BoundaryTopology<2>::physical();
+  const auto conditions = PhysicalBoundaryConditions<2>{
+      topology, uniform_faces<2>(PhysicalBoundaryFace{}), unit_spacing<2>()};
+  auto entries =
+      prepare_boundary_schedule(domain, ghosts, topology, BoundaryScheduleBudget{8}).entries();
+  ASSERT_FALSE(entries.empty());
+  ASSERT_GT(entries.front().operation_count, 0);
+  auto& source_face = entries.front().operations.front().face;
+  ASSERT_EQ(source_face.axis, 0);
+
+  BoundarySchedule<2> source{domain, ghosts, topology, std::move(entries)};
+  const PreparedPhysicalBoundary<2> prepared{conditions, std::move(source)};
+  source_face.axis = 1;
+  EXPECT_EQ(prepared.schedule().entries().front().operations.front().face.axis, 0);
 }
