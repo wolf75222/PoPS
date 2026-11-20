@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.codegen._plans import ResolvedSimulationPlan
 
 # The face of the transport flux that a generated ghost needs: the source-authored face of the
 # same package. The generated System block has no catalogue face route with a ghost policy.
@@ -77,6 +81,65 @@ def _check_captures(emitter: Any, ghost: Any) -> None:
         pending.extend(_children(node))
 
 
+def _policy_clock(ghosts: Any) -> str | None:
+    clocks = {ghost.clock.qualified_id for ghost in ghosts if ghost.clock is not None}
+    if len(clocks) > 1:
+        raise ValueError("one SourceGhost policy cannot read more than one logical Clock")
+    return next(iter(clocks), None)
+
+
+def require_clocked_ghost_plan(plan: ResolvedSimulationPlan) -> None:
+    require_clocked_ghost_program(
+        ((block.name, block.numerics) for block in plan.blocks),
+        lambda: (plan.time, plan.target),
+    )
+
+
+def require_clocked_ghost_program(
+    blocks: Iterable[tuple[str, Any]], read_program: Callable[[], tuple[Any, str]],
+) -> None:
+    """Authenticate temporal boundary uses before compiling any native package."""
+    from pops.numerics.stencil_flux import StencilFlux
+    from pops.time._program.traversal import all_ops_with_ancestry
+    from pops.time.references import block_name
+
+    clocks = {}
+    for name, numerics in blocks:
+        faces, _ = _resolved_ghost_faces(numerics)
+        clock = _policy_clock(faces.values())
+        if clock is not None:
+            clocks[name] = clock
+            if numerics.interfaces:
+                raise NotImplementedError("SourceGhost time requires an uncoupled Uniform boundary")
+    if not clocks:
+        return
+    program, target = read_program()
+    if program is None or target != "system":
+        raise NotImplementedError("SourceGhost time requires an exact Uniform Program Clock")
+
+    subcycles = set()
+    for node, ancestry in all_ops_with_ancestry(program):
+        if node.op == "subcycle":
+            subcycles.add(node.id)
+        if node.block is None or block_name(node.block) not in clocks:
+            continue
+        # A source-owned stencil declaration consumes state extension even when
+        # its selected footprint is narrow. The emitter prepares that input first.
+        reads_ghosts = (
+            (node.op == "rhs" and node.attrs.get("flux", True))
+            or node.op in {"diffusive_rhs", "condensed_rhs"}
+            or type(node.attrs.get("stencil_flux")) is StencilFlux
+            or "cell_field_projection" in node.attrs
+        )
+        child = any(owner in subcycles for owner, _ in ancestry)
+        if reads_ghosts and (child or node.clock != program.clock):
+            raise NotImplementedError(
+                "SourceGhost time has no exact Clock for child application %s" % node.name)
+    for name, clock in clocks.items():
+        if clock != program.clock.qualified_id:
+            raise ValueError("SourceGhost for %s requires its exact consuming Program Clock" % name)
+
+
 def prepare_user_ghost_carrier(emitter: Any, numerics: Any) -> Any:
     """Attach the generated ghosts of the resolved boundaries of ``numerics`` to the emitter."""
     if numerics is None:
@@ -110,7 +173,8 @@ def prepare_user_ghost_carrier(emitter: Any, numerics: Any) -> Any:
     carrier = {"faces": dict(sorted(faces.items())), "dimension": dimension,
                "depth": depths.pop(), "reads": max(ghost.reads for ghost in ghosts),
                "width": width,
-               "stencil_depth": max(method.ghost_depth for method in methods)}
+               "stencil_depth": max(method.ghost_depth for method in methods),
+               "clock": _policy_clock(ghosts)}
     data = {"schema_version": 1, "kind": "source_ghost_policy",
             "faces": [[ordinal, ghost.source_identity] for ordinal, ghost in carrier["faces"].items()],
             "dimension": dimension, "depth": carrier["depth"], "reads": carrier["reads"],
@@ -166,9 +230,13 @@ def emit_user_ghost_policy(emitter: Any) -> str:
     if captures:
         impl.assign_runtime_indices()
     width, depth, faces = carrier["width"], carrier["depth"], carrier["faces"]
+    clock = carrier["clock"]
     face_count = 2 * carrier["dimension"]
     bindings = {"pops_ghost_inner_%d_%d" % (j, component): "inner(%d, %d)" % (j, component)
                 for j in range(1, depth + 1) for component in range(width)}
+    if clock is not None:
+        bindings[clock] = "physical_time"
+    capture_members = (["pops::RuntimeParams"] if captures else []) + (["pops::Real"] if clock else [])
     generated = " || ".join("ordinal == %d" % ordinal for ordinal in faces) or "false"
     lines = [
         "namespace pops_generated {",
@@ -187,8 +255,12 @@ def emit_user_ghost_policy(emitter: Any) -> str:
         "      default: return \"\";",
         "    }",
         "  }",
-        *(["  using pops_device_capture_members = pops::DeviceCaptureMembers<pops::RuntimeParams>;",
-           "  pops::RuntimeParams params{};"] if captures else []),
+        *(["  using pops_device_capture_members = pops::DeviceCaptureMembers<%s>;"
+           % ", ".join(capture_members)] if capture_members else []),
+        *(["  pops::RuntimeParams params{};"] if captures else []),
+        *(['  static constexpr const char* evaluation_clock = "%s";' % clock,
+           "  pops::Real physical_time = std::numeric_limits<pops::Real>::quiet_NaN();"]
+          if clock is not None else []),
         "  template <int Ordinal, class Inner>",
         "  POPS_HD void value(int k, const Inner& inner, pops::Real* ghost) const {",
         "    (void)k;",

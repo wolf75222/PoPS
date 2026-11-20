@@ -25,7 +25,10 @@ import pytest
 import pops
 import pops.surface as surface
 from examples.api_v02 import b6_numerics, b6_reconstructions
+from examples.api_v02.common import state_array
+from examples.api_v02.models_M01_M14 import _domain, _euler, _initial as bind_initial_array, _ssprk2
 from pops import math as pm
+from pops.analytic import time
 from pops.boundary import TransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow, SourceGhost
 from pops.domain import CartesianDomain
@@ -46,6 +49,7 @@ from pops.surface.discrete import Ghost, forms
 from pops.surface.math import ddt, div, outflow, sqrt, vector
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.traced_method import Candidate, method
+from tests.python.support.public_native_profile import native_profile
 
 pytestmark = [pytest.mark.compiler, pytest.mark.kokkos, pytest.mark.native_loader]
 
@@ -55,7 +59,7 @@ G = 0.2                         # the bound value of the runtime parameter g (de
 UNTIL = 0.05                    # 50 steps of dt = 1e-3
 
 
-def _surface_case(scheme=None, policy=None, periodic_x=False):
+def _surface_case(scheme=None, policy=None, periodic_x=False, *, dt=1e-3, temporal=False):
     x = surface.Periodic(0, 1) if periodic_x else (0.0, 1.0)
     domain = surface.Box(x=x, y=(0.0, 1.0))
     sides = domain.boundary
@@ -67,16 +71,17 @@ def _surface_case(scheme=None, policy=None, periodic_x=False):
     u0 = model.data("u0", surface.Scalar(domain))
     advection = model.flux(of=u, value=vector(a, b) * u)
     model.balance(ddt(u) == -div(advection))
+    inlet = g + model.time if temporal else g
     if periodic_x:
-        model.on(sides.y_min, u == g)
+        model.on(sides.y_min, u == inlet)
         model.on(sides.y_max, outflow(u))
     else:
-        model.on([sides.x_min, sides.y_min], u == g)
+        model.on([sides.x_min, sides.y_min], u == inlet)
         model.on([sides.x_max, sides.y_max], outflow(u))
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={advection: scheme or rusanov()},
                                 boundary=policy or ghosts())
-    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=1e-3),
+    program = surface.Program(advance=surface.Advance(ssprk2(rate=model), dt=dt),
                               initial={u: u0})
     case = surface.Case(model=model, numerics=numerics, program=program,
                         layout={domain: surface.Uniform(cells=CELLS)})
@@ -303,3 +308,95 @@ def test_a_ghost_that_is_not_finite_is_refused_by_the_face_that_reads_it(native_
         assert result.failure is not None
         message = str(result.failure)
     assert "hyperbolic face evaluation refused publication" in message
+
+
+def _two_step_line(initial, dt, rhs, sample=lambda begin, stage, dt: begin + stage * dt):
+    """Independent first-order spatial line and two SSPRK2 evaluations per step."""
+    state = initial
+    for tick in range(2):
+        begin = tick * dt
+        first = state + dt * rhs(state, sample(begin, 0, dt))
+        state = 0.5 * state + 0.5 * (first + dt * rhs(first, sample(begin, 1, dt)))
+    return state
+
+
+def _check_time_oracle(initial, dt, rhs):
+    expected = _two_step_line(initial, dt, rhs)
+    for wrong_sample in (lambda begin, stage, dt: 0.,
+                         lambda begin, stage, dt: begin,
+                         lambda begin, stage, dt: float(stage)):
+        assert np.max(np.abs(expected - _two_step_line(initial, dt, rhs, wrong_sample))) > 1e-5
+    return expected
+
+
+def test_generated_scalar_ghost_reads_each_physical_stage_time(native_cache, tmp_path):
+    del native_cache
+    native_profile(scope="G04 generated scalar stage clock")
+    dt = 1 / 128
+    case, u, g, u0 = _surface_case(periodic_x=True, dt=dt, temporal=True)
+    initial = np.ones(CELLS)
+    artifact = surface.compile(case, target=surface.OpenMP())
+    simulation = surface.bind(artifact, params={g: 1.}, data={u0: initial}, directory=tmp_path)
+    result = simulation.run(until=2 * dt)
+    assert result.failure is None and result.time == 2 * dt and result.steps == 2
+
+    def rhs(state, physical_time):
+        # Constant positive speed makes first-order Rusanov upwind. The y-min ghost is
+        # the reflection across the prescribed face value, g + t. x is periodic and uniform.
+        upstream = np.r_[2 * (1 + physical_time) - state[0], state[:-1]]
+        return 0.25 * CELLS[1] * (upstream - state)
+
+    expected = _check_time_oracle(initial[0], dt, rhs)
+    _bitwise(result.state[u], np.broadcast_to(expected, CELLS))
+
+
+def test_generated_euler_ghost_reads_each_declared_stage_time(native_cache):
+    del native_cache
+    native_profile(scope="G04 generated Euler stage clock")
+    dt = 1 / 128
+    frame, layout = _domain("M03_clocked_boundary", CELLS, periodic=(1,))
+    model = pops.Model("M03_clocked_boundary", frame=frame)
+    gamma, pressure_offset, vx, vy = 1.4, 0.2, 0.3, 0.1
+    state, flux, rate, _ = _euler(model, frame, gamma=gamma, pressure_offset=pressure_offset)
+    case = pops.Case("M03_clocked_boundary")
+    block = case.block("fluid", model)
+    program, _ = _ssprk2(case, block, state, lambda p, u, point, label: rate(u), dt,
+                          name="M03_clocked_boundary_SSPRK2")
+    subject = block[state]
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, b6_numerics.rusanov(flux, state))
+    energy_offset = (1 + gamma * pressure_offset) / (gamma - 1)
+    density = 1 + time(program.clock)
+    inlet = SourceGhost(
+        state=subject, depth=1,
+        body=lambda inner, k: (density, vx * density, vy * density, energy_offset + 0.05 * density))
+    outlet = SourceGhost(
+        state=subject, depth=1, body=lambda inner, k: tuple(inner(1)[j] for j in range(4)))
+    plan.boundaries.add(TransportBoundarySet(
+        {frame.boundaries.x_min: inlet, frame.boundaries.x_max: outlet},
+        periodic=layout.mesh.periodic))
+    case.numerics(plan, block=block)
+    initial = np.stack([np.full(CELLS[::-1], value) for value in (1., vx, vy, energy_offset + 0.05)])
+    initial_values = bind_initial_array(case, subject, initial)
+    artifact = pops.compile(pops.resolve(pops.validate(case), layout=layout))
+    artifact.verify()
+    runtime = pops.bind(artifact, initial_values=initial_values)
+    report = pops.run(runtime, t_end=2 * dt, max_steps=2, console=False)
+    assert runtime.time() == 2 * dt and runtime.macro_step() == 2, report
+
+    def rhs(rho, physical_time):
+        # The full Euler flux on the constant-pressure/velocity entropy manifold reduces
+        # to the Rusanov mass flux. The four components then follow from this density.
+        states = np.r_[1 + physical_time, rho, rho[-1]]
+        left, right = states[:-1], states[1:]
+        speeds = vx + np.sqrt(gamma * (1 + pressure_offset) / np.minimum(left, right))
+        mass_flux = 0.5 * vx * (left + right) - 0.5 * speeds * (right - left)
+        return -np.diff(mass_flux) * CELLS[0]
+
+    rho = np.broadcast_to(_check_time_oracle(initial[0, 0], dt, rhs), CELLS[::-1])
+    expected = np.stack((rho, vx * rho, vy * rho, energy_offset + 0.05 * rho))
+    actual = state_array(runtime, "fluid", initial.shape)
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-12)
+    pressure = ((gamma - 1) * (actual[3] - (actual[1] ** 2 + actual[2] ** 2) / (2 * actual[0]))
+                - gamma * pressure_offset)
+    np.testing.assert_allclose(pressure, 1., rtol=0, atol=2e-10)

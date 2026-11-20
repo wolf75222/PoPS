@@ -494,6 +494,13 @@ class _Elaboration:
         return self._lower(value, None)
 
     def _lower(self, value: Any, inputs: dict | None) -> Any:
+        from ._model import _ModelTime
+
+        if isinstance(value, _ModelTime):
+            if inputs is None or ("model_time",) not in inputs or value.model is not self.model:
+                raise NotYetElaborated("model.time outside a generated boundary relation",
+                                       "G04 and the phase-2 data fields of Q3", site=value.site)
+            return inputs[("model_time",)]
         if inputs is not None:
             if isinstance(value, Coordinate) and ("coordinate", value.name) in inputs:
                 return inputs[("coordinate", value.name)]
@@ -1816,7 +1823,7 @@ class _Elaboration:
                     _FACE_CENTRE_DATA, site=relation.site)
 
     def boundary_conditions(self, support: Support, frame: Any, block: Any, plan: Any,
-                            states: dict, relations: list) -> None:
+                            states: dict, relations: list, *, clock: Any = None) -> None:
         """Run the boundary policy under each relation at the depths 1..D of the block, and add
         to the plan (T5) the b6 ``SourceGhost`` of each piece, the ghost cells generated from the
         body of the policy (G04-a): the model package compiles them, the prepared boundary fills
@@ -1824,7 +1831,7 @@ class _Elaboration:
         if not relations:
             return
         from pops.boundary import TransportBoundarySet
-        from pops.boundary.transport import SourceGhost
+        from pops.boundary.transport import SourceGhost, _GhostTime
 
         policy = self.numerics.boundary
         depth = self.ghost_depth(plan)
@@ -1841,7 +1848,9 @@ class _Elaboration:
                 bodies = values[piece.name]
 
                 def body(inner: Any, k: int, bodies: dict = bodies) -> tuple:
-                    inputs = {("inner", j): inner(j)[0] for j in depths}
+                    inputs: dict[tuple, Any] = {("inner", j): inner(j)[0] for j in depths}
+                    if clock is not None:
+                        inputs[("model_time",)] = _GhostTime(clock)
                     return (self.lower(bodies[k], inputs),)
 
                 axis = frame.axes[support._names.index(piece.axis)]
@@ -1886,14 +1895,27 @@ class _Elaboration:
         terms = self.terms(b6, frame, states)
         rates = {balance: self.rate(b6, balance, terms, states) for balance in model.balances}
         plan, selections = self.plan(rates, terms, states)
-        self.boundary_data(relations)
+        from ._expr import walk
+        from ._model import _ModelTime
+
+        clocked_boundary = any(isinstance(node, _ModelTime)
+                               for relation in relations for node in walk(relation.data))
+        if not clocked_boundary:
+            self.boundary_data(relations)
         self.install_flux_coordinates(b6, frame)
         case6 = _Case(model.name)
         block = case6.block(model.name, b6)
-        self.boundary_conditions(support, frame, block, plan, states, relations)
-        case6.numerics(plan, block=block)
-        self.initial(case6, block, states, frame)
-        advance = self.advance(case6, block, states, selections)
+        if clocked_boundary:
+            self.initial(case6, block, states, frame)
+            advance = self.advance(case6, block, states, selections)
+            self.boundary_conditions(support, frame, block, plan, states, relations,
+                                     clock=advance.program.clock)
+            case6.numerics(plan, block=block)
+        else:
+            self.boundary_conditions(support, frame, block, plan, states, relations)
+            case6.numerics(plan, block=block)
+            self.initial(case6, block, states, frame)
+            advance = self.advance(case6, block, states, selections)
         layout = self.layout(support, frame)
         self.providers(b6)
         return Elaborated(case=case6, layout=layout, block=block, model=b6, plan=plan,

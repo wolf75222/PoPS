@@ -265,6 +265,13 @@ def _emit_cpp_program_impl(
     if model_graph is not None and type(model_graph) is not ProgramModelGraph:
         raise TypeError("model_graph must be an exact ProgramModelGraph")
     authority = model_graph if model_graph is not None else model
+    if model_graph is not None:
+        from pops.codegen.user_ghost_lowering import require_clocked_ghost_program
+
+        require_clocked_ghost_program(
+            model_graph._numerics_by_block.items(),
+            lambda: (program, target),
+        )
     # Even an RHS-only Program must cross the same authenticated provider boundary.
     # Otherwise no expression kernel calls ProgramProviderPlans.bind(), allowing a
     # raw facade to bypass the exact Module/provider authority check entirely.

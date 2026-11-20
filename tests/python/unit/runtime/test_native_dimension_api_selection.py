@@ -11,6 +11,7 @@ import pops._native_selector as selector
 import pops.codegen._phases as phases
 import pops.codegen._plans as plans
 import pops.codegen.region_facts as region_facts
+import pops.codegen.user_ghost_lowering as user_ghost_lowering
 
 
 def test_public_compile_selects_dimension_from_verified_resolved_domain(
@@ -31,6 +32,8 @@ def test_public_compile_selects_dimension_from_verified_resolved_domain(
     monkeypatch.setattr(
         region_facts, "check_expected_classes", lambda value: events.append(("classes", value))
     )
+    # Boundary admission gets its own tests with real resolved plans.
+    monkeypatch.setattr(user_ghost_lowering, "require_clocked_ghost_plan", lambda value: None)
     monkeypatch.setattr(
         selector,
         "select_native_dimension",

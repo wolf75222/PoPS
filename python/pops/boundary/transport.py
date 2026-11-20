@@ -10,7 +10,7 @@ from typing import Any, ClassVar, cast
 from pops.analytic import ScalarExpr
 from pops.domain import DomainBoundary
 from pops._ir import Expr
-from pops._ir.expr import Const
+from pops._ir.expr import Const, Var
 from pops._ir.visitors import _key
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
@@ -448,6 +448,8 @@ def _resolved_condition(
         condition.values,
         include_state=state if include_state_dependency else None,
     )
+    if type(condition) is SourceGhost and condition.clock is not None:
+        time = (_analytic_time_handle(condition.clock),)
     characteristic = getattr(condition, "characteristic", None)
     if characteristic is not None and state not in states:
         states = (*states, state)
@@ -874,6 +876,41 @@ class SlipWall:
 _GHOST_INPUT = "ghost_input"
 
 
+class _GhostTime(Var):
+    """One physical-time input from an owner-qualified Clock."""
+
+    def __init__(self, clock: Any) -> None:
+        _analytic_time_handle(clock)
+        super().__init__(clock.qualified_id, "ghost_time")
+        self.clock = clock
+
+
+def _lower_ghost_analytic(value: ScalarExpr) -> Expr:
+    from pops._ir.expr import Abs, Add, Div, Exp, Log, Mul, Neg, Pow, Sqrt, Sub
+    from pops.time import Clock
+
+    unary = {"abs": Abs, "exp": Exp, "log": Log, "neg": Neg, "sqrt": Sqrt}
+    binary = {"add": Add, "div": Div, "mul": Mul, "pow": Pow, "sub": Sub}
+
+    def lower(node: dict[str, Any]) -> Expr:
+        op = node["op"]
+        if op == "time":
+            clock = Clock.from_data(node["clock"])
+            if clock.qualified_id != node["clock_id"]:
+                raise ValueError("SourceGhost time Clock data does not authenticate its identity")
+            return _GhostTime(clock)
+        if op == "constant":
+            return Const(float.fromhex(node["value"]["binary64"]))
+        if op in unary:
+            return unary[op](lower(node["arguments"][0]))
+        if op in binary:
+            left, right = node["arguments"]
+            return binary[op](lower(left), lower(right))
+        raise NotImplementedError("SourceGhost does not receive analytic %s" % op)
+
+    return lower(value.to_data()["root"])
+
+
 def _ghost_inner_name(j: int, component: int) -> str:
     return "pops_ghost_inner_%d_%d" % (j, component)
 
@@ -905,18 +942,16 @@ def _ghost_row(result: Any, *, width: int, k: int) -> tuple[Expr, ...]:
         raise TypeError(
             "SourceGhost: the body must return one value per state component (%d) at depth %d"
             % (width, k))
-    return tuple(_expression(item, where="SourceGhost ghost[%d] at depth %d" % (index, k))
-                 for index, item in enumerate(result))
+    return tuple(
+        _lower_ghost_analytic(item) if type(item) is ScalarExpr else
+        _expression(item, where="SourceGhost ghost[%d] at depth %d" % (index, k))
+        for index, item in enumerate(result)
+    )
 
 
 def _ghost_reads(ghosts: tuple[tuple[Expr, ...], ...], *, width: int,
-                 depth: int) -> tuple[int, tuple[tuple[str, str], ...]]:
-    """(the deepest inner cell read, the runtime captures) of generated ghost expressions.
-
-    A ghost reads the inner cells up to its depth, numbers and the runtime parameters of the
-    model, nothing else: a coordinate, the time or another state has no route in the generated
-    ghost of this lot (G04, C44)."""
-    from pops._ir.expr import Var
+                 depth: int) -> tuple[int, tuple[tuple[str, str], ...], Any]:
+    """Return the deepest inner cell, runtime captures and Clock of the ghost expressions."""
     from pops._ir.native_call import NativeCall
     from pops._ir.values import RuntimeParamRef
     from pops._ir.visitors import _children
@@ -924,6 +959,7 @@ def _ghost_reads(ghosts: tuple[tuple[Expr, ...], ...], *, width: int,
     names = {_ghost_inner_name(j, component): j
              for j in range(1, depth + 1) for component in range(width)}
     captures: dict[str, str] = {}
+    clock = None
     reads = 0
     pending: list[Any] = [root for row in ghosts for root in row]
     seen: set[int] = set()
@@ -944,6 +980,11 @@ def _ghost_reads(ghosts: tuple[tuple[Expr, ...], ...], *, width: int,
             if captures.setdefault(node.name, handle.qualified_id) != handle.qualified_id:
                 raise ValueError("SourceGhost: colliding runtime parameter names")
             continue
+        if type(node) is _GhostTime:
+            if clock is not None and node.clock != clock:
+                raise ValueError("SourceGhost cannot read more than one logical Clock")
+            clock = node.clock
+            continue
         if isinstance(node, Var):
             if node.kind != _GHOST_INPUT or node.name not in names:
                 raise ValueError(
@@ -956,7 +997,7 @@ def _ghost_reads(ghosts: tuple[tuple[Expr, ...], ...], *, width: int,
         if not children and not isinstance(node, Const):
             raise ValueError("SourceGhost: the ghost has an unsupported scalar leaf %r" % (node,))
         pending.extend(children)
-    return reads, tuple(sorted(captures.items()))
+    return reads, tuple(sorted(captures.items())), clock
 
 
 @dataclass(frozen=True, slots=True, eq=False, init=False)
@@ -981,6 +1022,7 @@ class SourceGhost:
     reads: int
     ghosts: tuple[tuple[Expr, ...], ...]
     runtime_captures: tuple[tuple[str, str], ...]
+    clock: Any
     source_identity: str
 
     def __init__(self, *, state: Any, body: Any, depth: Any) -> None:
@@ -1007,7 +1049,7 @@ class SourceGhost:
         width = len(_state_components(state, where="SourceGhost"))
         if len(ghosts) != depth or any(len(row) != width for row in ghosts):
             raise ValueError("SourceGhost ghosts must give one row per depth and component")
-        reads, captures = _ghost_reads(ghosts, width=width, depth=depth)
+        reads, captures, clock = _ghost_reads(ghosts, width=width, depth=depth)
         # The identity names the runtime parameters that a ghost reads, as its expressions do
         # (``rparam`` by name): the qualified id of their handle carries the authoring order of
         # the model, which differs between two equal declarations. The package checks each
@@ -1016,6 +1058,8 @@ class SourceGhost:
                 "ghosts": canonical_hash_data(ghosts, where="generated ghost"),
                 "width": width, "depth": depth, "reads": reads,
                 "runtime_captures": [name for name, _ in captures]}
+        if clock is not None:
+            data["clock"] = clock.qualified_id
         encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
                              allow_nan=False).encode("utf-8")
         object.__setattr__(self, "state", state)
@@ -1027,6 +1071,7 @@ class SourceGhost:
         object.__setattr__(self, "reads", reads)
         object.__setattr__(self, "ghosts", ghosts)
         object.__setattr__(self, "runtime_captures", captures)
+        object.__setattr__(self, "clock", clock)
         object.__setattr__(self, "source_identity", hashlib.sha256(encoded).hexdigest())
 
     def _copies_nearest_interior(self) -> bool:
@@ -1046,8 +1091,11 @@ class SourceGhost:
         )
 
     def identity_data(self) -> dict[str, Any]:
-        return {"source_identity": self.source_identity, "width": self.width,
+        data = {"source_identity": self.source_identity, "width": self.width,
                 "depth": self.depth, "reads": self.reads}
+        if self.clock is not None:
+            data["clock"] = self.clock.qualified_id
+        return data
 
     def declaration_references(self) -> tuple[Handle, ...]:
         return (self.state,)
