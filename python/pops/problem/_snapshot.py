@@ -119,9 +119,10 @@ class AuthoringSnapshot:
             "payload": canonical_artifact_payload,
         }
         if presentation is not None:
-            artifact_envelope = _project_presentation(
-                presentation, json_containers(_encode_json(
-                    artifact_envelope, sort_keys=False, allow_nan=False)), artifact=True)
+            artifact_envelope = json_containers(_encode_json(
+                artifact_envelope, sort_keys=False, allow_nan=False))
+            del canonical_artifact_payload
+            artifact_envelope = _project_presentation(presentation, artifact_envelope, artifact=True)
         artifact_json = _encode_json(
             artifact_envelope, sort_keys=False, allow_nan=False)
         object.__setattr__(self, "_artifact_canonical_json", artifact_json)

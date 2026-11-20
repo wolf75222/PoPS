@@ -487,6 +487,16 @@ def test_presentation_rules_preserve_nonexact_equality_in_ancestors_and_rules():
     # The root comparison reads the prefix before rejecting its shorter path.
     assert comparisons == ["...", "...", "[]", "*", "group"]
 
+    class ObservableType(type):
+        def __eq__(self, other):
+            raise AssertionError("projection compared a metaclass to a builtin type")
+
+    class ExtensionText(str, metaclass=ObservableType):
+        pass
+
+    extension = ExtensionText("opaque")
+    assert names.project([extension])[0] is extension
+
 
 def test_an_owner_name_cannot_take_the_form_of_a_label():
     """Review A2 of #797: a name kept in a preimage can never equal a generated label.

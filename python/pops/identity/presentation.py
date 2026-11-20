@@ -468,7 +468,9 @@ class _Projection:
                 result = completed.value
                 continue
             path.append(part)
-            if type(child) in (str, bytes, int, float, bool, type(None)):
+            kind = type(child)
+            if (child is None or kind is str or kind is bytes or kind is int
+                    or kind is float or kind is bool):
                 result = self._scalar(child, path, exact_path)
                 path.pop()
                 continue
