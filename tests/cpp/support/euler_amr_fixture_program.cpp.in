@@ -1,4 +1,7 @@
 #include "explicit_amr_program.hpp"
+#if defined(POPS_TEST_POSITIVITY_FLOOR)
+#include "positivity_floor_program_fixture.hpp"
+#endif
 #if defined(POPS_TEST_PREPARED_CONSTITUTIVE_AMR)
 #include "prepared_constitutive_amr_program.hpp"
 #endif
@@ -7,8 +10,9 @@
 #define POPS_TEST_OWNED_HISTORY
 #endif
 
-#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
-    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING)
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) ||      \
+    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING) || \
+    defined(POPS_TEST_POSITIVITY_FLOOR)
 #include <unordered_map>
 #endif
 
@@ -26,6 +30,10 @@ constexpr std::uint64_t flux_bound = 2;
 constexpr const char* primary_clock = "test.clock.macro";
 constexpr const char* program_name = "test-empty-amr-cadence";
 constexpr std::uint64_t flux_bound = 0;
+#elif defined(POPS_TEST_POSITIVITY_FLOOR)
+constexpr const char* primary_clock = "test.amr.positivity.clock";
+constexpr const char* program_name = "test-positivity-floor-amr";
+constexpr std::uint64_t flux_bound = 1;
 #elif defined(POPS_TEST_DECLARED_SUBCYCLING)
 constexpr const char* primary_clock = "clock.macro";
 constexpr const char* program_name = "test-declared-subcycling-amr";
@@ -275,8 +283,9 @@ extern "C" const char* pops_module_field_space_owner(int) {
   return "";
 }
 
-#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
-    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING)
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) ||      \
+    defined(POPS_TEST_MIXED_CFL) || defined(POPS_TEST_DECLARED_SUBCYCLING) || \
+    defined(POPS_TEST_POSITIVITY_FLOOR)
 namespace pops::runtime::program::detail {
 template <int Dim>
 struct AmrInteractionHistorySnapshotTestAccess {
@@ -302,6 +311,9 @@ struct ContextControl {
   std::weak_ptr<ControlledContext> context;
   std::uint64_t generation;
   std::weak_ptr<int> invocations{};
+#if defined(POPS_TEST_POSITIVITY_FLOOR)
+  std::weak_ptr<pops::test::positivity::ProgramEvidence> evidence{};
+#endif
 #if defined(POPS_TEST_DECLARED_SUBCYCLING)
   std::weak_ptr<std::vector<std::tuple<int, double, double>>> visits{};
 #endif
@@ -322,7 +334,16 @@ std::shared_ptr<ControlledContext> require_fixture_context(ControlledSystem* sys
 }
 }  // namespace
 
-#if defined(POPS_TEST_DECLARED_SUBCYCLING)
+#if defined(POPS_TEST_POSITIVITY_FLOOR)
+extern "C" void pops_test_positivity_evidence(ControlledSystem* system,
+                                              pops::test::positivity::ProgramEvidence* result) {
+  const auto context = require_fixture_context(system);
+  const auto evidence = installed_contexts.at(system).evidence.lock();
+  if (!evidence)
+    throw std::logic_error("positivity fixture lost its installed evidence");
+  *result = *evidence;
+}
+#elif defined(POPS_TEST_DECLARED_SUBCYCLING)
 extern "C" void pops_test_declared_subcycling_visits(
     ControlledSystem* system, std::vector<std::tuple<int, double, double>>* result) {
   const auto context = require_fixture_context(system);
@@ -359,6 +380,10 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   pops::test::install_prepared_constitutive_step(context);
 #elif defined(POPS_TEST_EMPTY_AMR_CADENCE) || defined(POPS_TEST_MIXED_NORM)
   context->install([](double) {}, context);
+#elif defined(POPS_TEST_POSITIVITY_FLOOR)
+  const auto evidence = pops::test::positivity::install_step(context);
+  installed_contexts.insert_or_assign(
+      system, ContextControl{context, ControlAccess::generation(*context), {}, evidence});
 #elif defined(POPS_TEST_DECLARED_SUBCYCLING)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
   context->declare_clock_relation(POPS_TEST_EULER_FINE_CLOCK, POPS_TEST_EULER_SECOND_FINE_CLOCK, 2);

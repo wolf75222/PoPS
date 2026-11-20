@@ -62,6 +62,10 @@ int main(int argc, char** argv) {
         write_definitions(source, pops::test::noop_history, "test-noop-history-amr");
         source << "#define POPS_TEST_NOOP_HISTORY\n"
                << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n";
+      } else if (variant == "positivity_floor") {
+        write_definitions(source, pops::test::positivity_floor, "test-positivity-floor-amr",
+                          {"density", "density_peer"});
+        source << "#define POPS_TEST_POSITIVITY_FLOOR\n";
       } else if (variant == "declared_subcycling") {
         write_definitions(source, pops::test::declared_subcycling, "test-declared-subcycling-amr");
         source << "#define POPS_TEST_DECLARED_SUBCYCLING\n"
