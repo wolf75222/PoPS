@@ -110,6 +110,8 @@ def system_config_from_layout(native_layout: Any) -> Any:
     cfg.periodicity = periodicity
     cfg.boxes = boxes
     cfg.coordinate_system = coordinate_system
+    if native_layout.identifications:
+        cfg.identifications = native_layout.identifications
     return cfg
 
 

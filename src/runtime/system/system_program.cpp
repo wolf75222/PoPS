@@ -556,11 +556,12 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
   runtime::program::collective_boundary_provider_phase(
       *lane, "System shared-interface core session allocation",
       [&] { sessions.reserve(owner->sp.size()); });
-  const auto topology = BoundaryTopology<Dim>::axis_periodic(owner->periodicity);
+  const auto& topology = owner->domain_.topology;
   for (std::size_t block = 0; block < owner->sp.size(); ++block)
     sessions.push_back(Session::prepare_block(owner->geom, topology, owner->sp[block].U, *lane,
-                                              static_cast<std::uint64_t>(block) + 1));
-  auto core = [owner, lane, sessions = std::move(sessions)](
+                                              static_cast<std::uint64_t>(block) + 1,
+                                              &owner->sp[block].cons_vars));
+  auto core = [owner, lane, closed = topology.is_closed(), sessions = std::move(sessions)](
                   const runtime::multiblock::BoundaryEvaluationPoint& point,
                   const std::vector<MultiFab<Dim>*>& states,
                   const std::vector<MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only,
@@ -616,10 +617,8 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
               if (states[block] == nullptr ||
                   std::any_of(omitted.begin(), omitted.end(), [](bool value) { return value; }) ||
                   (!selected.boundary &&
-                   (!std::all_of(owner->periodicity.begin(), owner->periodicity.end(),
-                                 [](bool periodic) { return periodic; }) ||
-                    !(mode != 0 ? selected.periodic_flux_at_point_prepared
-                                : selected.periodic_full_at_point_prepared))))
+                   (!closed || !(mode != 0 ? selected.periodic_flux_at_point_prepared
+                                           : selected.periodic_full_at_point_prepared))))
                 throw std::invalid_argument(
                     "System grouped face retention requires an exact prepared Cartesian closure");
             }
@@ -1179,8 +1178,7 @@ void System<Dim>::block_neg_div_flux_into_at_prepared(
                               : !selected.periodic_flux_at_point_prepared)
           throw std::runtime_error(
               "System prepared boundary RHS requires one complete generated authority");
-        if (!selected.boundary && !std::all_of(p_->periodicity.begin(), p_->periodicity.end(),
-                                               [](bool periodic) { return periodic; }))
+        if (!selected.boundary && !p_->domain_.topology.is_closed())
           throw std::runtime_error(
               "prepared transport faces without a physical boundary require periodic topology");
         if (p_->blocks_.has_interfaces(block))
@@ -1236,8 +1234,7 @@ bool System<Dim>::has_prepared_group_face_observation(int block) const {
            std::none_of(omitted.begin(), omitted.end(), [](bool value) { return value; });
   }
   return static_cast<bool>(selected.periodic_flux_at_point_prepared) &&
-         std::all_of(p_->periodicity.begin(), p_->periodicity.end(),
-                     [](bool periodic) { return periodic; });
+         p_->domain_.topology.is_closed();
 }
 
 template <int Dim>

@@ -100,7 +100,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
     const std::string& name, Model model, const std::string& limiter, const std::string& riemann,
     const std::string& reconstruction, const std::string& time, double gamma, int substeps,
     bool evolve, int stride, double positivity_floor, Geometry<Dim> geometry,
-    std::array<bool, Dim> periodicity,
+    BoundaryTopology<Dim> topology,
     std::shared_ptr<const runtime::system::AuxiliaryStorageGroups<Dim>> provider_storage,
     std::shared_ptr<const runtime::system::ResolvedAuxiliaryConsumerPlan<Dim>> provider_plan,
     std::shared_ptr<const StaticGeometry<Dim>> static_geometry, NewtonOptions newton = {},
@@ -139,9 +139,8 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block_from_authority(
       }, "generated model package lacks prepare_exact_system_block for its exact native dimension");
 
   PreparedSystemBlock<Dim> prepared = invoke_package_preparer(
-      Request{name, std::move(model), std::move(routes), std::move(geometry),
-              BoundaryTopology<Dim>::axis_periodic(periodicity), std::move(provider_storage),
-              std::move(provider_plan), std::move(static_geometry)});
+      Request{name, std::move(model), std::move(routes), std::move(geometry), std::move(topology),
+              std::move(provider_storage), std::move(provider_plan), std::move(static_geometry)});
 
   // Authoritative structural metadata comes from compile-time model facts and the resolved install
   // request, never from an independently mutable runtime description.
@@ -186,7 +185,7 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   }
   return compiled_system_detail::prepare_compiled_system_block_from_authority<Dim>(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
-      stride, positivity_floor, installer.geometry(), installer.periodicity(),
+      stride, positivity_floor, installer.geometry(), installer.topology(),
       std::move(provider_storage), std::move(provider_plan), installer.static_geometry(), newton,
       newton_diagnostics, installer.smoothness_epsilon());
 }
@@ -209,9 +208,9 @@ PreparedSystemBlock<Dim> prepare_compiled_system_block(
   }
   return compiled_system_detail::prepare_compiled_system_block_from_authority<Dim>(
       name, std::move(model), limiter, riemann, reconstruction, time, gamma, substeps, evolve,
-      stride, positivity_floor, system.prepared_block_geometry(),
-      system.prepared_block_periodicity(), std::move(provider_storage), std::move(provider_plan),
-      system.static_geometry(), newton, newton_diagnostics, smoothness_epsilon);
+      stride, positivity_floor, system.prepared_block_geometry(), system.prepared_block_topology(),
+      std::move(provider_storage), std::move(provider_plan), system.static_geometry(), newton,
+      newton_diagnostics, smoothness_epsilon);
 }
 
 /// Stage the RuntimeInstance world lane Python bind installs when the C++ convenience path

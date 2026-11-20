@@ -439,6 +439,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
   while (p_->t < until) {
     if (report.steps == max_steps)
       return finish(AdvanceRunStop::kStepBudget);
+    const double accepted_begin = p_->t;
     const double frontier = runtime::program::advance_next_frontier(p_->t, until, outputs, cursors);
     double step_proposal = proposal;
     if (cells) {
@@ -552,6 +553,7 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
       }
     }
     ++report.steps;
+    report.last_accepted_begin = accepted_begin;
     if (rule != nullptr) {
       // A rule's step ends its own segment; no fixed-proposal run continues it (proposal 0).
       segment.proposal = 0.0;
@@ -573,6 +575,19 @@ runtime::program::AdvanceRunReport System<Dim>::run_advance(
         evaluate(output);
   }
   return finish(AdvanceRunStop::kReached);
+}
+
+template <int Dim>
+void System<Dim>::restore_advance_segment(runtime::program::AdvanceSegment segment) {
+  if (!p_->external_restart_transaction_ || p_->external_step_transaction_committed_)
+    throw std::logic_error("FixedDt segment restore requires an open restart transaction");
+  if (p_->program_.advance_max_attempts_ < 1 || !std::isfinite(segment.proposal) ||
+      segment.proposal <= 0 || !std::isfinite(segment.origin) || segment.origin > segment.time ||
+      segment.time != p_->t || segment.macro_step != p_->macro_step_ || segment.steps < 0 ||
+      segment.steps > segment.macro_step ||
+      (segment.steps == 0) != (segment.origin == segment.time))
+    throw std::invalid_argument("FixedDt segment differs from the installed accepted frontier");
+  p_->program_.advance_segment_ = segment;
 }
 
 template <int Dim>
@@ -1868,6 +1883,7 @@ template void System<kNativeDimension>::advance(double, int);
 template runtime::program::AdvanceRunReport System<kNativeDimension>::run_advance(
     double, double, std::int64_t, const std::vector<runtime::program::AdvanceOutputSchedule>&,
     const runtime::program::AdvanceStepRule*);
+template void System<kNativeDimension>::restore_advance_segment(runtime::program::AdvanceSegment);
 template int System<kNativeDimension>::advance_max_attempts() const noexcept;
 template std::string System<kNativeDimension>::advance_program_region(double);
 template void System<kNativeDimension>::begin_step_transaction();

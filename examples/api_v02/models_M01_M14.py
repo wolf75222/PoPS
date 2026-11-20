@@ -271,8 +271,9 @@ def _stiffened_gas(state, *, gamma, pressure_offset):
 
 
 def _euler(model, frame, *, gamma, pressure_offset=0., electromagnetic=False,
-           signed_wave_speeds=False):
-    U = model.state("conserved", components=("rho","mx","my","energy"))
+           signed_wave_speeds=False, state=None):
+    U = (model.state("conserved", components=("rho","mx","my","energy"))
+         if state is None else state)
     rho,mx,my,energy = U
     vx,vy = mx/rho,my/rho
     pressure,sound = _stiffened_gas(U, gamma=gamma, pressure_offset=pressure_offset)

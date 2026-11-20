@@ -46,6 +46,9 @@ _MODEL_OPS = (
     "solve_local_linear",
     "solve_local_nonlinear",
     "solve_spatial_nonlinear",
+    # G03 lot M1b: the face of a total on a moving configuration reads the FiniteVolume rate of
+    # the model of its block (program_emit_moving_total).
+    "moving_total_rate",
 )
 
 _ALLOWED_OPS = frozenset(

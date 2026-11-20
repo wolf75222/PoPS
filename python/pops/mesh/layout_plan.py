@@ -129,7 +129,7 @@ def _descriptor_native_spatial_layout(
     if first != second:
         raise ValueError("layout descriptor native_spatial_data() must be deterministic")
     required = {"schema_version", "periodicity", "centering", "decomposition"}
-    if not isinstance(first, dict) or set(first) != required:
+    if not isinstance(first, dict) or set(first) - {"identifications"} != required:
         raise TypeError(
             "layout descriptor native_spatial_data() must expose the exact schema-v1 shape")
     if first["schema_version"] != 1:
@@ -140,6 +140,7 @@ def _descriptor_native_spatial_layout(
         periodicity=first["periodicity"],
         centering=first["centering"],
         decomposition=first["decomposition"],
+        identifications=first.get("identifications", ()),
     )
 
 
@@ -160,6 +161,13 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
     geometry = _descriptor_geometry(descriptor)
     native_spatial_layout = _descriptor_native_spatial_layout(
         descriptor, handle=handle, geometry=geometry)
+    if native_spatial_layout is not None and native_spatial_layout.identifications:
+        from .grid import CartesianGrid
+
+        grid = getattr(descriptor, "mesh", descriptor)
+        topology = grid.identifications if isinstance(grid, CartesianGrid) else None
+        if topology is None or topology.owner != handle.owner_path:
+            raise ValueError("identified halo topology differs from the exact layout owner")
     count = capabilities.get("max_levels", capabilities.get("levels", 1))
     adaptive = capabilities.get("supports_amr", False)
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
