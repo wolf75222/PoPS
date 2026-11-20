@@ -62,6 +62,11 @@ int main(int argc, char** argv) {
         write_definitions(source, pops::test::noop_history, "test-noop-history-amr");
         source << "#define POPS_TEST_NOOP_HISTORY\n"
                << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n";
+      } else if (variant == "declared_subcycling") {
+        write_definitions(source, pops::test::declared_subcycling, "test-declared-subcycling-amr");
+        source << "#define POPS_TEST_DECLARED_SUBCYCLING\n"
+               << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n"
+               << "#define POPS_TEST_EULER_SECOND_FINE_CLOCK \"clock.level.2\"\n";
       } else if (variant == "mixed_cfl") {
         write_definitions(source, pops::test::mixed_cfl, "test-mixed-cfl-amr",
                           {"tracer", "storage"});
