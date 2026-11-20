@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -137,6 +138,7 @@ struct AdvanceRunReport {
   double last_prepared_solve_residual = std::numeric_limits<double>::quiet_NaN();
   /// The faces' frequency of a terminal face refusal, the largest over the ranks.
   double face_frequency = 0.0;
+  std::optional<double> last_accepted_begin;
   AdvanceSegment segment;                    ///< the segment that the next run continues
   std::vector<AdvanceOutputSample> outputs;  ///< the evaluations of the Outputs, in run order
 };

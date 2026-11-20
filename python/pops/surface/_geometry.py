@@ -198,6 +198,9 @@ class Boundary:
                     raise ValueError(
                         "%s is periodic, so Ω.boundary has no piece %s: its two ends are "
                         "identified (R20)" % (axis, name))
+                if name in support._identified_pieces:
+                    raise SupportMismatch(
+                        "%r.boundary has no piece %s after identification" % (support, name))
                 if name in support._degenerate:
                     other = [other for other in support._names if other != axis]
                     raise SupportMismatch(
@@ -223,6 +226,7 @@ class Support:
     _coordinates: tuple
     # The pieces on which a chart does not depend on the other coordinate (DN28); none on a box.
     _degenerate: tuple = ()
+    _identified_pieces: tuple[str, ...] = ()
     site: Any
 
     @property
@@ -251,7 +255,7 @@ class Support:
         return ["%s_%s" % (name, side)
                 for name, (_, _, periodic) in zip(self._names, self._bounds, strict=True)
                 if not periodic for side in ("min", "max")
-                if "%s_%s" % (name, side) not in self._degenerate]
+                if "%s_%s" % (name, side) not in self._degenerate + self._identified_pieces]
 
     def bounds(self) -> tuple:
         return self._bounds
@@ -264,6 +268,8 @@ class Support:
 
 class Box(Support):
     """``pops.Box(x=(0, 1), y=pops.Periodic(0, 1))``: a box support, one keyword per axis."""
+
+    _identifications: tuple = ()
 
     def __init__(self, **axes: Any) -> None:
         if not axes:
@@ -308,9 +314,69 @@ class Box(Support):
         return self
 
     @surface_entry
+    def identify(self, source: Any, target: Any, *, by: Any) -> Box:
+        """Identify two exact faces by a signed Cartesian coordinate map."""
+        if any(not isinstance(piece, Piece) or piece.support is not self or
+               piece.name not in self.piece_names() for piece in (source, target)):
+            raise SupportMismatch("identify takes two pieces of this box's current boundary")
+        if not isinstance(by, dict) or any(
+                not isinstance(axis, Coordinate) or axis.support is not self for axis in by):
+            raise SupportMismatch("identify by= maps coordinates of this exact box")
+        source_axis, target_axis = source.axis, target.axis
+        source_index, target_index = self._names.index(source_axis), self._names.index(target_axis)
+        source_side = 0 if source.side == "min" else 1
+        target_side = 0 if target.side == "min" else 1
+        rank = self.rank
+        permutation, signs, shifts = [0] * rank, [0] * rank, [Fraction(0)] * rank
+        read_axes = set()
+        for k, coordinate in enumerate(self._coordinates):
+            if coordinate in by:
+                j, sign, offset = _signed_coordinate(by[coordinate], self)
+            else:
+                j, sign, offset = k, 1, Fraction(0)
+                if k == target_index and source_index == target_index and source_side != target_side:
+                    offset = Fraction(self._bounds[k][target_side]) - Fraction(self._bounds[k][source_side])
+            if j in read_axes:
+                raise SupportMismatch("identify by= must be a signed permutation of the box coordinates")
+            read_axes.add(j)
+            permutation[j], signs[j] = k, sign
+            if k == target_index:
+                if (j != source_index or sign != (1 if source_side != target_side else -1)
+                        or sign * Fraction(self._bounds[j][source_side]) + offset
+                        != Fraction(self._bounds[k][target_side])):
+                    raise SupportMismatch("identify map must send %s onto %s with opposite outward normal"
+                                          % (source, target))
+                continue
+            lower, upper = (Fraction(value) for value in self._bounds[k][:2])
+            src_lo, src_hi = (Fraction(value) for value in self._bounds[j][:2])
+            if upper - lower != src_hi - src_lo:
+                raise SupportMismatch("identify changes the tangential extent of axis %s" % coordinate.name)
+            delta = sign * (src_lo if sign > 0 else src_hi) + offset - lower
+            if delta and not self.periodic(coordinate.name):
+                raise SupportMismatch("identify tangential shift requires periodic axis %s"
+                                      % coordinate.name)
+            shifts[k] = delta % (upper - lower)
+        if source is target or source.name == target.name:
+            if any(permutation[j] != j or signs[j] != (1 if j != source_index else -1)
+                   for j in range(rank)) or any(shifts):
+                raise SupportMismatch("a self-identification must fix its face pointwise on this box")
+        if permutation == list(range(rank)) and signs == [1] * rank and not any(shifts):
+            raise SupportMismatch("an ordinary translation is stated by pops.Periodic")
+        result = Box(**{axis: Periodic(lo, hi) if periodic else (lo, hi)
+                        for axis, (lo, hi, periodic) in zip(self._names, self._bounds, strict=True)})
+        result._identifications = (*self._identifications,
+                                   (source.name, target.name, tuple(permutation), tuple(signs),
+                                    tuple(shifts) if any(shifts) else ()))
+        result._identified_pieces = tuple(dict.fromkeys(
+            (*self._identified_pieces, source.name, target.name)))
+        return result
+
+    @surface_entry
     def chart(self, **frame: Any) -> Charted:
         """``σ.chart(x=e_x, y=e_y)``: the support σ with its chart, one expression of the
         coordinates of σ per axis of the Cartesian frame (D0b; design note N17, 3.2)."""
+        if self._identifications:
+            raise NotYetElaborated("a chart on an identified box", _L2C, site=self.site)
         return Charted(self, frame)
 
     def __getattr__(self, name: str) -> Any:
@@ -334,6 +400,28 @@ class Box(Support):
             parts.append("%s=%s" % (name, "pops.Periodic(%s, %s)" % (lower, upper) if periodic
                                     else "(%s, %s)" % (lower, upper)))
         return "pops.Box(%s)" % ", ".join(parts)
+
+
+def _signed_coordinate(value: Any, support: Box) -> tuple[int, int, Fraction]:
+    if isinstance(value, Coordinate) and value.support is support:
+        return value.index, 1, Fraction(0)
+    if isinstance(value, Arith) and value.op == "neg":
+        axis, sign, offset = _signed_coordinate(value.args[0], support)
+        return axis, -sign, -offset
+    if isinstance(value, Arith) and value.op in ("+", "-"):
+        left, right = value.args
+        for coordinate, number, reversed_order in ((left, right, False), (right, left, True)):
+            try:
+                offset = Fraction(fold(number, "identify offset"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            axis, sign, base = _signed_coordinate(coordinate, support)
+            if value.op == "+":
+                return axis, sign, base + offset
+            if reversed_order:
+                return axis, -sign, offset - base
+            return axis, sign, base - offset
+    raise SupportMismatch("identify by= requires one signed coordinate of this box plus a constant")
 
 
 class Charted(Support):

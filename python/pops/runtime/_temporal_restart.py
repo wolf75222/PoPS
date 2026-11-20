@@ -794,6 +794,48 @@ class TemporalRestartState:
         self.synchronized = True
         self._restored_pending = False
 
+    def fixed_dt(self) -> float | None:
+        if self.strategy is None or self.strategy["strategy"]["kind"] != "fixed_dt":
+            return None
+        from pops.time._step.strategy import FixedDt
+        return FixedDt.from_data(self.strategy["strategy"]).dt
+
+    def publish_compiled_fixed_run(
+        self, report: dict[str, Any], *, before_time: float, before_step: int,
+        time: float, macro_step: int, rejected: bool, failed: bool,
+    ) -> None:
+        before, start = _clock(before_time, before_step)
+        now, step = _clock(time, macro_step)
+        self._require_live_clock(before, start)
+        accepted, rejections = report["steps"], report["rejections"]
+        if accepted < 0 or rejections < 0 or step - start != accepted:
+            raise RuntimeError("compiled advance counters differ from the accepted cursor")
+        candidate = deepcopy(self)
+        if accepted:
+            begin = report["last_accepted_begin"]
+            if begin is None or not before_time <= begin < time:
+                raise RuntimeError("compiled advance lost its last accepted interval")
+            if (report["segment_proposal"], report["segment_time"], report["segment_macro_step"]) != (
+                self.fixed_dt(), time, macro_step,
+            ):
+                raise RuntimeError("compiled FixedDt segment differs from its installed authority")
+            candidate.accept(
+                before_time=begin, before_step=step - 1, time=time, macro_step=step,
+                fixed_dt_grid={
+                    "schema_version": 1, "origin": report["segment_origin"].hex(),
+                    "steps": report["segment_steps"], "time": now, "macro_step": step,
+                },
+            )
+            candidate.transaction_stats["accepted"] += accepted - 1
+        elif now != before:
+            raise RuntimeError("compiled advance moved the clock without publishing a step")
+        candidate.transaction_stats["rejected"] += rejections
+        if rejected or failed:
+            candidate.status = "failed" if failed else "rejected"
+            candidate.synchronized = False
+            candidate.transaction_stats["failed"] += int(failed)
+        self.__dict__ = candidate.__dict__
+
     def reject(self, *, time: Any, macro_step: Any) -> None:
         self._record_unsuccessful("rejected", time=time, macro_step=macro_step)
 
