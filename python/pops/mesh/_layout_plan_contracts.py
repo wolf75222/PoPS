@@ -375,6 +375,7 @@ class NativeSpatialLayout:
     periodicity: tuple[bool, ...]
     centering: str
     decomposition: Mapping[str, Any]
+    identifications: tuple[tuple[int, ...], ...] = ()
     identity: Any = field(init=False)
 
     def __post_init__(self) -> None:
@@ -402,6 +403,14 @@ class NativeSpatialLayout:
             raise ValueError("NativeSpatialLayout.upper must be strictly above lower")
         if any(type(value) is not bool for value in periodicity):
             raise TypeError("NativeSpatialLayout.periodicity must contain exact bool values")
+        rows = self.identifications
+        if type(rows) is not tuple or any(
+                type(row) is not tuple or len(row) != 2 + 3 * rank or
+                any(type(value) is not int or not -(1 << 31) <= value < 1 << 31 for value in row)
+                for row in rows):
+            raise TypeError("NativeSpatialLayout.identifications must contain exact ranked integer rows")
+        if rows != tuple(sorted(set(rows))):
+            raise ValueError("NativeSpatialLayout identifications must be unique and canonical")
         if not isinstance(self.centering, str) or self.centering not in {
                 "cell", "node", "face_x", "face_y", "face_z"}:
             raise ValueError("NativeSpatialLayout.centering is unsupported")
@@ -425,7 +434,7 @@ class NativeSpatialLayout:
         return len(self.shape)
 
     def _payload(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": 1,
             "layout_id": self.layout_id,
             "dimension": self.dimension,
@@ -439,6 +448,9 @@ class NativeSpatialLayout:
             "centering": self.centering,
             "decomposition": thaw(self.decomposition),
         }
+        if self.identifications:
+            result["identifications"] = [list(row) for row in self.identifications]
+        return result
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
@@ -452,7 +464,7 @@ class NativeSpatialLayout:
             "axis_names", "shape", "lower", "upper", "periodicity", "centering",
             "decomposition", "identity",
         }
-        if not isinstance(data, Mapping) or set(data) != required:
+        if not isinstance(data, Mapping) or set(data) - {"identifications"} != required:
             raise TypeError("NativeSpatialLayout data has an unsupported shape")
         if data["schema_version"] != 1:
             raise ValueError("NativeSpatialLayout data uses an unsupported schema")
@@ -477,6 +489,7 @@ class NativeSpatialLayout:
             periodicity=tuple(data["periodicity"]),
             centering=data["centering"],
             decomposition=data["decomposition"],
+            identifications=tuple(tuple(row) for row in data.get("identifications", ())),
         )
         if data["dimension"] != result.dimension:
             raise ValueError("NativeSpatialLayout.dimension does not match shape")
@@ -494,6 +507,7 @@ class NativeSpatialLayout:
         periodicity: Any,
         centering: Any,
         decomposition: Any,
+        identifications: Any = (),
     ) -> NativeSpatialLayout:
         if not isinstance(layout, LayoutHandle):
             raise TypeError("NativeSpatialLayout requires a canonical LayoutHandle")
@@ -510,6 +524,7 @@ class NativeSpatialLayout:
             periodicity=tuple(periodicity),
             centering=centering,
             decomposition=decomposition,
+            identifications=tuple(tuple(row) for row in identifications),
         )
 
 

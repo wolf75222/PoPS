@@ -45,7 +45,7 @@ from pops.time._step.bound import StepBound, step_fraction
 
 from ._expr import Arith, Call, Expr, Predicate, is_number, text, walk
 from ._geometry import (
-    CHART_GHOSTS, CHART_POINT_READS, CHART_RECONSTRUCTIONS, FRAME_AXES, MAP_WORDS, Charted,
+    CHART_GHOSTS, CHART_POINT_READS, CHART_RECONSTRUCTIONS, FRAME_AXES, MAP_WORDS, Box, Charted,
     Coordinate, FrameCoordinate, LogicalCoordinate, MathConstant, Support, chart_expression_data,
 )
 from ._method import MethodValue, _Trace, specialize, translate
@@ -644,7 +644,12 @@ class _Elaboration:
                     "the quantity %s, which no balance evolves (a constraint unknown or a "
                     "definition)" % quantity, "a later lot of N15 with the constraints of N10",
                     site=quantity.site)
-            handle = b6.state(quantity.name, components=(quantity.name,))
+            roles = None
+            if isinstance(quantity.space.support, Box) and quantity.space.support._identifications:
+                from pops.physics import Scalar as ScalarRole
+
+                roles = {quantity.name: ScalarRole()}
+            handle = b6.state(quantity.name, components=(quantity.name,), roles=roles)
             states[quantity] = handle
             self.values[quantity] = handle[0]
             self.rows.append(Row(
@@ -1421,7 +1426,7 @@ class _Elaboration:
         """The b6 layout of the support: ``Uniform`` of a grid of its box; graded nodes and a chart
         are the clock-free coordinate map of ``MovingControlVolumes``, which the static geometry
         arrays serve (N17, C1), a chart with the rule that ``geometry=`` states (D0b, DN29)."""
-        from ._program import Graded
+        from ._program import Graded, Uniform
 
         case = self.case
         stated = case.layout_of(support)
@@ -1452,13 +1457,27 @@ class _Elaboration:
                       % (uniform.cells,), site=uniform.site)
         periodic = tuple(axis for axis, (_, _, flag)
                          in zip(frame.axes, support.bounds(), strict=True) if flag)
-        layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
-                                        periodic=PeriodicAxes(periodic) if periodic else None))
+        identifications = support._identifications if isinstance(support, Box) else ()
+        if identifications and type(stated) is not Uniform:
+            raise NotYetElaborated("a non-Uniform layout of an identified box",
+                                   "G09 I2", site=stated.site)
+        topology = self.identifications(support, identifications) if identifications else None
+        try:
+            layout = _Uniform(CartesianGrid(frame=frame, cells=uniform.cells,
+                                            periodic=PeriodicAxes(periodic) if periodic else None,
+                                            identifications=topology))
+        except ValueError as error:
+            if not identifications:
+                raise
+            raise SupportMismatch(str(error), site=stated.site) from error
         elaborated = ("Uniform(CartesianGrid(frame=frame, cells=%r, periodic=%s))"
                       % (uniform.cells, "PeriodicAxes((%s))" % "".join(
                           "%s," % axis for axis in support._names if support.periodic(axis))
                          if periodic else None))
         choices = [Choice("cells", uniform.cells, "stated")]
+        if topology is not None:
+            choices.append(Choice("identifications", layout.mesh.native_spatial_data()["identifications"],
+                                  "derived"))
         if charted:
             layout, elaborated, charts = self.chart(stated, support, frame, layout, elaborated)
             choices += charts
@@ -1470,6 +1489,31 @@ class _Elaboration:
             choices += graded
         self.rows.append(Row("layout={%r: %r}" % (support, stated), "case", elaborated, choices))
         return layout
+
+    def identifications(self, support: Support, rows: tuple) -> Any:
+        from pops.mesh.boundaries import (
+            BoundaryHandle, BoundaryOrientation, BoundarySide, BoundaryTopology,
+            PeriodicIdentification, PeriodicOrientation,
+        )
+        from pops.model import OwnerPath
+
+        owner = OwnerPath.case(self.model.name)
+        faces = {
+            axis + "_" + name: BoundaryHandle(
+                axis + "_" + name, owner=owner, orientation=BoundaryOrientation(index, side))
+            for index, axis in enumerate(support._names)
+            for name, side in (("min", BoundarySide.LOWER), ("max", BoundarySide.UPPER))
+        }
+        identity = PeriodicOrientation(tuple(range(support.rank)), (1,) * support.rank)
+        periodic = [
+            PeriodicIdentification(faces[axis + "_min"], faces[axis + "_max"], identity)
+            for axis in support._names if support.periodic(axis)]
+        periodic.extend(PeriodicIdentification(faces[source], faces[target],
+                                                PeriodicOrientation(permutation, signs), shifts)
+                        for source, target, permutation, signs, shifts in rows)
+        coupled = {face for row in periodic for face in (row.source, row.target)}
+        return BoundaryTopology(owner, tuple(faces.values()), tuple(periodic),
+                                tuple(face for face in faces.values() if face not in coupled))
 
     def chart(self, stated: Any, support: Charted, frame: Any, layout: Any,
               elaborated: str) -> tuple:

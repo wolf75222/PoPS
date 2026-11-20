@@ -15,7 +15,7 @@ from pops.model import ComponentManifest
 def test_all_required_native_families_are_generated_data_only_contracts():
     expected = {
         "numerical_flux", "ghost_boundary", "boundary_flux", "field_boundary_closure", "tagger",
-        "clustering", "transfer", "reflux", "field_solver", "writer", "field_topology",
+        "transfer", "reflux", "field_solver", "writer", "field_topology",
     }
     resolved = {name: interfaces.resolve(name) for name in expected}
     assert set(resolved) == expected
@@ -25,7 +25,6 @@ def test_all_required_native_families_are_generated_data_only_contracts():
         "ghost_boundary": 1,
         "field_boundary_closure": 2,
         "tagger": 3,
-        "clustering": 4,
         "transfer": 5,
         "reflux": 6,
         "field_solver": 7,
@@ -36,6 +35,10 @@ def test_all_required_native_families_are_generated_data_only_contracts():
     assert all(value.table_symbol == "pops_component_interface_v1"
                for value in resolved.values())
     assert all(value.operations for value in resolved.values())
+    # The retired clustering substitution keeps its id 4 unassigned.
+    with pytest.raises(KeyError, match="clustering"):
+        interfaces.resolve("clustering")
+    assert 4 not in {value.abi_id for value in interfaces._BY_NAME.values()}
 
 
 def test_reflux_is_exact_generated_id_6_and_incomplete_conformer_is_refused():

@@ -835,6 +835,13 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   const auto* const provider_plan = provider_plan_owner.get();
   const Geometry<Dim> geometry = request.geometry;
   const BoundaryTopology<Dim> topology = request.topology;
+  std::optional<VariableSet> oriented_roles;
+  if (topology.has_identifications()) {
+    if constexpr (static_arrays || Ghost::present || provider_count > 0)
+      throw std::invalid_argument(
+          "G09 I1 identified halo has no qualified static-geometry, ghost or auxiliary provider");
+    oriented_roles = Model::conservative_vars();
+  }
 
   using GhostEvaluation = runtime::program::BoundaryGhostEvaluation;
   const auto qualify_ghost = [](Ghost& staged, const auto* point,
@@ -851,7 +858,8 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
   };
   using EvaluationPoint = runtime::multiblock::BoundaryEvaluationPoint;
   auto prepare_state = [model, provider_storage_owner, provider_plan_owner, provider_storage,
-                        provider_plan, geometry, topology, ghosts, ghost, qualify_ghost](
+                        provider_plan, geometry, topology, ghosts, ghost, qualify_ghost,
+                        oriented_roles = std::move(oriented_roles)](
                            MultiFab<Dim>& state, const PreparedHyperbolicBoundary<Dim>* boundary,
                            const EvaluationPoint* point = nullptr) {
     Ghost staged = ghost;
@@ -866,7 +874,11 @@ PreparedSystemBlock<Dim> materialize_block(Request request, Reconstruction recon
     }
     const auto state_schedule = HaloSchedule<Dim>(
         state.layout(), state.distribution(), state.local_rank(), geometry.domain(), ghosts,
-        topology, state.ncomp(), halo_budget(state, geometry.domain(), topology, ghosts));
+        topology, state.ncomp(), HaloLayoutCoverage::full_domain,
+        topology.has_identifications()
+            ? runtime::program::scalar_boundary_detail::halo_budget(state, geometry, topology)
+            : halo_budget(state, geometry.domain(), topology, ghosts),
+        oriented_roles ? &*oriented_roles : nullptr);
     fill_boundary(state, state_schedule);
     if (provider_storage != nullptr) {
       runtime::system::require_pointwise_provider_groups<Dim, provider_count>(

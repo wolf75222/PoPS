@@ -299,6 +299,15 @@ class BoundaryStencilRequirement:
         }
 
 
+# Native cell extension law and whether it only copies the nearest interior value.
+# A flux closure can use the same ghost samples and still have an additional face effect.
+_NATIVE_CELL_EXTENSION = {
+    "no_flux": ("no_flux", False),
+    "outflow": ("foextrap", True),
+    "slip_wall": ("slip_wall", False),
+}
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class ResolvedTransportCondition:
     geometry: DomainBoundary
@@ -362,6 +371,11 @@ class ResolvedTransportCondition:
                 "only a fixed-state face without a characteristic closure can prescribe its "
                 "exterior trace"
             )
+
+    @property
+    def copies_nearest_interior(self) -> bool:
+        law = _NATIVE_CELL_EXTENSION.get(self.condition_type)
+        return law is not None and law[1]
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
@@ -1440,6 +1454,17 @@ class ResolvedTransportBoundarySet:
         from pops.mesh.boundaries import ClosureMode
 
         state, ncomp, conditions, depth, _ = self._native_contract()
+
+        def native_type(row: ResolvedTransportCondition) -> str:
+            if self.requires_expression_component(row):
+                return "external"
+            if row.provider.dependencies.characteristic.mode is not ClosureMode.NONE:
+                return "characteristic_no_inflow"
+            extension = _NATIVE_CELL_EXTENSION.get(row.condition_type)
+            if extension is not None:
+                return extension[0]
+            return {"inflow": "dirichlet", "source_ghost": "source_ghost"}[row.condition_type]
+
         return {
             "schema_version": 1,
             "authority_type": "prepared_boundary_plan_compile",
@@ -1455,19 +1480,7 @@ class ResolvedTransportBoundarySet:
                     "condition_type": row.condition_type,
                     "producer": row.provider.qualified_id,
                     "geometry": row.geometry.canonical_identity(),
-                    "type": (
-                        "external" if self.requires_expression_component(row) else
-                        "characteristic_no_inflow"
-                        if row.provider.dependencies.characteristic.mode
-                        is not ClosureMode.NONE
-                        else {
-                        "outflow": "foextrap",
-                        "inflow": "dirichlet",
-                        "no_flux": "no_flux",
-                        "slip_wall": "slip_wall",
-                        "source_ghost": "source_ghost",
-                        }[row.condition_type]
-                    ),
+                    "type": native_type(row),
                     **({"source_identity": row.source_ghost.source_identity}
                        if row.source_ghost is not None else {}),
                     "representation": self._native_representation_contract(
@@ -1532,13 +1545,9 @@ class ResolvedTransportBoundarySet:
                 face_type = "source_ghost"
                 analytic_programs = []
                 clock_id = None
-            elif condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
+            elif condition.condition_type in _NATIVE_CELL_EXTENSION:
                 values = [0.0] * ncomp
-                face_type = {
-                    "no_flux": "no_flux",
-                    "outflow": "foextrap",
-                    "slip_wall": "slip_wall",
-                }[condition.condition_type]
+                face_type = _NATIVE_CELL_EXTENSION[condition.condition_type][0]
             else:
                 analytic_values = all(
                     isinstance(expression, ScalarExpr) for expression in condition.values
@@ -1586,7 +1595,7 @@ class ResolvedTransportBoundarySet:
                     is not ClosureMode.NONE
                     else "dirichlet"
                 )
-            if condition.condition_type in {"no_flux", "outflow", "slip_wall"}:
+            if condition.condition_type in _NATIVE_CELL_EXTENSION:
                 analytic_programs = []
                 clock_id = None
             face_rows[face] = {

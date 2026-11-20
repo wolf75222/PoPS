@@ -51,7 +51,7 @@ from typing import Any
 
 from pops.time._program.control import AdvanceControl, FaceFrequencyStop, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
-from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound
+from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound, FixedDt
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
 from pops.time.solve_outcome import solve_status_variant
@@ -489,6 +489,26 @@ class Simulation:
             schedule.append((0 if output.when is None else output.when.steps,
                              _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
+        temporal = runtime._executor._temporal_restart_state
+        installed_strategy = runtime._executor._step_strategy
+        project_fixed = (
+            type(installed_strategy) is FixedDt and rule is None and cells is None
+            and dt == self._control.first_dt == installed_strategy.dt == temporal.fixed_dt()
+            and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
+        )
+        manifest = None
+        if project_fixed and until > start and max_steps > 0:
+            from pops.runtime._run_manifest import prepare_run_manifest
+            from pops.runtime._step_strategy import prepare_program_run
+
+            prepared = prepare_program_run(runtime._executor, compiled=True)
+            manifest = prepare_run_manifest(
+                runtime._executor, t_end=until, max_steps=max_steps, output_dir=None,
+                step_transaction={
+                    **prepared.control_payload,
+                    "compiled_advance": self._control.to_data(),
+                },
+            )
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
                 rule[0], math.inf if rule[1] is None else rule[1]), cells)
@@ -496,12 +516,25 @@ class Simulation:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
+            if manifest is not None and macro_step > start_step:
+                from pops.runtime._run_manifest import publish_run_manifest
+
+                publish_run_manifest(runtime._executor, manifest)
             self._continuation = Continuation(
                 time, macro_step, CellStepBound(*cells) if cells is not None
                 else Proposal(dt) if rule is None else StepRule(*rule),
                 MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
+        if project_fixed:
+            temporal.publish_compiled_fixed_run(
+                report, before_time=start, before_step=start_step, time=time,
+                macro_step=runtime.macro_step(),
+                rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
+                failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
+            )
+        for name in ("last_accepted_begin", "segment_proposal", "segment_time", "segment_macro_step"):
+            report.pop(name, None)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
         for sample in report.pop("outputs"):
             region = self._outputs[sample["output"]]

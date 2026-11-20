@@ -227,6 +227,7 @@ struct NativePackageCapabilityState final {
   std::optional<Geometry<Dim>> geometry;
   std::optional<std::uint64_t> runtime_parameter_byte_capacity;
   std::array<bool, Dim> periodicity{};
+  BoundaryTopology<Dim> topology{};
   // The static geometry arrays of a mapped layout (N17, C1); null on the uniform logical box.
   std::shared_ptr<const StaticGeometry<Dim>> static_geometry;
   // The smoothness epsilon of the reconstruction route, set by the host from the descriptor; none
@@ -328,6 +329,10 @@ class PreparedNativeBlockInstaller final {
     state_->require(NativeCapabilityPhase::install_open,
                     "PreparedNativeBlockInstaller::periodicity");
     return state_->periodicity;
+  }
+  [[nodiscard]] BoundaryTopology<Dim> topology() const {
+    state_->require(NativeCapabilityPhase::install_open, "PreparedNativeBlockInstaller::topology");
+    return state_->topology;
   }
   /// The static geometry arrays of the mapped layout, or null on the uniform logical box.
   [[nodiscard]] std::shared_ptr<const StaticGeometry<Dim>> static_geometry() const {

@@ -1450,6 +1450,11 @@ std::array<bool, Dim> System<Dim>::prepared_block_periodicity() const {
 }
 
 template <int Dim>
+BoundaryTopology<Dim> System<Dim>::prepared_block_topology() const {
+  return p_->domain_.topology;
+}
+
+template <int Dim>
 void System<Dim>::install_prepared_block(PreparedSystemBlock<Dim> prepared) {
   require_assembling(p_->lifecycle_, "install_prepared_block");
   const std::string provider_consumer_qid = prepared.name;
@@ -2174,6 +2179,7 @@ void System<Dim>::finalize_native_packages() {
         state.geometry.emplace(p_->geom);
         state.runtime_parameter_byte_capacity = p_->cfg.runtime_parameter_byte_capacity;
         state.periodicity = p_->periodicity;
+        state.topology = p_->domain_.topology;
         state.static_geometry = p_->static_geometry_;
         state.provider_storage_owner = published_carrier_owner;
         state.phase = runtime::system::NativeCapabilityPhase::install_open;
@@ -2958,6 +2964,8 @@ template void System<kNativeDimension>::discard_interface_flux_components();
 template std::size_t System<kNativeDimension>::interface_evaluation_count(const std::string&,
                                                                           int) const;
 template Geometry<kNativeDimension> System<kNativeDimension>::prepared_block_geometry() const;
+template BoundaryTopology<kNativeDimension> System<kNativeDimension>::prepared_block_topology()
+    const;
 template std::array<bool, kNativeDimension> System<kNativeDimension>::prepared_block_periodicity()
     const;
 template void System<kNativeDimension>::install_prepared_block(

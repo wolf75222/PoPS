@@ -197,6 +197,7 @@ struct SystemConfig : RuntimeSpatialDomain<Dim> {
   /// authenticated cardinality. This is not a global bound on arbitrarily many
   /// retained snapshots; copies share their original incarnation.
   std::optional<std::uint64_t> runtime_parameter_byte_capacity;
+  std::vector<PeriodicIdentification<Dim>> identifications;
 
   std::string load_balance_route = "round_robin";
   std::string load_balance_identity = "pops.system.default.round-robin@1";
@@ -428,6 +429,7 @@ class System {
   /// Exact axis topology captured from the resolved layout. Generated packages use it to prepare
   /// one ranked halo schedule; they never reconstruct periodicity from boundary spellings.
   POPS_EXPORT std::array<bool, Dim> prepared_block_periodicity() const;
+  POPS_EXPORT BoundaryTopology<Dim> prepared_block_topology() const;
   /// Exact static scalar boundary of an installed field slot owned by this runtime block.
   /// An omitted slot is admitted only for a single installed plan. Dynamic laws are refused;
   /// callers must retain the returned value outside their stencil/Krylov hot loop.
@@ -890,6 +892,9 @@ class System {
       const runtime::program::AdvanceStepRule* rule = nullptr);
   /// Retry.max_attempts of the installed Advance; 0 when the installed Program has none.
   int advance_max_attempts() const noexcept;
+
+  /// Restore the validated fixed-step grid inside the Uniform restart transaction.
+  POPS_EXPORT void restore_advance_segment(runtime::program::AdvanceSegment segment);
   /// The step bound of a cells rule (N8 « dt= as a function of cell », D2): the smallest value over
   /// the valid cells of the evolving block, at the accepted state, of the function of cell that dt=
   /// writes, reduced over the ranks (PF8); +infinity when it is +infinity on every cell. A cell where

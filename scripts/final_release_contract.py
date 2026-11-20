@@ -41,9 +41,17 @@ FINAL_EXAMPLE_QUALIFICATION_TESTS = (
     "tests/python/unit/moments/test_hyqmom15_final_contract.py"
     "::test_particle_number_diagnostic_integrates_m00_and_rejects_drift",
 )
+FINAL_EXAMPLE_ADDITIONAL_ACCEPTANCE_TESTS = (
+    (
+        FINAL_EXAMPLES[0],
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py"
+        "::test_scalar_advection_final_preset_matches_explicit_continuation",
+    ),
+)
 FINAL_EXAMPLE_REQUIRED_TESTS = (
     *FINAL_EXAMPLE_ACCEPTANCE_TESTS,
     *FINAL_EXAMPLE_QUALIFICATION_TESTS,
+    *(nodeid for _, nodeid in FINAL_EXAMPLE_ADDITIONAL_ACCEPTANCE_TESTS),
 )
 FINAL_EXAMPLE_SCIENTIFIC_OUTPUTS = {
     FINAL_EXAMPLES[0]: {
@@ -533,16 +541,23 @@ def source_contract_errors(root: Path) -> list[str]:
         ("acceptance", FINAL_EXAMPLE_ACCEPTANCE_TESTS),
         ("qualification", FINAL_EXAMPLE_QUALIFICATION_TESTS),
     )
-    required_nodeids = tuple(nodeid for _kind, ledger in ledgers for nodeid in ledger)
-    if len(set(required_nodeids)) != len(required_nodeids):
-        errors.append("final-example required test nodeids must be unique")
+    proofs = []
     for proof_kind, ledger in ledgers:
         if len(ledger) != len(FINAL_EXAMPLES):
             errors.append(
                 "final examples and exact %s tests must have one-to-one coverage"
                 % proof_kind
             )
-        for example, nodeid in zip(FINAL_EXAMPLES, ledger, strict=False):
+        proofs.append((proof_kind, tuple(zip(FINAL_EXAMPLES, ledger, strict=False))))
+    proofs.append(("additional acceptance", FINAL_EXAMPLE_ADDITIONAL_ACCEPTANCE_TESTS))
+    required_nodeids = tuple(nodeid for _, pairs in proofs for _, nodeid in pairs)
+    if len(set(required_nodeids)) != len(required_nodeids):
+        errors.append("final-example required test nodeids must be unique")
+    for proof_kind, pairs in proofs:
+        for example, nodeid in pairs:
+            if example not in FINAL_EXAMPLES:
+                errors.append("unknown final example %s for %s" % (example, nodeid))
+                continue
             relative, separator, function_name = nodeid.partition("::")
             if not separator or not relative or not function_name:
                 errors.append("invalid final-example %s nodeid %r" % (proof_kind, nodeid))
