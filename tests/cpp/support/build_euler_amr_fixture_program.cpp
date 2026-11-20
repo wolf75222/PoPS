@@ -58,6 +58,10 @@ int main(int argc, char** argv) {
       } else if (variant == "empty_cadence") {
         write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
         source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
+      } else if (variant == "noop_history") {
+        write_definitions(source, pops::test::noop_history, "test-noop-history-amr");
+        source << "#define POPS_TEST_NOOP_HISTORY\n"
+               << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n";
       } else if (variant == "mixed_cfl") {
         write_definitions(source, pops::test::mixed_cfl, "test-mixed-cfl-amr",
                           {"tracer", "storage"});

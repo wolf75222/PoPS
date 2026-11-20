@@ -6,6 +6,7 @@
 #include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include "field_rhs_value_program_fixture.hpp"
+#include "installed_scalar_history_fixture.hpp"
 #include <pops/runtime/dynamic/dynlib.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -282,6 +283,14 @@ struct AmrProgramHistoryRemapCollectiveTestAccess {
                                                                int slot) {
     const auto key = context.history_key_(std::string(name), level);
     return context.runtime_state().hist_.histories.at(key).at(static_cast<std::size_t>(slot));
+  }
+
+  static auto history_authority(const context_type& context, const std::string& name, int level) {
+    const auto key = context.history_key_(name, level);
+    const auto& manager = context.runtime_state().hist_;
+    return std::tuple{manager.owner.at(key),          manager.ghost_depth.at(key),
+                      manager.state_identity.at(key), manager.space_identity.at(key),
+                      manager.clock_identity.at(key), manager.interpolation_identity.at(key)};
   }
 
   static std::vector<std::uint8_t> seed_and_serialize_flux_history(
@@ -3869,32 +3878,71 @@ TEST(GeneratedAmrSystemBlock, DeferredHistoryReadsPreservePublishedReferences) {
   EXPECT_EQ(deferred_reads, 1);
 }
 
-TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
-  constexpr int Dim = pops::kNativeDimension;
+namespace {
+template <int Dim>
+pops::AmrSystemConfig<Dim> noop_history_config() {
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 8;
-  pops::AmrSystem<Dim> system(config);
+  return config;
+}
+
+template <int Dim>
+void stage_noop_history(pops::AmrSystem<Dim>& system, const std::vector<double>& initial) {
   pops::test::install_amr_runtime_authority(system, "tests.generated-amr/history-remap-noop");
-  system.install_block_state_route("tracer", "state/tracer");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  const auto& tagging_field = pops::test::noop_history.fields.front();
+  const auto schema = decltype(advection_model<Dim>())::conservative_vars();
+  ASSERT_STREQ(tagging_field.block, "tracer");
+  ASSERT_STREQ(tagging_field.variable, "u");
+  ASSERT_EQ(tagging_field.component, 0);
+  ASSERT_EQ(schema.names.at(0), tagging_field.variable);
+  ASSERT_EQ(schema.roles.at(0), pops::VariableRole::Scalar);
+  system.install_block_state_route("tracer", tagging_field.state);
   pops::add_compiled_model<Dim>(system, "tracer", advection_model<Dim>());
-  system.set_conservative_state("tracer", std::vector<double>(cell_count(config.shape), 1.0));
-  pops::test::install_prepared_threshold_union(system, {{"tracer", "u", 2.0}},
-                                               "tests.generated-amr/history-remap-noop-tagging@1");
+  system.set_conservative_state("tracer", initial);
+  ASSERT_FALSE(system.uses_runtime_engine());
+}
+}  // namespace
+
+TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto config = noop_history_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  const std::vector<double> uniform(cell_count(config.shape), 1.);
+  ASSERT_NO_FATAL_FAILURE(stage_noop_history(system, uniform));
+  const auto context = pops::test::install_history_fixture(
+      system, POPS_TEST_NOOP_HISTORY_PROGRAM_SO, pops::test::noop_history);
   ASSERT_NE(system.engine(), nullptr);
   ASSERT_EQ(system.engine()->hierarchy().num_levels(), 1u);
+  ASSERT_EQ(system.block_level_state_global("tracer", 0), uniform);
 
-  auto context = pops::runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("clock.macro");
-  context->install([](double) {}, context);
-  system.set_program_block_map({0});
-  using FluxBudget = typename pops::AmrSystem<Dim>::PreparedAmrProgramFluxExpressionBlockBudget;
-  system.install_prepared_amr_program_flux_expression_budget(
-      "tests.generated-amr/history-remap-noop@1", std::vector<FluxBudget>(1, FluxBudget{1, 1}), 0,
-      0);
-  context->register_history("tracer.rate", 1, 1, 0, "tracer.U", "cell.conservative", "clock.macro",
-                            "dense.linear");
+  using Access = pops::runtime::program::detail::AmrProgramHistoryRemapCollectiveTestAccess<Dim>;
+  const auto authority = Access::history_authority(*context, "tracer.rate", 0);
+  EXPECT_EQ(authority,
+            (std::tuple{0, -1, "tracer.U", "cell.conservative", "clock.macro", "dense.linear"}));
+  const auto& prototype = system.prepared_amr_block_state(0, 0);
+  const auto layout = prototype.layout();
+  const auto distribution = prototype.distribution();
+  const auto ghosts = prototype.ghosts();
+  const auto local_rank = prototype.local_rank();
+  const auto expect_initial_storage = [&](const auto& field) {
+    EXPECT_EQ(field.layout(), layout);
+    EXPECT_EQ(field.distribution(), distribution);
+    EXPECT_EQ(field.ghosts(), ghosts);
+    EXPECT_EQ(field.local_rank(), local_rank);
+  };
+  for (int slot = 0; slot < 2; ++slot)
+    expect_initial_storage(Access::history_slot(*context, "tracer.rate", 0, slot));
+
+  std::vector<double> before_last_slot0, before_last_slot1;
+  std::vector<std::uint8_t> before_last_identity;
   for (const double dt : {0.1, 0.2, 0.3}) {
+    if (dt == .3) {
+      before_last_slot0 = system.history_global("tracer.rate", 0, 0);
+      before_last_slot1 = system.history_global("tracer.rate", 0, 1);
+      before_last_identity = system.history_sample_identity("tracer.rate", 0);
+    }
     context->begin_step(dt);
     auto& sample = context->scratch_state(940106, 0, context->state(0));
     sample.set_val(pops::Real(dt));
@@ -3910,7 +3958,31 @@ TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
   const auto slot0_before = system.history_global("tracer.rate", 0, 0);
   const auto slot1_before = system.history_global("tracer.rate", 0, 1);
 
+  constexpr auto earlier = static_cast<double>(pops::Real(.2));
+  constexpr auto latest = static_cast<double>(pops::Real(.3));
+  EXPECT_NE(before_last_slot0, before_last_slot1);
+  EXPECT_EQ(slot0_before, before_last_slot1);
+  EXPECT_EQ(slot0_before, std::vector<double>(uniform.size(), earlier));
+  EXPECT_EQ(slot1_before, std::vector<double>(uniform.size(), latest));
+  EXPECT_EQ(dt0_before, earlier);
+  EXPECT_EQ(dt1_before, latest);
+  EXPECT_EQ(fill_before, 2);
+  const auto sample_identity = system.history_sample_identity("tracer.rate", 0);
+  EXPECT_NE(sample_identity, before_last_identity);
+  const double time_before = system.time();
+  const int step_before = system.macro_step();
+  EXPECT_EQ(time_before, 0.);
+  EXPECT_EQ(step_before, 0);
+
   EXPECT_FALSE(system.regrid_from_prepared_tagging(0));
+  EXPECT_EQ(system.time(), time_before);
+  EXPECT_EQ(system.macro_step(), step_before);
+  EXPECT_EQ(system.history_sample_identity("tracer.rate", 0), sample_identity);
+  EXPECT_EQ(Access::history_authority(*context, "tracer.rate", 0), authority);
+  expect_initial_storage(system.prepared_amr_block_state(0, 0));
+  for (int slot = 0; slot < 2; ++slot)
+    expect_initial_storage(Access::history_slot(*context, "tracer.rate", 0, slot));
+  EXPECT_EQ(system.block_level_state_global("tracer", 0), uniform);
   EXPECT_EQ(system.engine()->hierarchy().num_levels(), 1u);
   EXPECT_EQ(system.engine()->topology_epoch(), topology_before);
   EXPECT_EQ(system.engine()->materialization_generation(), materialization_before);
@@ -3921,6 +3993,48 @@ TEST(GeneratedAmrSystemBlock, NoopPreparedRegridPreservesInitializedHistory) {
   EXPECT_EQ(system.history_slot_dt("tracer.rate", 0, 1), dt1_before);
   EXPECT_EQ(system.history_global("tracer.rate", 0, 0), slot0_before);
   EXPECT_EQ(system.history_global("tracer.rate", 0, 1), slot1_before);
+}
+
+TEST(GeneratedAmrSystemBlock, NoopHistoryCriterionColdContrast) {
+  constexpr int Dim = pops::kNativeDimension;
+  const auto config = noop_history_config<Dim>();
+  pops::AmrSystem<Dim> system(config);
+  const auto ordinal = [&](std::size_t axis_value) {
+    std::size_t index = 0, stride = 1;
+    for (int axis = 0; axis < Dim; ++axis) {
+      index += axis_value * stride;
+      stride *= static_cast<std::size_t>(config.shape[axis]);
+    }
+    return index;
+  };
+  std::vector<double> initial(cell_count(config.shape), 1.);
+  initial.at(ordinal(1)) = 2.;
+  initial.at(ordinal(3)) = 3.;
+  ASSERT_NO_FATAL_FAILURE(stage_noop_history(system, initial));
+  const auto context = pops::test::install_history_fixture(
+      system, POPS_TEST_NOOP_HISTORY_PROGRAM_SO, pops::test::noop_history);
+  ASSERT_NE(context, nullptr);
+  ASSERT_EQ(system.n_levels(), 2);
+  ASSERT_EQ(system.block_level_state_global("tracer", 0), initial);
+  ASSERT_FALSE(system.history_initialized("tracer.rate", 0));
+  const auto first = system.patch_boxes();
+  ASSERT_EQ(first.size(), 1u);
+  ASSERT_EQ(first.front().level, 1);
+  for (int axis = 0; axis < Dim; ++axis) {
+    EXPECT_EQ(first.front().box.lo[axis], 6);
+    EXPECT_EQ(first.front().box.hi[axis], 7);
+  }
+  EXPECT_EQ(system.time(), 0.);
+  EXPECT_EQ(system.macro_step(), 0);
+
+  const auto tags = system.execute_prepared_tagging(0);
+  EXPECT_EQ(pops::test::expect_fixture_tag_mask(
+                tags.refine, config.shape, [&](std::size_t cell) { return cell == ordinal(3); }),
+            initial.size());
+  EXPECT_EQ(pops::test::expect_fixture_tag_mask(tags.coarsen, config.shape,
+                                                [](std::size_t) { return false; }),
+            initial.size());
+  EXPECT_EQ(system.patch_boxes(), first);
 }
 
 TEST(GeneratedAmrSystemBlock, CflUsesFinestExactGeometryAndPreparedModelSpeed) {

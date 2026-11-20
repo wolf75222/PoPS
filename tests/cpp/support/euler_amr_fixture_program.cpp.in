@@ -3,7 +3,11 @@
 #include "prepared_constitutive_amr_program.hpp"
 #endif
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_NOOP_HISTORY)
+#define POPS_TEST_OWNED_HISTORY
+#endif
+
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
     defined(POPS_TEST_MIXED_CFL)
 #include <unordered_map>
 #endif
@@ -30,6 +34,17 @@ constexpr std::uint64_t flux_bound = 0;
 constexpr const char* primary_clock = "tests.norm2.mixed-level/clock@1";
 constexpr const char* program_name = "test-mixed-norm-amr";
 constexpr std::uint64_t flux_bound = 0;
+#elif defined(POPS_TEST_NOOP_HISTORY)
+constexpr const char* primary_clock = "clock.macro";
+constexpr const char* program_name = "test-noop-history-amr";
+constexpr std::uint64_t flux_bound = 1;
+constexpr const char* history_name = "tracer.rate";
+constexpr const char* history_state = "tracer.U";
+constexpr const char* history_clock = primary_clock;
+constexpr const char* history_interpolation = "dense.linear";
+constexpr std::string_view history_space = "cell.conservative";
+constexpr int history_ghost_depth = -1;
+constexpr int history_ratio = 1;
 #elif defined(POPS_TEST_SCALAR_HISTORY)
 constexpr const char* primary_clock = "clock.macro";
 constexpr const char* program_name = "test-scalar-history-amr";
@@ -38,6 +53,8 @@ constexpr const char* history_name = "tracer.potential";
 constexpr const char* history_state = "scalar-history:tracer.potential";
 constexpr const char* history_clock = "clock.macro";
 constexpr const char* history_interpolation = "none";
+constexpr int history_ghost_depth = POPS_TEST_SCALAR_HISTORY;
+constexpr int history_ratio = POPS_TEST_SCALAR_HISTORY_RATIO;
 constexpr std::string_view history_space = POPS_TEST_SCALAR_HISTORY_DENSE
                                                ? "scalar-field"
                                                : pops::runtime::program::kScalarOutputHistorySpace;
@@ -113,71 +130,71 @@ extern "C" std::uint64_t pops_program_operator_authority_word(int, int) {
   return 0;
 }
 extern "C" int pops_program_checkpoint_history_count() {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return 1;
 #else
   return 0;
 #endif
 }
 extern "C" const char* pops_program_checkpoint_history_name(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return history_name;
 #else
   return "";
 #endif
 }
 extern "C" int pops_program_checkpoint_history_owner(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return 0;
 #else
   return -1;
 #endif
 }
 extern "C" const char* pops_program_checkpoint_history_state_identity(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return history_state;
 #else
   return "";
 #endif
 }
 extern "C" const char* pops_program_checkpoint_history_space_identity(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return history_space.data();
 #else
   return "";
 #endif
 }
 extern "C" const char* pops_program_checkpoint_history_clock_identity(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return history_clock;
 #else
   return "";
 #endif
 }
 extern "C" const char* pops_program_checkpoint_history_interpolation_identity(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return history_interpolation;
 #else
   return "";
 #endif
 }
 extern "C" int pops_program_checkpoint_history_depth(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return 2;
 #else
   return 0;
 #endif
 }
 extern "C" int pops_program_checkpoint_history_components(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
+#if defined(POPS_TEST_OWNED_HISTORY)
   return 1;
 #else
   return 0;
 #endif
 }
 extern "C" int pops_program_checkpoint_history_ghost_depth(int) {
-#if defined(POPS_TEST_SCALAR_HISTORY)
-  return POPS_TEST_SCALAR_HISTORY;
+#if defined(POPS_TEST_OWNED_HISTORY)
+  return history_ghost_depth;
 #else
   return -1;
 #endif
@@ -248,7 +265,7 @@ extern "C" const char* pops_module_field_space_owner(int) {
   return "";
 }
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
     defined(POPS_TEST_MIXED_CFL)
 namespace pops::runtime::program::detail {
 template <int Dim>
@@ -326,25 +343,28 @@ extern "C" void pops_install_program_amr(pops::AmrSystem<pops::kNativeDimension>
   context->install([calls](double) { ++*calls; }, context);
   installed_contexts.insert_or_assign(
       system, ContextControl{context, ControlAccess::generation(*context), calls});
-#elif defined(POPS_TEST_SCALAR_HISTORY)
-  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK,
-                                  POPS_TEST_SCALAR_HISTORY_RATIO);
+#elif defined(POPS_TEST_OWNED_HISTORY)
+  context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, history_ratio);
   context->for_each_program_resource_level([&](int) {
     context->register_history(history_name, 1, 1, 0, history_state, std::string(history_space),
-                              history_clock, history_interpolation, POPS_TEST_SCALAR_HISTORY);
+                              history_clock, history_interpolation, history_ghost_depth);
   });
+#if defined(POPS_TEST_NOOP_HISTORY)
+  context->install([](double) {}, context);
+#else
   context->install([context](double dt) { context->advance_hierarchy(dt, [](double) {}); },
                    context);
+#endif
 #else
   pops::test::install_forward_euler_step(context, POPS_TEST_EULER_SOLVE_DEFAULT);
 #endif
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM)
+#if defined(POPS_TEST_OWNED_HISTORY) || defined(POPS_TEST_MIXED_NORM)
   installed_contexts.insert_or_assign(system,
                                       ContextControl{context, ControlAccess::generation(*context)});
 #endif
 #if defined(POPS_TEST_MIXED_NORM)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 1);
-#elif defined(POPS_TEST_EULER_FINE_CLOCK) && !defined(POPS_TEST_SCALAR_HISTORY) && \
+#elif defined(POPS_TEST_EULER_FINE_CLOCK) && !defined(POPS_TEST_OWNED_HISTORY) && \
     !defined(POPS_TEST_MIXED_CFL)
   context->declare_clock_relation(primary_clock, POPS_TEST_EULER_FINE_CLOCK, 2);
 #endif
