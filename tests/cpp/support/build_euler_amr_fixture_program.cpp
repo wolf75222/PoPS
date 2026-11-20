@@ -51,6 +51,13 @@ int main(int argc, char** argv) {
       } else if (variant == "empty_cadence") {
         write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
         source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
+      } else if (variant == "mixed_norm" || variant == "mixed_norm_wrong") {
+        write_definitions(
+            source, variant == "mixed_norm" ? pops::test::mixed_norm : pops::test::mixed_norm_wrong,
+            std::string("test-") + argv[1]);
+        source
+            << "#define POPS_TEST_MIXED_NORM\n"
+            << "#define POPS_TEST_EULER_FINE_CLOCK \"tests.norm2.mixed-level/clock/level-1@1\"\n";
       } else if (variant == "scalar_history" || variant == "scalar_history_ghost" ||
                  variant == "scalar_history_output_2" || variant == "scalar_history_dense_1" ||
                  variant == "scalar_history_dense_2") {

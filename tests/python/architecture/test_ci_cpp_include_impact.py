@@ -580,6 +580,8 @@ def test_cpp_ctest_registration_avoids_runtime_discovery_file_fanout():
          "AmrProgramNorm2Ownership.MultipleOwnersAndEmptyRanksRetainExactPhysicalScope"),
         ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
          "AmrProgramNorm2Ownership.MixedReplicatedCoarsePartitionedFineUsesPerLevelOwnership"),
+        ("tests/cpp/integration/mpi/test_mpi_amr_spatial_norm.cpp",
+         "AmrProgramNorm2Ownership.GeneratedCriterionSelectsFirstMixedOwnershipHierarchy"),
         ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp",
          "test_mapped_disk_tensor.discontinuous_spd_tensor_retains_positive_fourier_energy"),
         ("tests/cpp/unit/elliptic/test_mapped_disk_tensor.cpp",

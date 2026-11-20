@@ -1091,7 +1091,8 @@ set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
   "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp"
   "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp"
   "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp"
-  "${_euler_dir}/empty_cadence.cpp" "${_euler_dir}/scalar_history.cpp")
+  "${_euler_dir}/empty_cadence.cpp" "${_euler_dir}/scalar_history.cpp"
+  "${_euler_dir}/mixed_norm.cpp" "${_euler_dir}/mixed_norm_wrong.cpp")
 if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
   set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
     "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
@@ -1120,7 +1121,7 @@ if(POPS_NATIVE_DIM LESS_EQUAL 2)
   list(APPEND _euler_variants magnetic prepared_constitutive)
 endif()
 if(POPS_NATIVE_DIM EQUAL 2)
-  list(APPEND _euler_variants magnetic_union)
+  list(APPEND _euler_variants magnetic_union mixed_norm mixed_norm_wrong)
 endif()
 if(POPS_HAS_MPI)
   list(APPEND _euler_variants compiled_parity regrid_parity)
@@ -1394,6 +1395,10 @@ if(POPS_HAS_MPI)
         COMPILE_DEFINITIONS ${_compile_definitions})
     endif()
   endforeach()
+  if(POPS_NATIVE_DIM EQUAL 2)
+    pops_use_euler_amr_fixture(test_mpi_amr_spatial_norm mixed_norm POPS_TEST_MIXED_NORM_PROGRAM_SO)
+    pops_use_euler_amr_fixture(test_mpi_amr_spatial_norm mixed_norm_wrong POPS_TEST_MIXED_NORM_WRONG_PROGRAM_SO)
+  endif()
   pops_use_euler_amr_fixture(test_mpi_amr_compiled_parity compiled_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
   pops_use_euler_amr_fixture(test_amr_regrid_mpi_parity regrid_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
   pops_use_standalone_amr_criterion(test_mpi_amr_twoblock_parity

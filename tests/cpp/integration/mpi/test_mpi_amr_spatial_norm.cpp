@@ -6,7 +6,12 @@
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/physics/fluids/euler.hpp>
-#include "amr_tagging_test_authority.hpp"
+#if POPS_NATIVE_DIM == 2
+#include "amr_fixture_tag_mask_oracle.hpp"
+#include "euler_amr_fixture_criteria.hpp"
+#include <pops/runtime/dynamic/dynlib.hpp>
+#endif
+
 #include "explicit_amr_program.hpp"
 
 namespace {
@@ -689,8 +694,11 @@ TEST(AmrProgramNorm2Ownership, MultipleOwnersAndEmptyRanksRetainExactPhysicalSco
 #endif
 
 #if POPS_NATIVE_DIM == 2
-TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelOwnership) {
-  using namespace pops;
+namespace {
+constexpr char mixed_norm_clock[] = "tests.norm2.mixed-level/clock@1";
+using MixedNormContext = runtime::program::AmrProgramContext<2>;
+
+AmrSystemConfig<2> mixed_norm_config() {
   AmrSystemConfig<2> config;
   config.shape = Extent<2>{4, 4};
   config.periodicity = {true, true};
@@ -699,23 +707,61 @@ TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelO
   config.distribute_coarse = false;
   config.cluster_min_box_size = 1;
   config.cluster_max_box_size = 2;
-  AmrSystem<2> system(config);
+  return config;
+}
+
+void stage_mixed_norm(AmrSystem<2>& system, const std::vector<double>& initial) {
   test::install_amr_runtime_authority(system, "tests.norm2.mixed-level/actual-runtime@1");
-  system.install_block_state_route("tracer", "tests.norm2.mixed-level/state@1");
+  system.set_temporal_relations({1}, {1}, {"integral_only"});
+  const auto& field = test::mixed_norm.fields.front();
+  const auto schema = NormProbeModel::conservative_vars();
+  ASSERT_STREQ(field.block, "tracer");
+  ASSERT_STREQ(field.variable, "scalar");
+  ASSERT_EQ(field.component, 0);
+  ASSERT_EQ(schema.names.at(field.component), field.variable);
+  ASSERT_EQ(schema.roles.at(field.component), VariableRole::Scalar);
+  system.install_block_state_route(field.block, field.state);
   NormProbeModel model;
   model.hyp = nd::ScalarAdvection<2>::prepare(RealVector<2>{});
-  add_compiled_model<2>(system, "tracer", model, "minmod", "rusanov", "conservative", "explicit",
+  add_compiled_model<2>(system, field.block, model, "minmod", "rusanov", "conservative", "explicit",
                         static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.,
                         static_cast<double>(kWenoEpsilon), false, "tests.norm2.mixed-level/flux@1");
-  system.set_conservative_state("tracer", std::vector<double>(16, 2));
-  test::install_prepared_threshold_union(
-      system, {{"tracer", NormProbeModel::conservative_vars().names[0], .5}},
-      "tests.norm2.mixed-level/tagging@1");
-  ASSERT_EQ(system.engine()->hierarchy().num_levels(), 2U);
-  system.install_program_step([](double) {});
-  system.set_program_block_map({0});
-  auto context = runtime::program::make_program_execution_provider(&system);
-  context->configure_primary_clock("tests.norm2.mixed-level/clock@1");
+  system.set_conservative_state(field.block, initial);
+  test::mixed_norm.install<2>(system, mixed_norm_clock);
+}
+
+std::shared_ptr<MixedNormContext> installed_mixed_norm_context(AmrSystem<2>& system) {
+  // The installed runtime holds the DSO alive. This reference resolves only the private observer.
+  const dynlib::UniqueHandle image(dynlib::open(POPS_TEST_MIXED_NORM_PROGRAM_SO));
+  if (!dynlib::valid(image.get()))
+    throw std::runtime_error("cannot reopen the installed mixed-norm fixture");
+  const auto clock = reinterpret_cast<const char* (*)()>(
+      dynlib::sym(image.get(), "pops_program_checkpoint_primary_clock_identity"));
+  const char* declared_clock = clock != nullptr ? clock() : nullptr;
+  if (declared_clock == nullptr || std::string_view(declared_clock) != mixed_norm_clock)
+    throw std::runtime_error("mixed-norm criterion clock differs from the installed Program");
+  using Getter = void (*)(AmrSystem<2>*, std::shared_ptr<MixedNormContext>*);
+  const auto get =
+      reinterpret_cast<Getter>(dynlib::sym(image.get(), "pops_test_mixed_norm_context"));
+  if (get == nullptr)
+    throw std::runtime_error("installed mixed-norm fixture has no Context export");
+  std::shared_ptr<MixedNormContext> context;
+  get(&system, &context);
+  return context;
+}
+}  // namespace
+
+TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelOwnership) {
+  AmrSystem<2> system(mixed_norm_config());
+  ASSERT_NO_FATAL_FAILURE(stage_mixed_norm(system, std::vector<double>(16, 2)));
+  ASSERT_FALSE(system.uses_runtime_engine());
+  system.install_program(POPS_TEST_MIXED_NORM_PROGRAM_SO);
+  ASSERT_TRUE(system.uses_runtime_engine());
+  ASSERT_EQ(system.n_levels(), 2);
+  system.mark_bound();
+  const auto context = installed_mixed_norm_context(system);
+  EXPECT_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
   EXPECT_TRUE(system.prepared_amr_block_state(0, 0).distribution().replicated());
   EXPECT_FALSE(system.prepared_amr_block_state(0, 1).distribution().replicated());
   const auto& lane = context->prepared_execution_lane();
@@ -770,4 +816,68 @@ TEST(AmrProgramNorm2Ownership, MixedReplicatedCoarsePartitionedFineUsesPerLevelO
   EXPECT_DOUBLE_EQ(context->abs_sum_component(0, context->state(0), 0), Real(160));
   EXPECT_DOUBLE_EQ(context->dot(0, context->state(0), context->state(0)), Real(320));
 }
+
+TEST(AmrProgramNorm2Ownership, GeneratedCriterionSelectsFirstMixedOwnershipHierarchy) {
+  const auto config = mixed_norm_config();
+  AmrSystem<2> system(config);
+  std::vector<double> initial(16, .25);
+  constexpr std::size_t equal = 3, refined = 13;
+  initial[equal] = .5;
+  initial[refined] = 1.;
+  ASSERT_NO_FATAL_FAILURE(stage_mixed_norm(system, initial));
+  ASSERT_STREQ(test::mixed_norm.state_for("tracer"), test::mixed_norm_wrong.state_for("tracer"));
+
+  ASSERT_FALSE(system.uses_runtime_engine());
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  const auto block_map = system.program_block_map();
+  const auto revision = system.program_accepted_state_revision();
+  try {
+    system.install_program(POPS_TEST_MIXED_NORM_WRONG_PROGRAM_SO);
+    FAIL() << "a Program carrying the wrong criterion was installed";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(), n_ranks() == 1
+                                   ? "AmrSystem::install_program: the refinement criterion of the "
+                                     "compiled Program differs "
+                                     "from the installed AMR tagging authority"
+                                   : "AmrSystem::install_program preparation failed collectively");
+  }
+  ASSERT_FALSE(system.uses_runtime_engine());
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  EXPECT_EQ(system.program_block_map(), block_map);
+  EXPECT_EQ(system.program_accepted_state_revision(), revision);
+  EXPECT_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+
+  system.install_program(POPS_TEST_MIXED_NORM_PROGRAM_SO);
+  ASSERT_TRUE(system.uses_runtime_engine());
+  ASSERT_EQ(system.n_levels(), 2);
+  system.mark_bound();
+  ASSERT_NE(installed_mixed_norm_context(system), nullptr);
+  EXPECT_EQ(system.time(), 0.0);
+  EXPECT_EQ(system.macro_step(), 0);
+  ASSERT_EQ(system.block_level_state_global("tracer", 0), initial);
+  const auto first = system.patch_boxes();
+  for (std::size_t cell = 0; cell < initial.size(); ++cell) {
+    const Index<2> low{2 * static_cast<int>(cell % 4), 2 * static_cast<int>(cell / 4)};
+    for (int dy = 0; dy < 2; ++dy)
+      for (int dx = 0; dx < 2; ++dx) {
+        const Index<2> child{low[0] + dx, low[1] + dy};
+        const bool covered = std::any_of(first.begin(), first.end(), [&](const auto& patch) {
+          return patch.level == 1 && patch.box.contains(child);
+        });
+        EXPECT_EQ(covered, cell == refined) << "parent " << cell << ", child " << dx << ',' << dy;
+      }
+  }
+
+  // Independently observe the prepared mask without changing the first published hierarchy.
+  const auto marks = system.execute_prepared_tagging(0);
+  EXPECT_EQ(test::expect_fixture_tag_mask(marks.refine, config.shape,
+                                          [](std::size_t cell) { return cell == refined; }),
+            initial.size());
+  EXPECT_EQ(
+      test::expect_fixture_tag_mask(marks.coarsen, config.shape, [](std::size_t) { return false; }),
+      initial.size());
+  EXPECT_EQ(system.patch_boxes(), first);
+}
+
 #endif
