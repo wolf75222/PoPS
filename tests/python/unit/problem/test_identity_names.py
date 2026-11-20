@@ -450,6 +450,21 @@ def test_presentation_rules_keep_priority_and_distinguish_list_items():
     assert names.project(data, derived=(("...",),)) is None
 
 
+def test_deep_presentation_restores_paths_for_shared_siblings():
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    reference = "pops.handle.v1::case:c::block::a"
+    shared = [reference]
+    data = {"left": shared, "right": shared}
+    for _ in range(1100):
+        data = {"child": data}
+    projected = names.project(data, references=(("...", "left", "[]"),))
+    for _ in range(1100):
+        projected = projected["child"]
+    assert projected["left"] == ["pops.handle.v1::case:%24case::block::%24block0"]
+    assert projected["right"] == shared
+    assert projected["right"] is not shared
+
+
 def test_presentation_rules_preserve_nonexact_equality_in_ancestors_and_rules():
     names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
     comparisons = []

@@ -82,12 +82,15 @@ class AuthoringSnapshot:
         object.__setattr__(self, "_canonical_json", canonical_json)
         full_hash = canonical_sha256(out)
         object.__setattr__(self, "_hash", full_hash)
+        closed_full = _plain_json_data(out)
+        del out
 
         # Case builders always supply their closed scientific projection. Direct construction is
         # a low-level provenance seam: there the caller's explicit payload is also the semantic
         # declaration, after the strict snapshot projector has made it an inert value.
         semantic_source = canonical_payload if semantic_payload is None else semantic_payload
         semantic_data = semantic_value(semantic_source, where="AuthoringSnapshot semantic payload")
+        del canonical_payload, semantic_source
         if presentation is not None:
             semantic_data = _project_presentation(presentation, semantic_data, artifact=False)
         semantic_json = _encode_json(
@@ -95,6 +98,8 @@ class AuthoringSnapshot:
         object.__setattr__(self, "_semantic_canonical_json", semantic_json)
         semantic_key = semantic_identity(semantic_data)
         object.__setattr__(self, "_semantic_identity", semantic_key)
+        closed_semantic = closed_full and _plain_json_data(semantic_data)
+        del semantic_data
 
         # This is a separately versioned preimage, not a scrub of the full canonical dict. The
         # Case builder supplies an explicit parameter/model projection; standalone snapshots use
@@ -125,7 +130,7 @@ class AuthoringSnapshot:
         # Only the closed builtin JSON language has an exact JSON decode preimage.
         # Subclasses, tuples, non-string keys and floats must take the
         # complete validator; user hooks never establish a construction receipt.
-        if all(_plain_json_data(value) for value in (out, semantic_data, artifact_envelope)):
+        if closed_semantic and _plain_json_data(artifact_envelope):
             _remember_snapshot(self, (
                 canonical_json, full_hash, semantic_json,
                 semantic_key.domain, semantic_key.schema_version,

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from heapq import merge
 from types import MappingProxyType
@@ -400,7 +400,7 @@ class _PathRules:
                 last = _LIST_ITEM if pattern[-1] == "[]" else pattern[-1]
                 self.by_last.setdefault(last, []).append(index)
 
-    def first(self, path: tuple[Any, ...], exact_path: bool) -> Any:
+    def first(self, path: Sequence[Any], exact_path: bool) -> Any:
         if self.by_last is None or not exact_path:
             for pattern, result in self.rules:
                 if _matches(pattern, path):
@@ -419,7 +419,7 @@ class _PathRules:
             if depth < width or (not suffix and depth != width):
                 continue
             pattern, result = self.rules[index]
-            if _matches(pattern, path):
+            if _matches_exact(pattern, path, width):
                 return result
         return None
 
@@ -437,41 +437,65 @@ class _Projection:
         self.values = _PathRules(tuple(normalized_values.items()))
         self.sets = _PathRules(tuple((pattern, True) for pattern in sets))
         self.derived = _PathRules(tuple((pattern, True) for pattern in derived))
-        self.references: dict[str, list[tuple[str, ...]]] = {}
+        reference_rules: dict[Any, list[tuple[tuple[Any, ...], bool]]] = {}
         for pattern in references:
-            self.references.setdefault(pattern[-1], []).append(pattern)
-        self.reference_keys = reference_keys
+            reference_rules.setdefault(pattern[-1], []).append((pattern, True))
+        self.references = {last: _PathRules(tuple(rules)) for last, rules in reference_rules.items()}
+        self.reference_keys = _PathRules(tuple((pattern, True) for pattern in reference_keys))
         self.field_slots = dict(presentation.field_slots)
         self.field_coverage = dict(presentation.field_coverage)
 
-    def walk(self, value: Any, path: tuple[Any, ...]) -> Any:
+    def walk(self, value: Any, prefix: tuple[Any, ...]) -> Any:
         # Resume one parent entry only after its child has been projected. The same
         # node can appear in several positions with different projection rules.
         identity = id(value)
         active = {identity}
-        exact_path = all(type(part) is str or part is _LIST_ITEM for part in path)
+        # Only the current occurrence needs its ancestor path. Suspended frames resume
+        # with that same path restored, without copying it for each child.
+        path = list(prefix)
+        exact_path = all(type(part) is str or part is _LIST_ITEM for part in prefix)
         stack = [(identity, self._visit(value, path, None, False, exact_path))]
         result = None
         while stack:
             identity, visit = stack[-1]
             try:
-                child, child_path, block, expression, exact_path = visit.send(result)
+                child, part, block, expression, exact_path = visit.send(result)
             except StopIteration as completed:
                 stack.pop()
                 active.remove(identity)
+                if stack:
+                    path.pop()
                 result = completed.value
+                continue
+            path.append(part)
+            if type(child) in (str, bytes, int, float, bool, type(None)):
+                result = self._scalar(child, path, exact_path)
+                path.pop()
                 continue
             child_identity = id(child)
             if child_identity in active:
-                raise PresentationProjectionError("projection contains a cycle at %r" % (child_path,))
+                raise PresentationProjectionError("projection contains a cycle at %r" % (tuple(path),))
             active.add(child_identity)
-            stack.append((child_identity, self._visit(child, child_path, block, expression, exact_path)))
+            stack.append((child_identity, self._visit(child, path, block, expression, exact_path)))
             result = None
         return result
 
+    def _scalar(self, value: Any, path: list[Any], exact_path: bool) -> Any:
+        if self.derived.first(path, exact_path):
+            return None
+        return self._string_reference(value, path, exact_path) if type(value) is str else value
+
+    def _string_reference(self, value: str, path: list[Any], exact_path: bool) -> str:
+        if path:
+            last = path[-1]
+            rules = self.references.get("[]" if last is _LIST_ITEM else last)
+            if rules is not None and rules.first(path, exact_path):
+                return self._reference(value)
+        return value
+
     def _visit(
-        self, value: Any, path: tuple[Any, ...], block: str | None, expression: bool, exact_path: bool,
-    ) -> Generator[tuple[Any, tuple[Any, ...], str | None, bool, bool], Any, Any]:
+        self, value: Any, path: list[Any], block: str | None, expression: bool, exact_path: bool,
+    ) -> Generator[tuple[Any, Any, str | None, bool, bool], Any, Any]:
         if self.derived.first(path, exact_path):
             return None
         if isinstance(value, dict):
@@ -479,9 +503,8 @@ class _Projection:
                                              exact_path=exact_path))
         if isinstance(value, (list, tuple)):
             items = []
-            item_path = path + (_LIST_ITEM,)
             for item in value:
-                items.append((yield item, item_path, block, expression, exact_path))
+                items.append((yield item, _LIST_ITEM, block, expression, exact_path))
             # These two forms encode expression_handle_key and ValueExpr in the Expr DAG.
             if expression and len(value) == 2 and value[0] in ("qualified", "handle_value") \
                     and isinstance(value[1], str):
@@ -491,15 +514,11 @@ class _Projection:
             return items if isinstance(value, list) else tuple(items)
         if isinstance(value, (set, frozenset)):
             projected = set()
-            item_path = path + (_LIST_ITEM,)
             for item in value:
-                projected.add((yield item, item_path, block, expression, exact_path))
+                projected.add((yield item, _LIST_ITEM, block, expression, exact_path))
             return frozenset(projected)
         if isinstance(value, str):
-            if path and any(_matches(pattern, path)
-                            for pattern in self.references.get(
-                                "[]" if path[-1] is _LIST_ITEM else path[-1], ())):
-                return self._reference(value)
+            return self._string_reference(value, path, exact_path)
         return value
 
     def _reference(self, value: str) -> str:
@@ -534,27 +553,30 @@ class _Projection:
         raise ValueError("unknown presentation kind %r" % (kind,))
 
     def _mapping(
-        self, value: dict[str, Any], path: tuple[Any, ...], block: str | None, *,
+        self, value: dict[str, Any], path: list[Any], block: str | None, *,
         expression: bool, exact_path: bool,
-    ) -> Generator[tuple[Any, tuple[Any, ...], str | None, bool, bool], Any, dict[str, Any]]:
+    ) -> Generator[tuple[Any, Any, str | None, bool, bool], Any, dict[str, Any]]:
         if set(value) == _OWNER_RECORD_KEYS and isinstance(value.get("nodes"), list):
             return self.map.project_owner_record(value)
         if value.keys() == _COMPONENT_KEY_FIELDS:
             return {**value, "owner_qid": self.map.project_owner_string(value["owner_qid"])}
         keyed = self.keys.first(path, exact_path)
-        referenced = not keyed and any(_matches(pattern, path) for pattern in self.reference_keys)
+        referenced = not keyed and self.reference_keys.first(path, exact_path)
         handle = {"qualified_id", "local_id", "kind", "owner_path"} <= value.keys()
         expression = expression or value.get("protocol") == "pops.expr.dag.v1"
         result = {}
         for key, item in value.items():
-            item_path = path + (key,)
             exact_item_path = exact_path and type(key) is str
             projected_key = (self.map.block_label(key) if keyed
                              else self._reference(key)
                              if referenced and isinstance(key, str) else key)
             if projected_key in result:
-                raise PresentationProjectionError("projection merged two keys at %r" % (path,))
-            kind = self.values.first(item_path, exact_item_path) if isinstance(item, str) else None
+                raise PresentationProjectionError("projection merged two keys at %r" % (tuple(path),))
+            kind = None
+            if isinstance(item, str):
+                path.append(key)
+                kind = self.values.first(path, exact_item_path)
+                path.pop()
             if kind is not None:
                 result[projected_key] = self._bare(item, kind, block, value)
             elif handle and key == "qualified_id":
@@ -571,7 +593,7 @@ class _Projection:
                 result[projected_key] = item if derived is None else derived
             else:
                 result[projected_key] = yield (
-                    item, item_path, key if keyed else block, expression, exact_item_path)
+                    item, key, key if keyed else block, expression, exact_item_path)
         if value.get("op") == "state" and isinstance(value.get("block"), dict) \
                 and value.get("name") == value["block"].get("local_id") \
                 and isinstance(value.get("name"), str):
@@ -608,7 +630,7 @@ def _label_order(label: str) -> tuple[int, str]:
     return (int(digits), label) if digits.isdigit() else (-1, label)
 
 
-def _matches(pattern: tuple[Any, ...], path: tuple[Any, ...]) -> bool:
+def _matches(pattern: tuple[Any, ...], path: Sequence[Any]) -> bool:
     """Match a path; ``"*"`` is any key, and a leading ``"..."`` matches any prefix."""
     if pattern and pattern[0] == "...":
         pattern = pattern[1:]
@@ -617,11 +639,22 @@ def _matches(pattern: tuple[Any, ...], path: tuple[Any, ...]) -> bool:
         path = path[len(path) - len(pattern):]
     if len(pattern) != len(path):
         return False
-    return all(
-        (actual is _LIST_ITEM if expected == "[]" else
-         actual is not _LIST_ITEM if expected == "*" else expected == actual)
-        for expected, actual in zip(pattern, path)
-    )
+    for expected, actual in zip(pattern, path):
+        if not (actual is _LIST_ITEM if expected == "[]" else
+                actual is not _LIST_ITEM if expected == "*" else expected == actual):
+            return False
+    return True
+
+
+def _matches_exact(pattern: tuple[Any, ...], path: Sequence[Any], width: int) -> bool:
+    # Exact strings have no comparison hooks. Check the nearest ancestors first without
+    # slicing the path. Most suffix rules differ on one of these components.
+    for index in range(-1, -width - 1, -1):
+        expected, actual = pattern[index], path[index]
+        if not (actual is _LIST_ITEM if expected == "[]" else
+                actual is not _LIST_ITEM if expected == "*" else expected == actual):
+            return False
+    return True
 
 
 def _is_registry_fingerprint(fingerprint: str | None) -> bool:
