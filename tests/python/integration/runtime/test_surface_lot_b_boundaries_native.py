@@ -314,29 +314,36 @@ def test_a_ghost_that_is_not_finite_is_refused_by_the_face_that_reads_it(native_
     assert "hyperbolic face evaluation refused publication" in message
 
 
-def _advance_line(initial, dt, rhs, sample=lambda begin, stage, dt: begin + stage * dt, *, steps=2):
+def _advance_line(initial, dt, rhs, sample=lambda begin, stage, dt: begin + stage * dt, *,
+                  subcycles=1):
     """Independent first-order spatial line and two SSPRK2 evaluations per step."""
     state = initial
-    for tick in range(steps):
+    for tick in range(2 * subcycles):
         begin = tick * dt
         first = state + dt * rhs(state, sample(begin, 0, dt))
-        state = 0.5 * state + 0.5 * (first + dt * rhs(first, sample(begin, 1, dt)))
+        second = rhs(first, sample(begin, 1, dt))
+        # The primary commit adds the base to the other two terms. The child
+        # value accumulates all three terms into scratch in their authored order.
+        if subcycles == 1:
+            state = 0.5 * state + 0.5 * (first + dt * second)
+        else:
+            state = (0.5 * state + 0.5 * first) + (0.5 * dt) * second
     return state
 
 
 def _check_time_oracle(initial, dt, rhs, *, subcycles=1):
-    expected = _advance_line(initial, dt, rhs, steps=2 * subcycles)
+    expected = _advance_line(initial, dt, rhs, subcycles=subcycles)
     for wrong_sample in (lambda begin, stage, dt: 0.,
                          lambda begin, stage, dt: begin,
                          lambda begin, stage, dt: float(stage)):
-        wrong = _advance_line(initial, dt, rhs, wrong_sample, steps=2 * subcycles)
+        wrong = _advance_line(initial, dt, rhs, wrong_sample, subcycles=subcycles)
         assert np.max(np.abs(expected - wrong)) > 1e-5
     if subcycles > 1:
         def macro_time(begin, stage, duration):
             interval = duration * subcycles
             return (begin // interval) * interval + stage * interval
 
-        wrong = _advance_line(initial, dt, rhs, macro_time, steps=2 * subcycles)
+        wrong = _advance_line(initial, dt, rhs, macro_time, subcycles=subcycles)
         assert np.max(np.abs(expected - wrong)) > 1e-5
     return expected
 

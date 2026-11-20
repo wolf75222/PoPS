@@ -36,7 +36,7 @@ namespace runtime::program {
 struct BoundaryGhostEvaluation;
 template <int Dim>
 class PreparedScalarBoundarySession;
-}
+}  // namespace runtime::program
 
 /// Prepared block capabilities accepted by the exact-ranked Uniform core.
 ///
