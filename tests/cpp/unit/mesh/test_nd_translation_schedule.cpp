@@ -455,8 +455,9 @@ TEST(test_nd_translation_schedule, metadata_and_large_3d_element_overflow_fail_b
   const ProductionBoxArray<2> plane_layout(std::vector<Box<2>>{plane});
   const RankSpace<2> plane_ranks{Index<2>{0, 0}, Extent<2>{1, 1}};
   const auto plane_distribution = Distribution<2>::replicated(plane_layout, plane_ranks);
-  const PeriodicTopology<2> mapped{std::vector<PeriodicIdentification<2>>{PeriodicIdentification<2>{
-      Face<2>{0, Side::lower}, Face<2>{1, Side::upper}, SignedPermutation<2>{{1, 0}, {1, -1}}}}};
+  const PeriodicTopology<2> mapped{std::vector<mesh::nd_proof::PeriodicIdentification<2>>{
+      mesh::nd_proof::PeriodicIdentification<2>{Face<2>{0, Side::lower}, Face<2>{1, Side::upper},
+                                                SignedPermutation<2>{{1, 0}, {1, -1}}}}};
   EXPECT_THROW((void)TranslationSchedule<2>(plane_layout, plane_distribution, plane, mapped,
                                             Extent<2>{1, 1}, 1, 0, 1, Index<2>{0, 0},
                                             Extent<2>{2, 2}, kHashBudget, schedule_budget<2>()),
