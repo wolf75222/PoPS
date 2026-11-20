@@ -2,15 +2,22 @@
 #include "native_dso_compiler.hpp"
 
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 
 namespace {
 template <std::size_t Size>
 void write_definitions(std::ostream& output, const pops::test::FixtureCriterionGroup<Size>& group,
-                       std::string_view program = "test-forward-euler-amr") {
+                       std::string_view program = "test-forward-euler-amr",
+                       std::initializer_list<std::string_view> blocks = {}) {
   output << "#define POPS_TEST_EULER_BLOCKS {";
-  for (const auto& field : group.fields)
-    output << '"' << field.block << "\",";
+  if (blocks.size() == 0) {
+    for (const auto& field : group.fields)
+      output << '"' << field.block << "\",";
+  } else {
+    for (const auto block : blocks)
+      output << '"' << block << "\",";
+  }
   output << "}\n#define POPS_TEST_EULER_HASH \"" << program << '/' << group.identity << "\"\n";
 }
 
@@ -51,6 +58,11 @@ int main(int argc, char** argv) {
       } else if (variant == "empty_cadence") {
         write_definitions(source, pops::test::empty_cadence, "test-empty-amr-cadence");
         source << "#define POPS_TEST_EMPTY_AMR_CADENCE\n";
+      } else if (variant == "mixed_cfl") {
+        write_definitions(source, pops::test::mixed_cfl, "test-mixed-cfl-amr",
+                          {"tracer", "storage"});
+        source << "#define POPS_TEST_MIXED_CFL\n"
+               << "#define POPS_TEST_EULER_FINE_CLOCK \"clock.level.1\"\n";
       } else if (variant == "mixed_norm" || variant == "mixed_norm_wrong") {
         write_definitions(
             source, variant == "mixed_norm" ? pops::test::mixed_norm : pops::test::mixed_norm_wrong,
