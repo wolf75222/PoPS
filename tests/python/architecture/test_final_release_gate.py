@@ -134,15 +134,15 @@ def _write_final_source_tree(root: Path) -> None:
             encoding="utf-8",
         )
     test_sources = {}
-    for ledger in (
-        contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS,
-        contract.FINAL_EXAMPLE_QUALIFICATION_TESTS,
+    for example, nodeid in (
+        *zip(contract.FINAL_EXAMPLES, contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS, strict=True),
+        *zip(contract.FINAL_EXAMPLES, contract.FINAL_EXAMPLE_QUALIFICATION_TESTS, strict=True),
+        *contract.FINAL_EXAMPLE_ADDITIONAL_ACCEPTANCE_TESTS,
     ):
-        for example, nodeid in zip(contract.FINAL_EXAMPLES, ledger, strict=True):
-            relative, function_name = nodeid.split("::", 1)
-            entry = test_sources.setdefault(relative, [example.name, []])
-            assert entry[0] == example.name
-            entry[1].append(function_name)
+        relative, function_name = nodeid.split("::", 1)
+        entry = test_sources.setdefault(relative, [example.name, []])
+        assert entry[0] == example.name
+        entry[1].append(function_name)
     for relative, (example_name, function_names) in test_sources.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,21 +273,25 @@ def test_final_release_source_contract_refuses_escaping_or_mismatched_artifact_r
     )
 
 
-def test_final_release_source_contract_requires_exact_mandatory_example_tests(tmp_path):
+@pytest.mark.parametrize(
+    "nodeid",
+    (
+        contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS[-1],
+        contract.FINAL_EXAMPLE_ADDITIONAL_ACCEPTANCE_TESTS[0][1],
+    ),
+)
+def test_final_release_source_contract_requires_exact_mandatory_example_tests(tmp_path, nodeid):
     _write_final_source_tree(tmp_path)
-    nodeid = contract.FINAL_EXAMPLE_ACCEPTANCE_TESTS[-1]
-    relative, _function_name = nodeid.split("::", 1)
-    (tmp_path / relative).write_text(
-        "EXAMPLE = 'wrong.py'\n"
-        "@pytest.mark.skip(reason='optional')\n"
-        "def renamed_test():\n"
-        "    pass\n",
-        encoding="utf-8",
+    relative, function_name = nodeid.split("::", 1)
+    file = tmp_path / relative
+    source = file.read_text(encoding="utf-8").replace(
+        "def %s(" % function_name, "def renamed_test(",
     )
+    file.write_text(source, encoding="utf-8")
 
     errors = contract.source_contract_errors(tmp_path)
 
-    assert any("must resolve exactly once" in error for error in errors)
+    assert any(nodeid in error and "must resolve exactly once" in error for error in errors)
 
 
 def test_final_release_source_contract_refuses_duplicate_required_nodeids(

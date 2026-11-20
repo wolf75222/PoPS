@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
-# The rate operations that read the stored state and return its rate.
-TOTAL_RATE_OPS = frozenset({"rhs", "diffusive_rhs"})
-# The scratch subslot of the decoded density; the operations above use 0 to 3 and the named
+from pops._ir.effects import cell_total_density_rate
+
+# The scratch subslot of the decoded density; the served rates use 0 to 3 and the named
 # sources the following ones, so the decode takes a slot of the state scratch kind instead.
 _DECODE_SUBSLOT = 7
 
@@ -39,7 +39,7 @@ def decode_total_rate_input(
     v: Any, stored: str, lines: list[str], *, model: Any, block: Any,
 ) -> str | None:
     """Emit the decoded stage density for a total, or return None for an unchanged input."""
-    if v.op not in TOTAL_RATE_OPS or v.attrs.get("path_conservative", False):
+    if not cell_total_density_rate(v.op) or v.attrs.get("path_conservative", False):
         return None
     if not block_holds_totals(model, v.block):
         return None
@@ -60,7 +60,7 @@ def encode_total_rate_output(rate: str, lines: list[str]) -> None:
 
 def begin_total_rate(v: Any, var: dict, lines: list, *, model: Any, block: Any) -> Any:
     """Temporarily substitute the decoded stage density during ordinary rate emission."""
-    if v.op not in TOTAL_RATE_OPS:
+    if not cell_total_density_rate(v.op):
         return None
     state = v.inputs[0]
     stored = var[state.id]
@@ -81,6 +81,6 @@ def end_total_rate(v: Any, var: dict, lines: list, token: Any) -> None:
 
 
 __all__ = [
-    "TOTAL_RATE_OPS", "begin_total_rate", "block_holds_totals", "decode_total_rate_input",
+    "begin_total_rate", "block_holds_totals", "decode_total_rate_input",
     "encode_total_rate_output", "end_total_rate",
 ]

@@ -74,7 +74,7 @@ def test_duration_catalog_exactly_matches_manifest_selection_universe():
 
 
 def test_full_manifest_pack_stays_within_python_shard_test_budget():
-    """Ordinary jobs stay bounded; only indivisible long files reserve more time."""
+    """Every full or partial selection stays within the same planning margin."""
     selector = _load("ci_select_tests")
     timing = _load("ci_pytest_timings")
     universe = sorted({path for suite in selector.manifest_python_suites(selector.load_manifest())
@@ -94,20 +94,21 @@ def test_full_manifest_pack_stays_within_python_shard_test_budget():
             minutes = timing.selected_budget(shard, durations)
             assert minutes + 5 <= timing.job_budget(index), (index, minutes, shard)
             load = sum(durations[path] for path in shard)
-            if load > timing.ORDINARY_BUDGET_SECONDS:
-                assert index < 6 and len(shard) == 1
-            else:
-                assert minutes == 45
-            # Packing keeps a ten percent margin; only one indivisible file may exceed it.
-            if len(shard) > 1:
-                assert load <= timing.ORDINARY_MARGIN_SECONDS, (index, load, shard)
+            assert minutes == 45
+            assert load <= timing.ORDINARY_MARGIN_SECONDS, (index, load, shard)
 
 
-def test_python_watchdog_rejects_oversubscribed_multi_file_shards():
+@pytest.mark.parametrize("weights", [{"only": 1891.}, {"a": 1000., "b": 891.}])
+def test_python_watchdog_rejects_any_shard_above_the_planning_limit(weights):
     timing = _load("ci_pytest_timings")
-    with pytest.raises(ValueError, match="indivisible"):
-        timing.selected_budget(["a", "b"], {"a": 1500., "b": 1500.})
-    assert timing.selected_budget(["long"], {"long": 5400.}) == 100
+    with pytest.raises(ValueError, match="1891 s of selected work; limit is 1890 s"):
+        timing.selected_budget(list(weights), weights)
+
+
+@pytest.mark.parametrize("weights", [{"only": 1890.}, {"a": 1000., "b": 890.}])
+def test_python_watchdog_accepts_shards_exactly_at_the_planning_limit(weights):
+    timing = _load("ci_pytest_timings")
+    assert timing.selected_budget(list(weights), weights) == 45
 
 
 def test_python_watchdog_reports_every_missing_duration_without_fallback():
@@ -330,19 +331,22 @@ def test_explicit_case_inventory_is_expanded_and_covered_exactly_once():
     units = _load("ci_python_test_units")
     contract = units.load_contract()
     expected_counts = {
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 3,
         "tests/python/integration/runtime/test_api_v02_methods_T01_T12.py": 38,
         "tests/python/integration/runtime/test_public_evolved_original_stage.py": 8,
         "tests/python/integration/runtime/test_amr_implicit_diffusion_convergence.py": 8,
         "tests/python/integration/runtime/test_api_v02_coupled_methods_native.py": 7,
         "tests/python/integration/runtime/test_api_v02_gyrokinetic_nd.py": 2,
+        "tests/python/integration/runtime/test_public_diffusion_matrix.py": 9,
     }
     assert {file: len(nodes) for file, nodes in contract.items()} == expected_counts
+    expected_total = sum(expected_counts.values())
     expanded = units.expand(list(expected_counts), contract)
-    assert len(expanded) == len(set(expanded)) == 63
+    assert len(expanded) == len(set(expanded)) == expected_total
     costs = units.weights({}, contract)
     shards = binpack.assign_shards(expanded, 9, costs)
     binpack.verify_partition(expanded, shards, excluded=())
-    assert sum(len(group) for group in shards) == 63
+    assert sum(len(group) for group in shards) == expected_total
     for group in shards:
         owners = {units.owner(node) for node in group}
         collected = [node for file in owners for node in contract[file]]

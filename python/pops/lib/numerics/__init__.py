@@ -14,6 +14,9 @@ formula becomes the generated C++ (G2).
   with the surface (2.6.9, N3 lot 3). The b6 ``Reconstruct`` builder is not ported (D4): a case
   writes ``Reconstruct`` from ``pops.surface.discrete``. The b6 bodies of ``muscl``, its limiters
   and ``weno5`` are the parity oracles of ``examples/api_v02/b6_reconstructions.py``.
+* :mod:`.cell_rates` -- ``pointwise()``, the scheme of a source, ``CellRate`` of its law at the cell
+  value (2.6.9, N15 FaceFlux/CellRate lot FC-1), written with the surface; b6 realizes it by the
+  named source of the key, selected from its rate and evaluated at each cell.
 * :mod:`.boundaries` -- ``ghosts()``, the boundary policy of 2.6.9, written with the surface
   (N15 lot B): the ghost 2g - u_k of a value and u_1 of no data, whose ghost cells the model
   package generates from the body (G04-a). The package re-exports it, so that a case writes
@@ -24,12 +27,13 @@ formula becomes the generated C++ (G2).
   the pilot's spelling (N3 lot 1, O2).
 """
 from .boundaries import ghosts
+from .cell_rates import pointwise
 from .fluxes import hll, rusanov, two_point, upwind
 from .limiters import mc, minmod, muscl, superbee, vanleer
 from .reconstructions import weno5
 
 __all__ = [
-    "ghosts", "hll", "rusanov", "two_point", "upwind",
+    "ghosts", "hll", "pointwise", "rusanov", "two_point", "upwind",
     "muscl", "weno5", "mc", "minmod", "superbee", "vanleer",
 ]
 

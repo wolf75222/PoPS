@@ -45,6 +45,7 @@ struct SystemDomain {
   distribution_type dm;
   Index<Dim> local_rank;
   std::array<bool, Dim> periodicity;
+  BoundaryTopology<Dim> topology;
   explicit SystemDomain(const SystemConfig<Dim>& config)
       : cfg(validated_config_(config)),
         dom(cfg.index_domain()),
@@ -54,7 +55,9 @@ struct SystemDomain {
         load_balance(prepare_authority_(cfg)),
         dm(prepare_distribution_(*load_balance, ba, rank_space)),
         local_rank(rank_space.coordinate(static_cast<std::size_t>(my_rank()))),
-        periodicity(cfg.periodicity) {}
+        periodicity(cfg.periodicity),
+        topology(BoundaryTopology<Dim>::uniform_identifications(periodicity, cfg.identifications)) {
+  }
 
   struct LayoutReport {
     Extent<Dim> shape{};

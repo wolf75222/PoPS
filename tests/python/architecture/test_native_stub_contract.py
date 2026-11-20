@@ -36,6 +36,7 @@ SYSTEM_CONFIG_FIELDS = {
     "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
     "upper": "tuple[float, ...]",
     "periodicity": "tuple[bool, ...]",
+    "identifications": "tuple[tuple[int, ...], ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
     "runtime_parameter_byte_capacity": "int | None",

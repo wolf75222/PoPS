@@ -1447,6 +1447,10 @@ void bind_system_stepping(py::class_<System>& cls) {
               result["typed_failure_payload"] = py::bytes(report.typed_failure_payload);
             }
             result["face_frequency"] = report.face_frequency;
+            result["last_accepted_begin"] = py::cast(report.last_accepted_begin);
+            result["segment_proposal"] = report.segment.proposal;
+            result["segment_time"] = report.segment.time;
+            result["segment_macro_step"] = report.segment.macro_step;
             result["segment_origin"] = report.segment.origin;
             result["segment_steps"] = report.segment.steps;
             result["outputs"] = samples;
@@ -1458,6 +1462,11 @@ void bind_system_stepping(py::class_<System>& cls) {
           py::arg("rule") = std::optional<std::pair<double, double>>{},
           py::arg("cells") = std::optional<std::pair<double, std::string>>{})
       .def("_advance_max_attempts", &System::advance_max_attempts)
+      .def("_restore_advance_segment",
+           [](System& system, double proposal, double origin, std::int64_t steps, double time,
+              std::int64_t macro_step) {
+             system.restore_advance_segment({proposal, origin, steps, time, macro_step});
+           })
       // The step bound of a cells rule at the accepted state (N8 « dt= as a function of cell »):
       // the proposal of pops.run's CellStepBound strategy. Collective.
       .def("_step_bound", &System::step_bound, py::arg("bound_identity") = "")

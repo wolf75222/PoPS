@@ -57,15 +57,8 @@ def test_api_v02_registered_files_have_existing_suites_and_estimated_weights():
         if path in partitions:
             nodes = partitions[path]["nodes"]
             assert sum(node["seconds"] for node in nodes) == row["estimated_seconds"]
-            long_cases = {
-                RUNTIME + "test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[False]": 2550,
-                RUNTIME + "test_api_v02_gyrokinetic_nd.py::test_native_full_f_3x2v[True]": 2550,
-            }
             for node in nodes:
-                if node["nodeid"] in long_cases:
-                    assert node["seconds"] == long_cases[node["nodeid"]]
-                else:
-                    assert 0 < node["seconds"] <= 1200
+                assert 0 < node["seconds"] <= 1200
         else:
             assert row["estimated_seconds"] <= 2100  # unchanged ordinary35min test budget
         if row.get("execution_lane") == "mpi_only":

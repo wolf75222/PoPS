@@ -21,7 +21,7 @@ import ci_python_test_units  # noqa: E402
 ORDINARY_BUDGET_SECONDS = 35 * 60
 # The complete 2026-10-16 catalog retains the 35-minute ordinary budget.
 # 148 bins retain35min for complete inventories and measured CI47b2 costs (N3, N8, N9, N15, N17).
-# Every shard of more than one file stays at least ten percent under that budget
+# Every shard stays at least ten percent under that budget
 # (ORDINARY_MARGIN_SECONDS, pinned by test_ci_shard_binpack.py); a lot that crosses it raises
 # SHARD_TOTAL. 165 bins since the shard 128 recalibration of batch 43318819535
 # (b03_20261113_shard128_continuum_hall_weights) merged with #797 and #798; 167 with the native
@@ -33,11 +33,11 @@ ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # With the N16 representation modules, 172 keeps the maximum at 1886 s.
 # The two-point mapped-face module brings the maximum to 1886 s at 173 bins.
 # Budgeting the cold WENO5 parity runs needs 174 bins, with a maximum of 1882 s.
-SHARD_TOTAL = 175
+SHARD_TOTAL = 176
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
-    """Leave ten minutes beyond the model; only indivisible long files get more."""
+    """Use the existing watchdog for every shard inside the planning margin."""
     missing = sorted(set(paths) - durations.keys())
     if missing:
         raise ValueError("Python duration catalog is missing selected files: " + ", ".join(missing))
@@ -45,15 +45,15 @@ def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
     if any(not math.isfinite(value) or value <= 0 for value in weights):
         raise ValueError("selected Python duration weights must be finite and positive")
     load = sum(weights)
-    if load > ORDINARY_BUDGET_SECONDS:
-        if len(paths) != 1:
-            raise ValueError("Python shard exceeds its ordinary budget without one indivisible file")
-        return math.ceil(load / 60) + 10
+    if load > ORDINARY_MARGIN_SECONDS:
+        raise ValueError(
+            f"Python shard has {load:g} s of selected work; limit is {ORDINARY_MARGIN_SECONDS} s"
+        )
     return 45
 
 
 def job_budget(shard: int) -> int:
-    """LPT places the six longest indivisible test units first, even for subsets."""
+    """Return the existing runner deadline for this matrix index."""
     if not 0 <= shard < SHARD_TOTAL:
         raise ValueError("Python shard index is outside the configured matrix")
     return {0: 110, 1: 80, 2: 80, 3: 80, 4: 60, 5: 60}.get(shard, 50)

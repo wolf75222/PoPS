@@ -37,6 +37,7 @@ class CompiledPlanBlock:
     declares_auxiliary_providers: bool = False
     resolved_operations: Any = None
     moving_volume_component: int | None = None
+    moving_incidence: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -59,6 +60,9 @@ class CompiledPlanBlock:
         if self.moving_volume_component is not None and (
                 type(self.moving_volume_component) is not int or self.moving_volume_component < 0):
             raise TypeError("CompiledPlanBlock moving volume must identify a component ordinal")
+        if type(self.moving_incidence) is not bool or (
+                self.moving_incidence and self.moving_volume_component is None):
+            raise TypeError("moving incidence requires an exact moving geometry owner")
         if not isinstance(self.instance_owner_qid, str) or not self.instance_owner_qid:
             raise TypeError(
                 "CompiledPlanBlock instance_owner_qid must be a canonical Case-block instance owner"
@@ -153,7 +157,9 @@ class CompiledPlanRecord:
             raise TypeError("CompiledPlanRecord requires an exact ResolvedSimulationPlan")
         plan.verify()
         from pops.mesh.moving_configuration import MEMBER_COMPONENTS, members_of
+        from ._moving_members_consumers import moving_incidence_states
 
+        incidences = moving_incidence_states(plan.time)
         return cls(
             plan_identity=Identity.from_data(plan.plan_identity.to_data()),
             snapshot=plan.snapshot,
@@ -187,7 +193,8 @@ class CompiledPlanRecord:
                     declares_auxiliary_providers=block.declares_auxiliary_providers,
                     resolved_operations=block.resolved_operations,
                     moving_volume_component=(None if members_of(block.model) is None
-                                             else MEMBER_COMPONENTS.index("volume")))
+                                             else MEMBER_COMPONENTS.index("volume")),
+                    moving_incidence=not incidences.isdisjoint(block.state_identities))
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
@@ -371,6 +378,7 @@ class CompiledPlanRecord:
                     "state_identities": block.state_identities,
                     **({"moving_volume_component": block.moving_volume_component}
                        if block.moving_volume_component is not None else {}),
+                    **({"moving_incidence": True} if block.moving_incidence else {}),
                     "instance_owner_qid": block.instance_owner_qid,
                     "instance_owner": block.instance_owner,
                     "model_owner": block.model_owner,

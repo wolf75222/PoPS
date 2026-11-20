@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -201,6 +201,7 @@ class _Runtime(RuntimeInstance):
         self, native, *, fail_effect=False, fail_finalize=False, recoveries=(),
     ):
         self._executor = native
+        self._guard_failure_catalog = MappingProxyType({})
         self._consumer_cursors = ConsumerCursorSet()
         self._consumer_cursor_authority = ConsumerCursorAuthority(self._consumer_cursors)
         self._consumer_reports = ()
