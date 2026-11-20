@@ -202,14 +202,18 @@ def _retain_convex_stage_values(terms):
     for state in sorted(missing.values(), key=lambda node: node.id, reverse=True):
         if state.op != "linear_combine":
             continue
+        # A local source spends no spatial budget, so a source of negative weight (``- S``, N15
+        # FaceFlux/CellRate lot FC-1) neither lowers the budget of its stage nor bars it.
         beta = sum(weight.get(1, Fraction()) for node, weight in table.values()
-                   if _is_rate(node) and _rate_state(node).id == state.id)
+                   if _is_rate(node) and _rate_state(node).id == state.id
+                   and not (_is_local_source(node) and weight.get(1, Fraction()) < 0))
         if beta <= 0:
             continue
         expansion = _affine_terms(state)
         if (not expansion or
                 any(set(weight) != ({1} if _is_rate(node) else {0}) or
-                    next(iter(weight.values())) <= 0 or
+                    (next(iter(weight.values())) <= 0
+                     and not (_is_local_source(node) and next(iter(weight.values())) < 0)) or
                     (not _is_rate(node) and node.vtype != "state")
                     for node, weight in expansion)):
             continue
@@ -265,7 +269,11 @@ def partition_stability_groups(value, *, include_transport=False):
         raise ValueError(_DIAGNOSTIC)
     if sum(weight[0] for _, weight in states) != 1:
         raise ValueError(_DIAGNOSTIC)
-    if any(set(weight) != {1} or weight[1] < 0 for _, weight in rates):
+    # A local source keeps its own obligation and spends no spatial budget (below), so its sign
+    # does not enter the certificate: ``- S`` of a named source is a source of weight -1 (N15
+    # FaceFlux/CellRate lot FC-1).
+    if any(set(weight) != {1} or (weight[1] < 0 and not _is_local_source(node))
+           for node, weight in rates):
         raise ValueError(_DIAGNOSTIC)
     budgets = {node.id: weight[0] for node, weight in states}
     groups = {}

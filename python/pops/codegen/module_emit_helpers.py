@@ -25,8 +25,6 @@ from pops.codegen.cpp_writer import (
     _count_cons_denoms,
     _recip_rewrite,
 )
-from pops._ir.visitors import _dependencies
-
 # ---------------------------------------------------------------------------
 # roles_for -- lazy delegation; avoids importing physics at module import time.
 # ---------------------------------------------------------------------------
@@ -139,24 +137,38 @@ def _codegen_exprs(model: Any, exprs: Any, cse: Any, real: str = "pops::Real", i
     return [], [_cpp_expand(e, {}, None) for e in exprs]
 
 
-def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set:
-    """Names of the primitives transitively referenced by @p exprs (and the @p seed names).
-    Closure over prim_defs: a live primitive pulls in its own primitive dependencies.
-    Used to emit in a method only the primitives actually used (dead-code elimination):
-    the live expressions stay identical, so the values are bit-identical."""
+def _live_prims(model: Any, exprs: Any, seed: Any = ()) -> set[str]:
+    """Close the typed primitive reads and explicit seeds over the model's recipes."""
+    from pops._ir.expr import Expr, Var
     from pops._ir.primitive_expansion import expand_evaluation_boundaries
+    from pops._ir.visitors import _children
+
     prim = model.prim_defs
-    exprs = expand_evaluation_boundaries(exprs, prim)
-    live = set()
+
+    def primitive_reads(roots: Any) -> set[str]:
+        expanded = expand_evaluation_boundaries(roots, prim)
+        pending = [expanded] if isinstance(expanded, Expr) else list(expanded)
+        seen: set[int] = set()
+        reads: set[str] = set()
+        while pending:
+            node = pending.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if isinstance(node, Var) and node.kind == "prim" and node.name in prim:
+                reads.add(node.name)
+            pending.extend(_children(node))
+        return reads
+
+    live: set[str] = set()
     stack = [n for n in seed if n in prim]
-    stack.extend(name for name in _dependencies(exprs) if name in prim)
+    stack.extend(primitive_reads(exprs))
     while stack:
-        nm = stack.pop()
-        if nm in live:
+        name = stack.pop()
+        if name in live:
             continue
-        live.add(nm)
-        recipe = expand_evaluation_boundaries(prim[nm], prim)
-        stack.extend(name for name in _dependencies(recipe) if name in prim)
+        live.add(name)
+        stack.extend(primitive_reads(prim[name]))
     return live
 
 

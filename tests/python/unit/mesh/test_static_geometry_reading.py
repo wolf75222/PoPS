@@ -31,10 +31,140 @@ from pops.numerics import (
 from pops.numerics.stencil_flux import StencilFlux
 from pops.physics.diffusion import DiffusiveBoundary
 from pops.time import AdaptiveCFL, FixedDt
+from pops.time._program.traversal import all_ops
 
 from examples.api_v02.models_static_geometry import (
     _initial, _ssprk2, build_annulus_diffusion, build_annulus_free_stream, build_graded_diffusion,
     build_graded_slope)
+
+
+def _source_consumer(route, reading):
+    from pops.boundary import TransportBoundarySet
+    from pops.boundary.transport import Outflow
+    from pops.fields.aux import AnalyticAux
+    from pops.frames import Cartesian1D
+    from pops.initial import InitialCondition
+    from pops.lib.initial import BindArray
+    from pops.params import RuntimeParam
+    from pops.projection import ConservativeCellAverage
+
+    from examples.api_v02.models_G03_totals import _finite_volume
+    from examples.api_v02.models_static_geometry import GRADED_CELLS, graded_map
+
+    frame = CartesianDomain("line", (0.0,), (1.0,)).frame(Cartesian1D())
+    model = pops.Model("transport", frame=frame)
+    state = model.state("state", components=("u",))
+    (u,) = state
+    flux = model.flux("flux", state=state, frame=frame, components={frame.x: (u,)},
+                      waves={frame.x: (1.0,)})
+    if reading in ("parameter", "primitive_parameter"):
+        coefficient = model.value(model.param(RuntimeParam("coefficient", default=2.0)))
+    elif reading in ("auxiliary", "primitive_auxiliary"):
+        # The auxiliary and the state component deliberately have the same spelling.
+        coefficient = model.auxiliary("u", frame=frame.canonical_id)
+    else:
+        coefficient = 2.0
+    if reading in ("primitive_alias_state", "primitive_alias_parameter"):
+        recipe = (model.value(model.param(RuntimeParam("hidden", default=7.0)))
+                  if reading == "primitive_alias_parameter" else 3.0)
+        # The current generated kernel also materializes live primitives discovered after
+        # lowering the qualified state component to its native name.
+        model.primitive("u", recipe * u)
+    density = coefficient * u
+    if reading in ("primitive", "primitive_auxiliary", "primitive_parameter"):
+        inner = model.primitive("inner_density", density)
+        density = model.primitive("local_density", inner + u)
+    source = model.source("decay", on=state, value=(-density,))
+    rate = model.rate("balance", equation=pm.ddt(state) == -pm.div(flux) + source)
+    if reading in ("auxiliary", "primitive_auxiliary"):
+        module = model.module
+        (x,) = coordinates(frame)
+        target = module.aux_handle(module.aux()["u"])
+        module.aux_provider(AnalyticAux(target, 2 + x, frame=frame))
+    numerics = DiscretizationPlan()
+    transport = _finite_volume(flux, state)
+    if route == "selection":
+        numerics.rates.add(rate.select(flux), transport)
+        numerics.rates.add(rate.select(source), StateStorage())
+    else:
+        numerics.rates.add(rate, transport)
+    case = pops.Case("source_on_static_geometry")
+    block = case.block("line", model)
+    numerics.boundaries.add(TransportBoundarySet({
+        face: Outflow(state=block[state]) for face in frame.boundaries.all
+    }))
+    case.numerics(numerics, block=block)
+    case.initials.add(InitialCondition(state=block[state], value=BindArray(),
+                                       projection=ConservativeCellAverage()))
+    program = pops.Program("local_source")
+    t = program.state(block[state])
+    candidate = t.n
+    if route == "rhs":
+        candidate += 1e-4 * rate(t.n)
+    elif route == "source":
+        operator = model.module.operator_handle(source.reg_name)
+        candidate += 1e-4 * program.source(operator, state=t.n)
+    # The selection-only case has no source operation to let the earlier checks reject it.
+    program.commit(t.next, program.value("candidate", candidate, at=t.next.point))
+    program.step_strategy(FixedDt(1e-4))
+    case.program(program)
+    base = Uniform(CartesianGrid(frame=frame, cells=(GRADED_CELLS,)))
+    return case, MovingControlVolumes(base, evolution=graded_map(frame))
+
+
+@pytest.mark.parametrize("route,reading", [
+    ("rhs", "state"), ("source", "state"), ("selection", "state"), ("source", "primitive"),
+    ("source", "primitive_alias_state"), ("source", "primitive_alias_parameter"),
+])
+def test_a_source_of_its_conservative_state_resolves_on_static_geometry(route, reading):
+    case, layout = _source_consumer(route, reading)
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    if route == "selection":
+        assert any(type(row.method) is StateStorage for row in resolved.blocks[0].numerics.rates)
+    else:
+        assert any(value.op == route for value in all_ops(resolved.time))
+
+
+@pytest.mark.parametrize("route,reading", [
+    ("rhs", "parameter"), ("source", "parameter"), ("selection", "parameter"),
+    ("rhs", "auxiliary"), ("source", "auxiliary"), ("source", "primitive_auxiliary"),
+    ("source", "primitive_parameter"),
+])
+def test_a_source_reading_a_parameter_or_auxiliary_is_refused_on_static_geometry(route, reading):
+    case, layout = _source_consumer(route, reading)
+    with pytest.raises(StaticGeometryConsumerError, match="conservative state and numbers") as error:
+        pops.resolve(pops.validate(case), layout=layout)
+    if route == "selection":
+        assert error.value.code == "static_geometry_spatial_unavailable"
+        assert error.value.evidence == {"method": "StateStorage"}
+    else:
+        assert error.value.code == "static_geometry_consumer_unavailable"
+        assert error.value.evidence == {"operation": route}
+
+
+def test_a_conservative_read_does_not_emit_an_unread_primitive_of_the_same_name():
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+
+    case, layout = _source_consumer("source", "primitive_alias_parameter")
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    model_graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    cpp = emit_cpp_program(resolved.time, model_graph=model_graph)
+    assert "params.get(" not in cpp
+
+
+def test_the_generated_source_keeps_both_live_primitive_recipes():
+    from pops.codegen.cpp_symbols import variable_identifier
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.codegen.program_models import ProgramModelGraph
+
+    case, layout = _source_consumer("source", "primitive")
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    model_graph = ProgramModelGraph.from_resolved_blocks(resolved.blocks)
+    cpp = emit_cpp_program(resolved.time, model_graph=model_graph)
+    inner = "const pops::Real " + variable_identifier("inner_density", "prim")
+    outer = "const pops::Real " + variable_identifier("local_density", "prim")
+    assert cpp.index(inner) < cpp.index(outer)
 
 
 def _refusal(layout, owner="pops-static-geometry"):
