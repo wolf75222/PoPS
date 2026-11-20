@@ -7,6 +7,7 @@
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
 #include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/parallel/execution_lane.hpp>
+#include <pops/runtime/program/boundary_ghost_evaluation.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/program_diagnostics_checkpoint.hpp>
 #include <pops/parallel/collective_exception.hpp>
@@ -567,7 +568,8 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
                   const std::vector<MultiFab<Dim>*>& residuals, const std::vector<int>& flux_only,
                   const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
                   const typename SystemInterfaceProvider<Dim>::RetainedFrequencies&
-                      retained_frequencies) {
+                      retained_frequencies,
+                  const runtime::program::BoundaryGhostEvaluation* child) {
     std::string group_contract;
     runtime::program::collective_boundary_provider_phase(
         *lane, "System shared-interface core group preflight", [&] {
@@ -596,6 +598,8 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
               .text(point.rate_identity)
               .text(point.application_identity)
               .scalar(static_cast<std::uint64_t>(states.size()));
+          if (child != nullptr)
+            contract.text(child->clock).scalar(child->tick);
           for (std::size_t block = 0; block < states.size(); ++block) {
             const int mode = flux_only.empty() ? 0 : flux_only[block];
             if (mode != 0 && mode != 1)
@@ -669,7 +673,11 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
             materialize_detached_valid_field(state, scratch.detached_state);
             // Physical closures retain all unowned faces; the generated omission mask removes
             // only the exact shared-interface faces subsequently filled once by the scheduler.
-            if (selected.boundary) {
+            if (child != nullptr) {
+              selected.boundary_flux_at_child_point_prepared(point, scratch.detached_state,
+                                                             candidate, *selected.boundary, *lane,
+                                                             transport, *child);
+            } else if (selected.boundary) {
               auto& physical = only_flux ? selected.boundary_flux_full_at_point_prepared
                                          : selected.boundary_full_at_point_prepared;
               physical(point, scratch.detached_state, candidate, *selected.boundary, *lane,
@@ -694,7 +702,7 @@ typename SystemInterfaceProvider<Dim>::CoreEvaluator System<Dim>::prepare_interf
           *retained_evaluator = core;
         evaluator = [core = std::move(core)](const auto& point, const auto& states,
                                              const auto& residuals, const auto& flux_only) {
-          core(point, states, residuals, flux_only, {}, {});
+          core(point, states, residuals, flux_only, {}, {}, nullptr);
         };
       });
   return evaluator;
@@ -767,6 +775,36 @@ void System<Dim>::block_rhs_group(
     const typename SystemInterfaceProvider<Dim>::RetainedFaces& requested_faces,
     const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& requested_frequencies,
     nd::FaceFrequencyRule frequency_rule) {
+  block_rhs_group_(point, requested_blocks, requested_states, requested_residuals,
+                   requested_flux_only, requested_faces, requested_frequencies, frequency_rule,
+                   nullptr);
+}
+
+template <int Dim>
+void System<Dim>::block_rhs_group(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::vector<int>& requested_blocks, const std::vector<MultiFab<Dim>*>& requested_states,
+    const std::vector<MultiFab<Dim>*>& requested_residuals,
+    const std::vector<int>& requested_flux_only,
+    const typename SystemInterfaceProvider<Dim>::RetainedFaces& requested_faces,
+    const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& requested_frequencies,
+    nd::FaceFrequencyRule frequency_rule,
+    const runtime::program::PreparedChildBoundaryEvaluation& child) {
+  block_rhs_group_(point, requested_blocks, requested_states, requested_residuals,
+                   requested_flux_only, requested_faces, requested_frequencies, frequency_rule,
+                   &child);
+}
+
+template <int Dim>
+void System<Dim>::block_rhs_group_(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::vector<int>& requested_blocks, const std::vector<MultiFab<Dim>*>& requested_states,
+    const std::vector<MultiFab<Dim>*>& requested_residuals,
+    const std::vector<int>& requested_flux_only,
+    const typename SystemInterfaceProvider<Dim>::RetainedFaces& requested_faces,
+    const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& requested_frequencies,
+    nd::FaceFrequencyRule frequency_rule,
+    const runtime::program::PreparedChildBoundaryEvaluation* child) {
   using Faces = std::vector<nd::FaceField<Dim>>;
   const bool capture = std::any_of(requested_faces.begin(), requested_faces.end(),
                                    [](const auto* output) { return output != nullptr; });
@@ -778,6 +816,7 @@ void System<Dim>::block_rhs_group(
   // Observed frequencies stay detached until the complete group has published its residuals.
   std::vector<Real> frequencies;
   typename SystemInterfaceProvider<Dim>::RetainedFrequencies frequency_outputs;
+  const runtime::program::BoundaryGhostEvaluation* ghost_evaluation = nullptr;
   const int group_route = p_->blocks_.has_interface_provider()           ? 1
                           : p_->prepared_boundary_group_core_            ? 2
                           : !p_->boundary_registry_.boundaries().empty() ? 3
@@ -789,6 +828,17 @@ void System<Dim>::block_rhs_group(
         (!requested_faces.empty() && requested_faces.size() != requested_blocks.size()) ||
         (!requested_frequencies.empty() && requested_frequencies.size() != requested_blocks.size()))
       throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
+    if (child != nullptr) {
+      ghost_evaluation = &child->require();
+      const int block = requested_blocks.front();
+      if (group_route != 2 || (!observe && !capture) || requested_blocks.size() != 1 ||
+          requested_flux_only.front() != 1 || !has_prepared_group_face_observation(block) ||
+          !p_->sp[static_cast<std::size_t>(block)].boundary_flux_at_child_point_prepared)
+        throw std::invalid_argument("physical child ghost requires its prepared Uniform flux");
+      if (ghost_evaluation->clock.empty() || ghost_evaluation->clock == point.clock ||
+          ghost_evaluation->tick < 0)
+        throw std::invalid_argument("physical child ghost requires its exact child clock point");
+    }
     if (observe &&
         ((group_route != 0 && group_route != 2) || !p_->prepared_boundary_group_faces_ ||
          (p_->embedded_boundary_ && p_->embedded_boundary_->mode() !=
@@ -842,14 +892,15 @@ void System<Dim>::block_rhs_group(
     // Share the existing route agreement; optional observations add no collective round.
     const long authority =
         4L * group_route + (capture ? 2L : 0L) + (observe ? 1L : 0L) +
-        (observe && frequency_rule == nd::FaceFrequencyRule::largest_axis ? 16L : 0L);
+        (observe && frequency_rule == nd::FaceFrequencyRule::largest_axis ? 16L : 0L) +
+        (child != nullptr ? 32L : 0L);
     const auto minimum_authority = all_reduce_min(authority, lane);
     const auto maximum_authority = all_reduce_max(authority, lane);
     if (minimum_authority != maximum_authority)
       throw std::runtime_error(
           "System RHS group execution authority or face retention differs across MPI ranks");
   }
-  if (group_route != 0 || capture || observe)
+  if (group_route != 0 || capture || observe || child != nullptr)
     runtime::program::collective_boundary_provider_phase(
         prepared_boundary_execution_lane(), "System shared-interface request admission",
         prepare_group);
@@ -904,7 +955,7 @@ void System<Dim>::block_rhs_group(
     // The complete original group executes once. Faces are copied while its exact prepared
     // scratch is locked; both residuals and observations remain detached until all blocks pass.
     p_->prepared_boundary_group_faces_(point, states, candidate_outputs, flux_only, face_outputs,
-                                       frequency_outputs);
+                                       frequency_outputs, ghost_evaluation);
     std::exception_ptr publication_error;
     try {
       for (std::size_t request = 0; request < requested_blocks.size(); ++request)
@@ -932,7 +983,8 @@ void System<Dim>::block_rhs_group(
   if (observe) {
     // The ordinary prepared core, reading each observed block's incident-face frequency while
     // its scratch, prepared once at bind, is locked: no field is allocated per evaluation.
-    p_->prepared_boundary_group_faces_(point, states, residuals, flux_only, {}, frequency_outputs);
+    p_->prepared_boundary_group_faces_(point, states, residuals, flux_only, {}, frequency_outputs,
+                                       ghost_evaluation);
     publish_frequencies();
     return;
   }
@@ -1865,6 +1917,13 @@ template void System<kNativeDimension>::block_rhs_group(
     const std::vector<MultiFab<kNativeDimension>*>&, const std::vector<int>&,
     const SystemInterfaceProvider<kNativeDimension>::RetainedFaces&,
     const SystemInterfaceProvider<kNativeDimension>::RetainedFrequencies&, nd::FaceFrequencyRule);
+template void System<kNativeDimension>::block_rhs_group(
+    const runtime::multiblock::BoundaryEvaluationPoint&, const std::vector<int>&,
+    const std::vector<MultiFab<kNativeDimension>*>&,
+    const std::vector<MultiFab<kNativeDimension>*>&, const std::vector<int>&,
+    const SystemInterfaceProvider<kNativeDimension>::RetainedFaces&,
+    const SystemInterfaceProvider<kNativeDimension>::RetainedFrequencies&, nd::FaceFrequencyRule,
+    const runtime::program::PreparedChildBoundaryEvaluation&);
 template void System<kNativeDimension>::block_rhs_core_into_at(
     const runtime::multiblock::BoundaryEvaluationPoint&, int, MultiFab<kNativeDimension>&,
     MultiFab<kNativeDimension>&, bool, const System<kNativeDimension>*, int,

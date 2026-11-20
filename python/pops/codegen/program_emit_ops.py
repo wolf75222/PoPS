@@ -1264,6 +1264,12 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 authenticated_user_face(authored_face)
                 user_face_frequency = "user_face_frequency_%d" % v.id
                 lines.append("pops::Real %s=0;" % user_face_frequency)
+            child_scopes = ""
+            if v.id in var.get(("child_ghost_sites",), ()):
+                scopes = var.get(("boundary_child_scopes",))
+                if scopes is None or user_face_frequency is None:
+                    raise ValueError("SourceGhost child application lacks its prepared Uniform flux")
+                child_scopes = ", " + ", ".join(scopes)
             if faces is not None or user_face_frequency:
                 frequency_suffix = (",&" + user_face_frequency) if user_face_frequency else ""
                 if target == "amr_system" and user_face_frequency:
@@ -1273,14 +1279,14 @@ def _emit_op_impl(program: Any, v: Any, base: Any, committed_ids: Any, var: Any,
                 if user_face_frequency:
                     frequency_suffix += user_face_frequency_rule(program)
                 if faces is not None:
-                    lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d, %s%s%s);"
-                                 % (bidx, var[state_in.id], var[v.id], int(v.id), faces,
+                    lines.append("ctx.neg_div_flux_default_with_faces_into(%d, %s, %s, %d%s, %s%s%s);"
+                                 % (bidx, var[state_in.id], var[v.id], int(v.id), child_scopes, faces,
                                     family_suffix + trace_suffix, frequency_suffix))
                 else:
                     # The Program reads only the frequency of the user face: no face carrier.
-                    lines.append("ctx.neg_div_flux_default_with_frequency_into(%d, %s, %s, %d%s%s);"
+                    lines.append("ctx.neg_div_flux_default_with_frequency_into(%d, %s, %s, %d%s%s%s);"
                                  % (bidx, var[state_in.id], var[v.id], int(v.id),
-                                    family_suffix + trace_suffix, frequency_suffix))
+                                    child_scopes, family_suffix + trace_suffix, frequency_suffix))
                 if user_face_frequency:
                     var[("user_face_frequency", v.id)] = user_face_frequency
                     var[("partition_frequency", v.id)] = user_face_frequency

@@ -24,6 +24,7 @@
 #include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
+#include <pops/runtime/program/boundary_ghost_evaluation.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/program/prepared_scalar_boundary_session.hpp>
 #include <pops/runtime/program/prepared_resource_cache.hpp>
@@ -306,7 +307,13 @@ class ProgramContext {
           prior_stage_(owner.stage_time_),
           prior_phase_begin_(owner.logical_phase_begin_),
           prior_phase_span_(owner.logical_phase_span_),
-          prior_physical_time_offset_(owner.logical_physical_time_offset_) {
+          prior_physical_time_offset_(owner.logical_physical_time_offset_),
+          prior_activation_(owner.active_logical_evaluation_),
+          prior_subcycle_frame_(owner.logical_evaluation_subcycle_),
+          subcycle_frame_(owner.clock_schedule_.subcycle_evaluation_frame(iteration, count,
+                                                                          prior_subcycle_frame_)),
+          iteration_(iteration),
+          count_(count) {
       if (count < 1 || iteration < 0 || iteration >= count || !std::isfinite(prior_dt_) ||
           !(prior_dt_ > 0.0))
         throw std::invalid_argument("Program logical evaluation scope is invalid");
@@ -315,13 +322,20 @@ class ProgramContext {
           prior_physical_time_offset_ + static_cast<double>(iteration) * child_dt;
       if (!std::isfinite(child_dt) || !(child_dt > 0.0) || !std::isfinite(child_offset))
         throw std::overflow_error("Program logical evaluation child window is not finite");
+      if (owner.next_logical_evaluation_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("Program logical evaluation activation exhausted");
       const ::pops::amr::Rational child_fraction(iteration, count);
       const ::pops::amr::Rational child_span(1, count);
+      const auto phase_begin = prior_phase_begin_ + prior_phase_span_ * child_fraction;
+      const auto phase_span = prior_phase_span_ * child_span;
       owner_->current_dt_ = child_dt;
       owner_->stage_time_ = ::pops::amr::Rational(0, 1);
-      owner_->logical_phase_begin_ = prior_phase_begin_ + prior_phase_span_ * child_fraction;
-      owner_->logical_phase_span_ = prior_phase_span_ * child_span;
+      owner_->logical_phase_begin_ = phase_begin;
+      owner_->logical_phase_span_ = phase_span;
       owner_->logical_physical_time_offset_ = child_offset;
+      activation_ = ++owner_->next_logical_evaluation_;
+      owner_->active_logical_evaluation_ = activation_;
+      owner_->logical_evaluation_subcycle_ = subcycle_frame_;
       owner_->active_operator_snapshot_.reset();
     }
     LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
@@ -332,7 +346,13 @@ class ProgramContext {
           prior_stage_(other.prior_stage_),
           prior_phase_begin_(other.prior_phase_begin_),
           prior_phase_span_(other.prior_phase_span_),
-          prior_physical_time_offset_(other.prior_physical_time_offset_) {}
+          prior_physical_time_offset_(other.prior_physical_time_offset_),
+          prior_activation_(other.prior_activation_),
+          prior_subcycle_frame_(other.prior_subcycle_frame_),
+          subcycle_frame_(other.subcycle_frame_),
+          activation_(other.activation_),
+          iteration_(other.iteration_),
+          count_(other.count_) {}
     LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
     ~LogicalEvaluationScope() noexcept { restore_(); }
 
@@ -343,14 +363,32 @@ class ProgramContext {
     }
 
    private:
+    friend class ProgramContext;
+
+    BoundaryGhostEvaluation boundary_ghost_evaluation(
+        const ProgramContext& owner, const ClockScheduleState::SubcycleScope& subcycle) const {
+      if (owner_ != &owner || owner.active_logical_evaluation_ != activation_)
+        throw std::invalid_argument("physical ghost evaluation requires its active child scope");
+      if (!subcycle_frame_)
+        throw std::invalid_argument(
+            "physical ghost evaluation requires one logical scope per active subcycle frame");
+      (void)owner.resource_attempt();
+      const auto [clock, tick] =
+          subcycle.active_position(owner.clock_schedule_, subcycle_frame_->activation, iteration_,
+                                   count_, owner.macro_step());
+      return {clock, tick};
+    }
+
     void restore_() noexcept {
-      if (owner_ == nullptr)
+      if (owner_ == nullptr || owner_->active_logical_evaluation_ != activation_)
         return;
       owner_->current_dt_ = prior_dt_;
       owner_->stage_time_ = prior_stage_;
       owner_->logical_phase_begin_ = prior_phase_begin_;
       owner_->logical_phase_span_ = prior_phase_span_;
       owner_->logical_physical_time_offset_ = prior_physical_time_offset_;
+      owner_->active_logical_evaluation_ = prior_activation_;
+      owner_->logical_evaluation_subcycle_ = prior_subcycle_frame_;
       owner_->active_operator_snapshot_.reset();
       owner_ = nullptr;
     }
@@ -361,6 +399,12 @@ class ProgramContext {
     ::pops::amr::Rational prior_phase_begin_{0, 1};
     ::pops::amr::Rational prior_phase_span_{1, 1};
     double prior_physical_time_offset_ = 0.0;
+    std::uint64_t prior_activation_ = 0;
+    std::optional<ClockScheduleState::EvaluationFrame> prior_subcycle_frame_;
+    std::optional<ClockScheduleState::EvaluationFrame> subcycle_frame_;
+    std::uint64_t activation_ = 0;
+    int iteration_ = 0;
+    int count_ = 0;
   };
 
   explicit ProgramContext(runtime_type* system) : system_(require_system_(system)) {}
@@ -428,6 +472,8 @@ class ProgramContext {
     logical_phase_begin_ = ::pops::amr::Rational(0, 1);
     logical_phase_span_ = ::pops::amr::Rational(1, 1);
     logical_physical_time_offset_ = 0.0;
+    active_logical_evaluation_ = 0;
+    logical_evaluation_subcycle_ = ClockScheduleState::EvaluationFrame{};
     active_operator_snapshot_.reset();
     auxiliary_evaluation_sequence_ = 0;
   }
@@ -970,6 +1016,29 @@ class ProgramContext {
       throw std::invalid_argument("face-frequency residual requires its frequency output");
     neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, nullptr,
                                         transport_frequency, frequency_rule);
+  }
+
+  void neg_div_flux_default_with_faces_into(int program_block, field_type& state_value,
+                                            field_type& rhs, int rate_id,
+                                            const ClockScheduleState::SubcycleScope& subcycle,
+                                            const LogicalEvaluationScope& evaluation,
+                                            std::vector<nd::FaceField<Dim>>& faces,
+                                            Real* transport_frequency = nullptr,
+                                            nd::FaceFrequencyRule frequency_rule = {}) const {
+    neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, &faces,
+                                        transport_frequency, frequency_rule, &subcycle,
+                                        &evaluation);
+  }
+
+  void neg_div_flux_default_with_frequency_into(int program_block, field_type& state_value,
+                                                field_type& rhs, int rate_id,
+                                                const ClockScheduleState::SubcycleScope& subcycle,
+                                                const LogicalEvaluationScope& evaluation,
+                                                Real* transport_frequency,
+                                                nd::FaceFrequencyRule frequency_rule = {}) const {
+    neg_div_flux_default_observed_into_(program_block, state_value, rhs, rate_id, nullptr,
+                                        transport_frequency, frequency_rule, &subcycle,
+                                        &evaluation);
   }
 
   /// A partition guard may be emitted after grouped RHS evaluation, where no
@@ -2909,11 +2978,12 @@ class ProgramContext {
     field_exchanges_->finish_write(&destination);
   }
 
-  void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
-                                           field_type& rhs, int rate_id,
-                                           std::vector<nd::FaceField<Dim>>* faces,
-                                           Real* transport_frequency,
-                                           nd::FaceFrequencyRule frequency_rule) const {
+  void neg_div_flux_default_observed_into_(
+      int program_block, field_type& state_value, field_type& rhs, int rate_id,
+      std::vector<nd::FaceField<Dim>>* faces, Real* transport_frequency,
+      nd::FaceFrequencyRule frequency_rule,
+      const ClockScheduleState::SubcycleScope* subcycle = nullptr,
+      const LogicalEvaluationScope* evaluation = nullptr) const {
     require_rate_identity_(rate_id);
     count_kernel_();
     const auto point = boundary_evaluation_point(rate_id);
@@ -2923,7 +2993,17 @@ class ProgramContext {
       throw std::invalid_argument("transport face-frequency request differs across ranks");
     const int runtime_block = sys_block(program_block);
     Real local_frequency = Real(0);
-    if (system_->has_prepared_group_face_observation(runtime_block)) {
+    if (evaluation != nullptr) {
+      PreparedChildBoundaryEvaluation child;
+      try {
+        child.evaluation_ = evaluation->boundary_ghost_evaluation(*this, *subcycle);
+      } catch (...) {
+        child.error_ = std::current_exception();
+      }
+      system_->block_rhs_group(point, {runtime_block}, {&state_value}, {&rhs}, {1}, {faces},
+                               {transport_frequency ? &local_frequency : nullptr}, frequency_rule,
+                               child);
+    } else if (system_->has_prepared_group_face_observation(runtime_block)) {
       // FaceField owns Fab values with deep-copy semantics: the retained faces are a detached
       // copy, which later residual evaluations cannot overwrite.
       system_->block_rhs_group(point, {runtime_block}, {&state_value}, {&rhs}, {1}, {faces},
@@ -3458,6 +3538,11 @@ class ProgramContext {
   mutable ::pops::amr::Rational logical_phase_begin_{0, 1};
   mutable ::pops::amr::Rational logical_phase_span_{1, 1};
   mutable double logical_physical_time_offset_ = 0.0;
+  mutable std::uint64_t next_logical_evaluation_ = 0;
+  mutable std::uint64_t active_logical_evaluation_ = 0;
+  // Zero marks the macro position. An unbound logical window cannot authorize a child ghost.
+  mutable std::optional<ClockScheduleState::EvaluationFrame> logical_evaluation_subcycle_ =
+      ClockScheduleState::EvaluationFrame{};
   mutable std::string primary_clock_;
   mutable ClockScheduleState clock_schedule_;
   mutable std::map<ScratchKey, field_type> scratch_;

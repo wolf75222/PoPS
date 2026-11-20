@@ -43,6 +43,13 @@ class ClockScheduleState {
     std::string child;
     int count = 0;
     int next = 0;
+    std::uint64_t activation = 0;
+  };
+
+  struct EvaluationFrame {
+    std::uint64_t activation = 0;
+    int iteration = 0;
+    friend bool operator==(const EvaluationFrame&, const EvaluationFrame&) = default;
   };
 
   class SubcycleScope {
@@ -70,6 +77,23 @@ class ClockScheduleState {
       finished_ = true;
     }
 
+    std::pair<std::string_view, std::int64_t> active_position(const ClockScheduleState& owner,
+                                                              std::uint64_t activation,
+                                                              int iteration, int count,
+                                                              std::int64_t macro_step) const {
+      require_live_();
+      if (owner_ != &owner)
+        throw std::invalid_argument("logical-clock subcycle belongs to a different context");
+      const Frame& frame = owner_->frame_(depth_);
+      if (iteration < 0 || iteration >= count || frame.activation != activation ||
+          frame.count != count || frame.next != iteration + 1)
+        throw std::invalid_argument("logical-clock subcycle differs from its evaluation scope");
+      const auto tick = owner_->active_tick_(frame.child, macro_step);
+      if (!tick)
+        throw std::invalid_argument("logical-clock subcycle is not active at its evaluation");
+      return {frame.child, *tick};
+    }
+
    private:
     void require_live_() const {
       if (owner_ == nullptr || finished_)
@@ -82,6 +106,21 @@ class ClockScheduleState {
 
   SubcycleScope subcycle(std::string parent, std::string child, int count) {
     return SubcycleScope(*this, std::move(parent), std::move(child), count);
+  }
+
+  std::optional<EvaluationFrame> subcycle_evaluation_frame(
+      int iteration, int count, std::optional<EvaluationFrame> evaluated_parent) const noexcept {
+    if (!evaluated_parent || frames_.empty() || iteration < 0 || iteration >= count)
+      return std::nullopt;
+    EvaluationFrame schedule_parent;
+    if (frames_.size() > 1) {
+      const auto& frame = frames_[frames_.size() - 2];
+      schedule_parent = {frame.activation, frame.next - 1};
+    }
+    const auto& frame = frames_.back();
+    if (*evaluated_parent != schedule_parent || frame.count != count || frame.next != iteration + 1)
+      return std::nullopt;
+    return EvaluationFrame{frame.activation, iteration};
   }
 
   void configure_primary_clock(std::string clock) {
@@ -173,6 +212,7 @@ class ClockScheduleState {
     copy_map_into_(destination.accepted_ticks_, accepted_ticks_);
     destination.frames_.resize(frames_.size());
     std::copy(frames_.begin(), frames_.end(), destination.frames_.begin());
+    destination.next_activation_ = std::max(destination.next_activation_, next_activation_);
   }
 
   void synchronize_sample_and_hold(const std::string& source, const std::string& target,
@@ -229,11 +269,10 @@ class ClockScheduleState {
                              found->second.count);
   }
 
-  std::optional<std::int64_t> active_tick_(const std::string& clock,
-                                           std::int64_t macro_step) const {
+  std::optional<std::int64_t> active_tick_(std::string_view clock, std::int64_t macro_step) const {
     if (macro_step < 0 || primary_.empty())
       throw std::runtime_error("logical-clock coordinate requires a configured accepted step");
-    std::string active = primary_;
+    std::string_view active = primary_;
     std::int64_t tick = macro_step;
     for (const Frame& frame : frames_) {
       if (frame.parent != active || frame.next <= 0 || frame.next > frame.count)
@@ -255,7 +294,9 @@ class ClockScheduleState {
     if (active != parent)
       throw std::runtime_error(
           "nested logical-clock subcycle parent does not match the active child clock");
-    frames_.push_back({std::move(parent), std::move(child), count, 0});
+    if (next_activation_ == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("logical-clock subcycle activation exhausted");
+    frames_.push_back({std::move(parent), std::move(child), count, 0, ++next_activation_});
     return frames_.size() - 1;
   }
 
@@ -285,6 +326,7 @@ class ClockScheduleState {
   std::map<std::string, Relation> relations_;
   std::map<std::string, std::int64_t> accepted_ticks_;
   std::vector<Frame> frames_;
+  std::uint64_t next_activation_ = 0;
 };
 
 }  // namespace pops::runtime::program

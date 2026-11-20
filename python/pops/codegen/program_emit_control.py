@@ -538,7 +538,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None, balance_due_contract: Any = None,
                has_shared_interface_implicit_jacvec: bool = False,
                provider_plans: Any = None, value_authority: Any = None,
-               exchange_metadata: list[str] | None = None) -> tuple:
+               exchange_metadata: list[str] | None = None,
+               child_ghost_sites: frozenset[int] = frozenset()) -> tuple:
     """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
     template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
     the Phase-4b source / apply / solve_local_linear ops. Returns
@@ -564,6 +565,7 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
     # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
     var = {}
+    var[("child_ghost_sites",)] = child_ghost_sites
     from pops.codegen.program_lowerability import all_ops
     var[("stencil_flux_expressions",)] = target == "system" and any(
         value.op == "stencil_flux_divergence" for value in all_ops(program))
@@ -1297,6 +1299,7 @@ def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines:
 
     sub = dict(var)
     sub[loop_in.id] = x
+    sub[("boundary_child_scopes",)] = (scope, evaluation_scope)
     body_lines = []
     for w in v.attrs["body_block"]:
         _emit_op(

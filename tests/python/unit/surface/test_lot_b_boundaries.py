@@ -321,8 +321,8 @@ def test_generated_boundary_clock_follows_the_consumer_region(
     case, layout = _hand_case(laws, periodic_x=True, program_factory=compose)
     resolved = _resolved(case, layout)
     monkeypatch.setattr(_native_selector, "select_native_dimension", stop_at_native_selection)
-    if reads_ghosts:
-        with pytest.raises(NotImplementedError, match="SourceGhost.*child application"):
+    if reads_ghosts and not declares_child:
+        with pytest.raises(ValueError, match="SourceGhost.*exact consuming Program Clock"):
             pops.compile(resolved)
     else:
         with pytest.raises(ReachedNativeSelection):
@@ -330,7 +330,11 @@ def test_generated_boundary_clock_follows_the_consumer_region(
         source = _cpp(resolved)
         call = "ctx.neg_div_flux_default_with_frequency_into("
         assert source.count(call) == 1
-        assert source.index(".finish();") < source.index(call)
+        if reads_ghosts:
+            assert source.index("ctx.logical_evaluation_scope(") < source.index(call)
+            assert source.index(call) < source.index(".finish();")
+        else:
+            assert source.index(".finish();") < source.index(call)
 
 
 def test_the_data_of_a_value_may_read_a_constant_of_the_model():

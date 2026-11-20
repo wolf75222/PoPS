@@ -33,7 +33,7 @@ std::string parameter_names(int count) {
   return result;
 }
 
-std::string stub_source() {
+std::string stub_source(int version) {
   const int count = 65;
   return "extern \"C\" const char* pops_native_abi_key() { return \"" +
          System<kNativeDimension>::abi_key() +
@@ -41,7 +41,7 @@ std::string stub_source() {
          "extern \"C\" const char* pops_compiled_model_identity() { return "
          "\"0000000000000000000000000000000000000000000000000000000000000000\"; }\n"
          "extern \"C\" int pops_native_system_package_abi_version() { return " +
-         std::to_string(pops::runtime::system::kNativeSystemPackageAbiVersion) +
+         std::to_string(version) +
          "; }\n"
          "extern \"C\" const char* pops_compiled_route_manifest() { return \"" +
          route_registry_signature() +
@@ -55,15 +55,16 @@ std::string stub_source() {
 
 }  // namespace
 
-static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
+static int run_refused_native_package(int argc, char** argv, int version) {
   comm_init(&argc, &argv);
   const std::string stem = std::string(POPS_TEST_TMPDIR) + "/native_package_param_overflow_" +
+                           std::to_string(version) + "_" +
                            std::to_string(static_cast<long>(std::clock()));
   const std::string source = stem + ".cpp";
   const std::string library = stem + ".so";
   {
     std::ofstream output(source);
-    output << stub_source();
+    output << stub_source(version);
   }
   const auto package = pops::test::native_dso::compile_shared(source, library);
   if (!package.ok) {
@@ -100,18 +101,34 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   }
 
   pops::test::Checker checker;
-  checker(threw,
-          "production package rejects a vector differing from its exact "
-          "declared cardinality");
-  checker(message.find(std::to_string(65)) != std::string::npos, "error names the declared count");
-  checker(message.find(std::to_string(64)) != std::string::npos,
-          "error names the supplied cardinality");
+  if (version == pops::runtime::system::kNativeSystemPackageAbiVersion) {
+    checker(threw, "production package rejects a vector differing from its exact cardinality");
+    checker(message.find(std::to_string(65)) != std::string::npos,
+            "error names the declared count");
+    checker(message.find(std::to_string(64)) != std::string::npos,
+            "error names the supplied cardinality");
+  } else {
+    checker(
+        threw && message.find("incompatible System native package protocol") != std::string::npos,
+        "an earlier package protocol is refused before inspecting the old closure layout");
+  }
   checker(system.n_blocks() == 0, "refused package does not partially install a block");
   return checker.failed();
 }
 
 TEST(test_native_loader_param_overflow, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_native_loader_param_overflow,
-                                    "test_native_loader_param_overflow"),
+  EXPECT_EQ(pops::test::RunTestBody(
+                +[](int argc, char** argv) {
+                  return run_refused_native_package(
+                      argc, argv, pops::runtime::system::kNativeSystemPackageAbiVersion);
+                },
+                "test_native_loader_param_overflow"),
+            0);
+}
+
+TEST(test_native_loader_param_overflow, RefusesPreviousSystemPackageProtocolBeforeInstall) {
+  EXPECT_EQ(pops::test::RunTestBody(
+                +[](int argc, char** argv) { return run_refused_native_package(argc, argv, 9); },
+                "test_native_loader_previous_system_package_protocol"),
             0);
 }

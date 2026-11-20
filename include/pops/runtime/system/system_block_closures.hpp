@@ -33,9 +33,10 @@ namespace pops {
 
 class ExecutionLane;
 namespace runtime::program {
+struct BoundaryGhostEvaluation;
 template <int Dim>
 class PreparedScalarBoundarySession;
-}
+}  // namespace runtime::program
 
 /// Prepared block capabilities accepted by the exact-ranked Uniform core.
 ///
@@ -57,6 +58,10 @@ struct SystemBlockClosures {
   using PreparedPointBoundaryResidual = std::function<void(
       const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
       const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
+  using PreparedChildBoundaryResidual = std::function<void(
+      const point_type&, field_type&, field_type&, const boundary_type&, const ExecutionLane&,
+      const runtime::program::PreparedScalarBoundarySession<Dim>&,
+      const runtime::program::BoundaryGhostEvaluation&)>;
   using PreparedPointPeriodicResidual =
       std::function<void(const point_type&, field_type&, field_type&, const ExecutionLane&,
                          const runtime::program::PreparedScalarBoundarySession<Dim>&)>;
@@ -110,6 +115,7 @@ struct SystemBlockClosures {
   PreparedPointBoundaryResidual boundary_full_at_point_prepared;
   PreparedPointBoundaryResidual boundary_core_at_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_full_at_point_prepared;
+  PreparedChildBoundaryResidual boundary_flux_at_child_point_prepared;
   PreparedPointBoundaryResidual boundary_flux_core_at_point_prepared;
   /// The topology-only periodic route retains native faces without a physical boundary object.
   PreparedPointPeriodicResidual periodic_full_at_point_prepared;
@@ -358,7 +364,8 @@ struct SystemInterfaceProvider {
   using RetainedFrequencies = std::vector<Real*>;
   using CoreFaceEvaluator = std::function<void(
       const point_type&, const std::vector<field_type*>&, const std::vector<field_type*>&,
-      const std::vector<int>&, const RetainedFaces&, const RetainedFrequencies&)>;
+      const std::vector<int>&, const RetainedFaces&, const RetainedFrequencies&,
+      const runtime::program::BoundaryGhostEvaluation*)>;
   using CoreAdmission = std::function<void(void (*)(void*), void*)>;
   using CoreSession = typename SystemInterfaceCoreSession<Dim>::pointer;
   using Evaluate = std::function<void(const point_type&, const std::vector<field_type*>&,

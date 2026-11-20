@@ -163,6 +163,7 @@ struct SystemLayoutTransferReceipt {
 
 namespace runtime::program {
 class Profiler;  // per-node wall-clock profiler (ADC-459); full type in program/profiler.hpp
+class PreparedChildBoundaryEvaluation;
 template <int Dim>
 class CacheManager;  // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 template <int Dim>
@@ -1140,6 +1141,14 @@ class System {
       const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
       const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies,
       nd::FaceFrequencyRule frequency_rule = {});
+  POPS_EXPORT void block_rhs_group(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
+      const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
+      const std::vector<int>& flux_only,
+      const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
+      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies,
+      nd::FaceFrequencyRule frequency_rule,
+      const runtime::program::PreparedChildBoundaryEvaluation& child);
   /// Whether the bound prepared group transport can evaluate one block's flux-only residual with
   /// face observations: a prepared Cartesian closure, no shared-interface provider and no active
   /// embedded boundary. Program face observers use a standalone session otherwise.
@@ -1662,6 +1671,14 @@ class System {
                                                                 bool positional = false) const;
   typename SystemInterfaceProvider<Dim>::CoreEvaluator prepare_interface_core_evaluator_(
       typename SystemInterfaceProvider<Dim>::CoreFaceEvaluator* retained_evaluator = nullptr);
+  void block_rhs_group_(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, const std::vector<int>& blocks,
+      const std::vector<MultiFab<Dim>*>& states, const std::vector<MultiFab<Dim>*>& rhs,
+      const std::vector<int>& flux_only,
+      const typename SystemInterfaceProvider<Dim>::RetainedFaces& retained_faces,
+      const typename SystemInterfaceProvider<Dim>::RetainedFrequencies& retained_frequencies,
+      nd::FaceFrequencyRule frequency_rule,
+      const runtime::program::PreparedChildBoundaryEvaluation* child);
   void prepare_bound_physical_group_();
   friend class runtime::program::ProgramContext<Dim>;
   friend class PreparedSystemLayoutTransfer<Dim>;
