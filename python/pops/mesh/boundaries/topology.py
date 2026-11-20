@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from fractions import Fraction
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
@@ -153,12 +154,11 @@ class PeriodicIdentification:
     source: BoundaryHandle
     target: BoundaryHandle
     orientation: PeriodicOrientation
+    tangential_shifts: tuple[Fraction, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, BoundaryHandle) or not isinstance(self.target, BoundaryHandle):
             raise TypeError("periodic endpoints must be BoundaryHandle objects")
-        if self.source == self.target:
-            raise ValueError("periodic identification requires two distinct boundaries")
         if self.source.owner_path != self.target.owner_path:
             raise ValueError("periodic endpoints must share the same Case owner")
         if not isinstance(self.orientation, PeriodicOrientation):
@@ -176,12 +176,37 @@ class PeriodicIdentification:
         if self.orientation.signs[self.source.orientation.axis] != required_normal_sign:
             raise ValueError(
                 "periodic normal sign must map source interior to target exterior")
+        shifts = self.tangential_shifts
+        if shifts:
+            if len(shifts) != dimension or any(type(value) is not Fraction for value in shifts):
+                raise TypeError("periodic tangential shifts must be exact ranked fractions")
+            if shifts[self.target.orientation.axis]:
+                raise ValueError("periodic tangential shifts cannot displace the target normal")
+            if not any(shifts):
+                raise ValueError("a zero tangential shift must be omitted")
+        if self.source == self.target:
+            normal = self.source.orientation.axis
+            if shifts or self.orientation.permutation != tuple(range(dimension)) or any(
+                    sign != (-1 if axis == normal else 1)
+                    for axis, sign in enumerate(self.orientation.signs)):
+                raise ValueError("self-identification must fix the Cartesian face pointwise")
 
     def canonical_identity(self) -> dict[str, Any]:
-        return {"schema_version": _SCHEMA_VERSION, "identification_type": "periodic",
+        result = {"schema_version": _SCHEMA_VERSION, "identification_type": "periodic",
                 "source": self.source.canonical_identity(),
                 "target": self.target.canonical_identity(),
                 "orientation": self.orientation.canonical_identity()}
+        if self.tangential_shifts:
+            result["tangential_shifts"] = [
+                [shift.numerator, shift.denominator] for shift in self.tangential_shifts]
+        return result
+
+    @property
+    def axis_translation(self) -> bool:
+        rank = len(self.orientation.permutation)
+        return (self.source.orientation.axis == self.target.orientation.axis
+                and self.orientation.permutation == tuple(range(rank))
+                and self.orientation.signs == (1,) * rank and not self.tangential_shifts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,7 +236,7 @@ class BoundaryTopology:
             raise ValueError("every boundary must belong to BoundaryTopology.owner")
         known = set(ids)
         periodic_ids = [endpoint.qualified_id for row in self.periodic
-                        for endpoint in (row.source, row.target)]
+                        for endpoint in dict.fromkeys((row.source, row.target))]
         physical_ids = [row.qualified_id for row in self.physical]
         if any(value not in known for value in periodic_ids + physical_ids):
             raise ValueError("extra topology classification references an undeclared boundary")
@@ -253,6 +278,31 @@ class BoundaryTopology:
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "boundary_topology", "canonical_id": self.canonical_id,
                 **self.canonical_identity()}
+
+    @classmethod
+    def from_data(cls, data: Any) -> BoundaryTopology:
+        from pops.model import OwnerPath
+
+        if not isinstance(data, Mapping):
+            raise TypeError("BoundaryTopology data requires a canonical mapping")
+        try:
+            boundaries = tuple(BoundaryHandle.from_canonical_identity(row)
+                               for row in data["boundaries"])
+            by_id = {face.qualified_id: face for face in boundaries}
+            periodic = tuple(PeriodicIdentification(
+                by_id[row["source"]["qualified_id"]],
+                by_id[row["target"]["qualified_id"]],
+                PeriodicOrientation(tuple(row["orientation"]["permutation"]),
+                                    tuple(row["orientation"]["signs"])),
+                tuple(Fraction(*part) for part in row.get("tangential_shifts", ())),
+            ) for row in data["periodic"])
+            result = cls(OwnerPath.from_data(data["owner"]), boundaries, periodic,
+                         tuple(by_id[row["qualified_id"]] for row in data["physical"]))
+        except KeyError as error:
+            raise ValueError("BoundaryTopology data lacks a canonical identity") from error
+        if result.canonical_identity() != dict(data):
+            raise ValueError("BoundaryTopology data does not authenticate its exact topology")
+        return result
 
 
 __all__ = [

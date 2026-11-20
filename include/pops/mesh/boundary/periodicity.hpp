@@ -45,6 +45,7 @@ struct PeriodicIdentification {
     result.fill(1);
     return result;
   }();
+  std::array<int, Dim> target_offsets{};
 
   bool operator==(const PeriodicIdentification&) const = default;
 
@@ -56,9 +57,9 @@ struct PeriodicIdentification {
     return true;
   }
 
-  void validate() const {
+  void validate(bool allow_self = false) const {
     if (source_face < 0 || source_face >= 2 * Dim || target_face < 0 || target_face >= 2 * Dim ||
-        source_face == target_face)
+        (!allow_self && source_face == target_face))
       throw std::invalid_argument(
           "PeriodicIdentification requires two distinct ranked face endpoints");
     std::array<bool, Dim> assigned{};
@@ -84,6 +85,12 @@ struct PeriodicIdentification {
     if (signs[static_cast<std::size_t>(source_axis)] != required_normal_sign)
       throw std::invalid_argument(
           "PeriodicIdentification normal sign does not map source interior to target exterior");
+    if (source_face == target_face)
+      for (int axis = 0; axis < Dim; ++axis)
+        if (permutation[axis] != axis || signs[axis] != (axis == source_axis ? -1 : 1) ||
+            (axis != source_axis && target_offsets[axis] != 0))
+          throw std::invalid_argument(
+              "PeriodicIdentification self-map must fix its Cartesian face");
   }
 };
 

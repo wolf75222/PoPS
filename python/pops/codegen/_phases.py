@@ -248,6 +248,8 @@ def resolve(
     snapshot_numerics = {block.name: block.numerics for block in blocks if block.numerics is not None}
     if target == "system":
         from ._moving_members_consumers import lower_moving_member_guards
+        from ._moving_update import validate_moving_updates
+        validate_moving_updates(resolved_time)
         resolved_time = lower_moving_member_guards(resolved_time, blocks)
     resolved_hierarchy = None
     amr_transfer = None
@@ -498,6 +500,8 @@ def resolve(
         layout_amr_authorities=layout_amr_authorities)
     from pops.codegen._static_geometry_consumers import validate_static_geometry_consumers
     validate_static_geometry_consumers(resolved_plan)
+    from pops.codegen._identified_halo_consumers import validate_identified_halo_consumers
+    validate_identified_halo_consumers(resolved_plan)
     from pops.codegen._cell_total_consumers import (
         validate_cell_total_consumers, validate_represented_initials,
     )

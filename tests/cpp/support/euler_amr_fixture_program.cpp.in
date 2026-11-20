@@ -3,7 +3,8 @@
 #include "prepared_constitutive_amr_program.hpp"
 #endif
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
+#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+    defined(POPS_TEST_MIXED_CFL)
 #include <unordered_map>
 #endif
 
@@ -247,7 +248,8 @@ extern "C" const char* pops_module_field_space_owner(int) {
   return "";
 }
 
-#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || defined(POPS_TEST_MIXED_CFL)
+#if defined(POPS_TEST_SCALAR_HISTORY) || defined(POPS_TEST_MIXED_NORM) || \
+    defined(POPS_TEST_MIXED_CFL)
 namespace pops::runtime::program::detail {
 template <int Dim>
 struct AmrInteractionHistorySnapshotTestAccess {

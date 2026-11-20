@@ -152,7 +152,7 @@ def test_handle_reads_are_explicit_before_symbolic_parameter_algebra():
     assert "a_y = model.value(velocity_y_param)" in source
     assert "u_in_x = model.value(inlet_x_param)" in source
     assert "u_in_y = model.value(inlet_y_param)" in source
-    assert "ValueExpr(core.tracer_state)" in source
+    assert "gradient_norm(cell, core.tracer_state," in source
     assert "core.case.value(core.refine_threshold)" in source
     assert "core.case.value(core.coarsen_threshold)" in source
 

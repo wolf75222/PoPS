@@ -402,6 +402,28 @@ class HaloExchange {
     }
   };
 
+  struct PackOrientedKernel {
+    device_buffer_type buffer{};
+    FieldView<const Real, Dim> source{};
+    KernelJob job{};
+    OrientedHaloGather<Dim> gather{};
+    const int* component_gather = nullptr;
+
+    POPS_HD void operator()(execution_index_type element) const {
+      const int component = static_cast<int>(element / job.cells_per_component);
+      execution_index_type cell = element % job.cells_per_component;
+      Index<Dim> destination{};
+      for (int axis = 0; axis < Dim; ++axis) {
+        const std::int64_t coordinate = static_cast<std::int64_t>(job.destination_lower[axis]) +
+                                        cell % job.destination_extent[axis];
+        destination[axis] = static_cast<int>(coordinate);
+        cell /= job.destination_extent[axis];
+      }
+      const auto image = gather.index(destination);
+      buffer(job.offset + element) = gather.value(source, image, component_gather[component]);
+    }
+  };
+
   struct UnpackKernel {
     device_buffer_type buffer{};
     FieldView<Real, Dim> destination{};
@@ -453,8 +475,13 @@ class HaloExchange {
     for (const job_type& job : jobs) {
       const FieldView<const Real, Dim> source = fields.fab_global(job.source_box).view();
       const KernelJob lowered = lower_job_(job);
-      Kokkos::parallel_for("pops_halo_pack", execution_policy(0, lowered.elements),
-                           PackKernel{buffer, source, lowered});
+      if (job.oriented)
+        Kokkos::parallel_for("pops_halo_pack_oriented", execution_policy(0, lowered.elements),
+                             PackOrientedKernel{buffer, source, lowered, *job.oriented,
+                                                schedule_->component_gather(*job.oriented)});
+      else
+        Kokkos::parallel_for("pops_halo_pack", execution_policy(0, lowered.elements),
+                             PackKernel{buffer, source, lowered});
     }
   }
 
@@ -559,6 +586,16 @@ class HaloExchange {
       append_i64_(bytes, static_cast<int>(record.kind));
       append_i64_(bytes, record.partner.axis);
       append_i64_(bytes, static_cast<int>(record.partner.side));
+      if (record.identification) {
+        const auto& row = *record.identification;
+        append_i64_(bytes, row.source_face);
+        append_i64_(bytes, row.target_face);
+        for (int axis = 0; axis < Dim; ++axis) {
+          append_i64_(bytes, row.permutation[axis]);
+          append_i64_(bytes, row.signs[axis]);
+          append_i64_(bytes, row.target_offsets[axis]);
+        }
+      }
     }
     append_extent_(bytes, schedule_->ghosts());
     append_i64_(bytes, schedule_->ncomp());
@@ -569,6 +606,16 @@ class HaloExchange {
       append_box_(bytes, job.destination_region);
       append_index_(bytes, job.source_from_destination);
       append_u64_(bytes, job.elements);
+      if (job.oriented) {
+        for (int axis = 0; axis < Dim; ++axis) {
+          append_i64_(bytes, job.oriented->source_axis[axis]);
+          append_i64_(bytes, job.oriented->signs[axis]);
+          append_i64_(bytes, job.oriented->source_offsets[axis]);
+        }
+        const auto* components = schedule_->component_gather(*job.oriented);
+        for (int component = 0; component < schedule_->ncomp(); ++component)
+          append_i64_(bytes, components[component]);
+      }
     }
     return bytes;
   }

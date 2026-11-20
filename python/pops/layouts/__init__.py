@@ -728,6 +728,8 @@ class AMR(MeshDescriptor):
         if not isinstance(first, dict) or first != second:
             raise TypeError("AMR.grid native_spatial_data() must be one deterministic dict")
         data = dict(first)
+        if data.get("identifications"):
+            raise NotImplementedError("G09 I2 must qualify identified halos for AMR")
         required = {"schema_version", "periodicity", "centering", "decomposition"}
         if set(data) != required or data["schema_version"] != 1:
             raise TypeError("AMR.grid native_spatial_data() uses an unsupported schema")

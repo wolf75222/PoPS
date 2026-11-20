@@ -154,6 +154,27 @@ def test_a_one_point_rule_samples_the_centre_of_each_cell():
     _assert_same(case, _hand_case(value))
 
 
+def test_piecewise_projection_keeps_its_analytic_predicate_at_the_rule_nodes():
+    from pops.surface.math import all_of, sqrt, where
+
+    parts = _parts()
+    expression = where(all_of([parts.x > 0.4, parts.y <= 0.7]), sqrt(parts.x - 0.4), 0)
+    case = _case(parts, surface.project(expression, quadrature=GaussLegendre(1)))
+
+    def value(frame, _model):
+        bounds = an.CellBounds(frame)
+        x, y = frame.axes
+
+        def select(first, second):
+            return an.where((first > 0.4) & (second <= 0.7), an.sqrt(first - 0.4), an.constant(0))
+
+        integral = bounds.measure * select(_mapped(bounds, x, 0.5), _mapped(bounds, y, 0.5))
+        return Analytic(frame=frame, components=(select(an.x(frame), an.y(frame)),),
+                        cell_integrals=(integral,))
+
+    _assert_same(case, _hand_case(value))
+
+
 def test_a_rule_of_two_points_per_axis_is_the_tensor_sum_of_its_weights():
     parts = _parts()
     rule = GaussLegendre(2)
