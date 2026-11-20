@@ -59,6 +59,18 @@ class AuthoringSnapshot:
         semantic_payload: Any = None,
         presentation: Any = None,
     ) -> None:
+        artifact_source = payload if artifact_payload is None else artifact_payload
+        AuthoringSnapshot._initialize(
+            self, [payload, artifact_source, semantic_payload], handle_resolver, presentation)
+
+    @classmethod
+    def _from_payloads(cls, payloads: list[Any], *, handle_resolver: Any, presentation: Any) -> AuthoringSnapshot:
+        """Take ownership of the three raw Case projections from their builders."""
+        snapshot = cls.__new__(cls)
+        AuthoringSnapshot._initialize(snapshot, payloads, handle_resolver, presentation)
+        return snapshot
+
+    def _initialize(self, payloads: list[Any], handle_resolver: Any, presentation: Any) -> None:
         from pops.identity.presentation import PresentationMap
 
         if presentation is not None and type(presentation) is not PresentationMap:
@@ -70,7 +82,7 @@ class AuthoringSnapshot:
         # object -- so there is no shallow-copy escape from the frozen identity.
         projection_cache: dict[tuple[int, str], Any] = {}
         canonical_payload = _canonical(
-            payload, handle_resolver=handle_resolver, projection_cache=projection_cache)
+            payloads.pop(0), handle_resolver=handle_resolver, projection_cache=projection_cache)
         if not isinstance(canonical_payload, dict):
             raise TypeError("AuthoringSnapshot payload must be a mapping")
         if "schema_version" in canonical_payload:
@@ -88,9 +100,12 @@ class AuthoringSnapshot:
         # Case builders always supply their closed scientific projection. Direct construction is
         # a low-level provenance seam: there the caller's explicit payload is also the semantic
         # declaration, after the strict snapshot projector has made it an inert value.
-        semantic_source = canonical_payload if semantic_payload is None else semantic_payload
+        semantic_source = payloads.pop()
+        if semantic_source is None:
+            semantic_source = canonical_payload
+        del canonical_payload
         semantic_data = semantic_value(semantic_source, where="AuthoringSnapshot semantic payload")
-        del canonical_payload, semantic_source
+        del semantic_source
         if presentation is not None:
             semantic_data = _project_presentation(presentation, semantic_data, artifact=False)
         semantic_json = _encode_json(
@@ -104,9 +119,8 @@ class AuthoringSnapshot:
         # This is a separately versioned preimage, not a scrub of the full canonical dict. The
         # Case builder supplies an explicit parameter/model projection; standalone snapshots use
         # the same raw payload and let objects opt in through artifact_data().
-        artifact_source = payload if artifact_payload is None else artifact_payload
         canonical_artifact_payload = _canonical(
-            artifact_source, handle_resolver=handle_resolver, artifact=True,
+            payloads.pop(), handle_resolver=handle_resolver, artifact=True,
             projection_cache=projection_cache)
         if not isinstance(canonical_artifact_payload, dict):
             raise TypeError("AuthoringSnapshot artifact payload must be a mapping")
@@ -351,15 +365,15 @@ def build_problem_snapshot(problem: Any) -> Any:
     from pops.problem._snapshot_presentation import presentation_map
 
     numerics = snapshot_numerics(problem)
-    payload = problem_snapshot_payload(problem, numerics=numerics)
-    artifact_payload = problem_snapshot_artifact_payload(problem, numerics=numerics)
-    semantic_payload = problem_semantic_payload(
-        problem, layout=None, time=problem._time_registry.program, numerics=numerics)
-    return AuthoringSnapshot(
-        payload,
+    payloads = [
+        problem_snapshot_payload(problem, numerics=numerics),
+        problem_snapshot_artifact_payload(problem, numerics=numerics),
+        problem_semantic_payload(
+            problem, layout=None, time=problem._time_registry.program, numerics=numerics),
+    ]
+    return AuthoringSnapshot._from_payloads(
+        payloads,
         handle_resolver=problem.resolve,
-        artifact_payload=artifact_payload,
-        semantic_payload=semantic_payload,
         presentation=presentation_map(problem, numerics=numerics),
     )
 
@@ -414,11 +428,11 @@ def build_authoring_snapshot(
 
     from pops.problem._snapshot_presentation import presentation_map
 
-    return AuthoringSnapshot(
-        full,
+    payloads = [full, artifact, semantic]
+    del full, artifact, semantic, context
+    return AuthoringSnapshot._from_payloads(
+        payloads,
         handle_resolver=resolve_compile_handle,
-        artifact_payload=artifact,
-        semantic_payload=semantic,
         presentation=presentation_map(problem, layout=layout, numerics=choices),
     )
 
