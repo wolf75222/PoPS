@@ -8,9 +8,11 @@ from pops._ir.expr import Const, Expr, Gradient, Mul, Partial, Var, _wrap
 from pops._ir.elliptic import CoeffGradient
 from pops._ir.quantity import QuantityRef
 from pops._ir.visitors import _children
+from pops._projection_authority import _closed_projection_reference, _closed_projection_value
 from pops.model import Handle, Signature, FieldSpace
 
 
+@_closed_projection_value
 @dataclass(frozen=True, slots=True)
 class DiffusiveBoundary:
     """A physical value W or outward conormal Fd.n on one Cartesian face.
@@ -65,6 +67,7 @@ def _physical_boundaries(values, dimension):
     return result
 
 
+@_closed_projection_reference
 class DiffusiveFluxHandle(Handle):
     """An owned constitutive flux; it is never a hyperbolic Riemann flux."""
 
@@ -77,6 +80,7 @@ class DiffusiveFluxHandle(Handle):
         object.__setattr__(self, "law", law)
 
 
+@_closed_projection_reference
 class CoupledGradientFluxHandle(DiffusiveFluxHandle):
     """A signed rate flux retaining dissipative and reversible component parts."""
 
@@ -89,6 +93,7 @@ class CoupledGradientFluxHandle(DiffusiveFluxHandle):
         object.__setattr__(self, "law", law)
 
 
+@_closed_projection_value
 @dataclass(frozen=True, slots=True, eq=False)
 class DiffusiveFluxLaw:
     """The physical law Fd=A grad(W), retaining every gradient/coefficient dependency."""

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from pops._ir.expr import Expr, Partial, _wrap
 from pops._ir.quantity import QuantityRef, _hash_owner
+from pops._projection_authority import _closed_projection_reference
 from pops.model import Handle, Signature, FieldSpace, DeclarationIndex
 from pops.model.operators import Operator
 from .diffusion import _authenticate_expression, _physical_boundaries, _law_inputs
@@ -54,6 +55,7 @@ class DriftFluxLaw:
                      for axis in range(len(self.axes)))
 
 
+@_closed_projection_reference
 class DriftFluxHandle(Handle):
     __slots__=("reg_name","state","law")
 

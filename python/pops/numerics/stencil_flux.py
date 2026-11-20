@@ -6,7 +6,10 @@ of the author. The engine checks the finite result, support, and declared reads.
 """
 from dataclasses import dataclass
 
+from pops._projection_authority import _closed_projection_value
 
+
+@_closed_projection_value
 @dataclass(frozen=True, slots=True, eq=False, init=False)
 class StencilFlux:
     """``body(sample, spacing, axis) -> (flux_tuple, incident_frequency)``.

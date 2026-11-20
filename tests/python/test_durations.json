@@ -6745,7 +6745,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1243,
+    "estimated_count": 1244,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -7911,6 +7911,7 @@
       "tests/python/unit/time/test_post_synchronization.py",
       "tests/python/unit/time/test_program_authoring_atomicity.py",
       "tests/python/unit/time/test_program_cadence.py",
+      "tests/python/unit/time/test_program_canonical_form.py",
       "tests/python/unit/time/test_program_certificate_affine_ssa.py",
       "tests/python/unit/time/test_program_certificate_extrapolated_stages.py",
       "tests/python/unit/time/test_program_certificate_refusals.py",
@@ -8191,7 +8192,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1311,
+    "total_files": 1312,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -10476,6 +10477,33 @@
           "scope": "pre-layout test and concurrent native, architecture and desktop load; not a CI per-file time"
         }
       }
+    },
+    "n11_20261119_sealed_canonical_form": {
+      "basis": "Scheduling estimate from the full cold Mac source-only file runs with the stock pytest phase collector. The current source ran in 825.55 s process wall. Retain the existing 990 s estimate, which adds ten percent to the longer 894.90 s historical process wall and rounds up to the next ten seconds. The phase sum and process wall are distinct. These are not measured GitHub CI or native execution times. Replace from a complete CI per-file timing receipt.",
+      "source_commit": "28ba43bcb67d7abb28f0f8ea4e0e697764e5208e",
+      "source_sha256": {
+        "tests/python/unit/time/test_program_canonical_form.py": "4e00739a4ca27065667316cc5dfc62401ece53644cdd145c88ef4c2ff80cfabc"
+      },
+      "local_receipts": {
+        "tests/python/unit/time/test_program_canonical_form.py": {
+          "cases": 96,
+          "passed": 96,
+          "reported_phase_seconds": 823.7674,
+          "process_wall_seconds": 825.55
+        }
+      },
+      "historical_receipt": {
+        "source_commit": "fd4c2afa407db9e88f9aca3fd0ba3f3f892a5cce",
+        "tests/python/unit/time/test_program_canonical_form.py": {
+          "cases": 87,
+          "passed": 87,
+          "reported_phase_seconds": 891.8948,
+          "process_wall_seconds": 894.9
+        }
+      },
+      "estimates_seconds": {
+        "tests/python/unit/time/test_program_canonical_form.py": 990
+      }
     }
   },
   "tests/python/examples/final/test_hyqmom15_final_example.py": 1230,
@@ -11788,5 +11816,6 @@
   "tests/python/integration/runtime/test_exact_analytic_initial_far_tails.py": 340,
   "tests/python/integration/runtime/test_g09_oriented_identification_native.py": 190,
   "tests/python/integration/runtime/test_g03_moving_transport_native.py": 760,
-  "tests/python/unit/numerics/test_moving_total_rate.py": 60
+  "tests/python/unit/numerics/test_moving_total_rate.py": 60,
+  "tests/python/unit/time/test_program_canonical_form.py": 990
 }

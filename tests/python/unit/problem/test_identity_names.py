@@ -435,6 +435,69 @@ def test_the_map_refuses_a_name_it_does_not_know():
         == "pops.handle.v1::case:%24case/descriptor:a::field::a"
 
 
+def test_presentation_rules_keep_priority_and_distinguish_list_items():
+    names = PresentationMap(case="a", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    data = {"row": {"name": "a", "[]": "literal", "list": ["item"]}}
+    values = {("...", "*"): "case", ("row", "name"): "block"}
+    assert names.project({"row": {"name": "a"}}, values=values)["row"]["name"] == "$case"
+    assert names.project({"row": {"name": "a"}}, values={**values, ("...", "*"): None}) == {
+        "row": {"name": "a"},
+    }
+    assert names.project(data, derived=(("...", "[]"),)) == {
+        "row": {"name": "a", "[]": "literal", "list": [None]},
+    }
+    assert names.project(data, derived=((),)) is None
+    assert names.project(data, derived=(("...",),)) is None
+
+
+def test_deep_presentation_restores_paths_for_shared_siblings():
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    reference = "pops.handle.v1::case:c::block::a"
+    shared = [reference]
+    data = {"left": shared, "right": shared}
+    for _ in range(1100):
+        data = {"child": data}
+    projected = names.project(data, references=(("...", "left", "[]"),))
+    for _ in range(1100):
+        projected = projected["child"]
+    assert projected["left"] == ["pops.handle.v1::case:%24case::block::%24block0"]
+    assert projected["right"] == shared
+    assert projected["right"] is not shared
+
+
+def test_presentation_rules_preserve_nonexact_equality_in_ancestors_and_rules():
+    names = PresentationMap(case="c", blocks=("a",), models=(("m", _FP, _FP),), block_models=(0,))
+    comparisons = []
+
+    class Alias(str):
+        def __eq__(self, other):
+            comparisons.append(other)
+            return other == "group"
+
+        __hash__ = str.__hash__
+
+    data = {Alias("alias"): {"target": "a"}}
+    values = {("group", "first"): "case", ("group", "target"): "block"}
+    assert list(names.project(data, values=values).values()) == [{"target": "$block0"}]
+    assert comparisons == ["group", "group"]
+    comparisons.clear()
+    assert names.project({"group": {"a": 1}}, keys=((Alias("alias"),),)) == {
+        "group": {"$block0": 1},
+    }
+    # The root comparison reads the prefix before rejecting its shorter path.
+    assert comparisons == ["...", "...", "[]", "*", "group"]
+
+    class ObservableType(type):
+        def __eq__(self, other):
+            raise AssertionError("projection compared a metaclass to a builtin type")
+
+    class ExtensionText(str, metaclass=ObservableType):
+        pass
+
+    extension = ExtensionText("opaque")
+    assert names.project([extension])[0] is extension
+
+
 def test_an_owner_name_cannot_take_the_form_of_a_label():
     """Review A2 of #797: a name kept in a preimage can never equal a generated label.
 

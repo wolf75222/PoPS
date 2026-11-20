@@ -156,7 +156,8 @@ def test_program_projection_has_identical_bytes_with_bounded_hash_calls(monkeypa
 
     monkeypatch.setattr(Module, "module_hash", counted)
     method = getattr(program, projection)
-    expected = method.__wrapped__(program)
+    project = program._canonical_projection if projection == "_serialize" else method
+    expected = project.__wrapped__(program)
     unscoped_calls = len(calls)
     calls.clear()
     actual = method()

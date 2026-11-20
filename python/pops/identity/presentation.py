@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from heapq import merge
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import quote, unquote
@@ -368,6 +369,61 @@ class PresentationMap:
         ).walk(data, ())
 
 
+class _PathRules:
+    """Select an ordered subsequence of rules for an exact built-in path."""
+
+    __slots__ = ("rules", "by_last", "widths", "empty", "any_key", "any_item")
+
+    def __init__(self, rules: tuple[tuple[tuple[Any, ...], Any], ...]) -> None:
+        self.rules = rules
+        self.by_last: dict[Any, list[int]] | None = None
+        self.widths: list[tuple[int, bool]] = []
+        self.empty: list[int] = []
+        self.any_key: list[int] = []
+        self.any_item: list[int] = []
+        # A non-exact rule may observe even comparisons that do not match.
+        if any(type(part) is not str for pattern, _ in rules for part in pattern):
+            return
+        self.by_last = {}
+        for index, (pattern, _) in enumerate(rules):
+            suffix = bool(pattern) and pattern[0] == "..."
+            width = len(pattern) - suffix
+            self.widths.append((width, suffix))
+            if width == 0:
+                self.empty.append(index)
+                if suffix:
+                    self.any_key.append(index)
+                    self.any_item.append(index)
+            elif pattern[-1] == "*":
+                self.any_key.append(index)
+            else:
+                last = _LIST_ITEM if pattern[-1] == "[]" else pattern[-1]
+                self.by_last.setdefault(last, []).append(index)
+
+    def first(self, path: Sequence[Any], exact_path: bool) -> Any:
+        if self.by_last is None or not exact_path:
+            for pattern, result in self.rules:
+                if _matches(pattern, path):
+                    return result
+            return None
+        if path:
+            last = path[-1]
+            specific = self.by_last.get(last)
+            general = self.any_item if last is _LIST_ITEM else self.any_key
+            candidates = merge(specific, general) if specific and general else specific or general
+        else:
+            candidates = self.empty
+        depth = len(path)
+        for index in candidates:
+            width, suffix = self.widths[index]
+            if depth < width or (not suffix and depth != width):
+                continue
+            pattern, result = self.rules[index]
+            if _matches_exact(pattern, path, width):
+                return result
+        return None
+
+
 class _Projection:
     __slots__ = ("map", "keys", "values", "sets", "derived", "digests",
                  "references", "reference_keys", "field_slots", "field_coverage")
@@ -376,41 +432,95 @@ class _Projection:
                  derived: Any, references: Any, reference_keys: Any) -> None:
         self.map = presentation
         self.digests = presentation._digest_table()
-        self.keys = keys
-        self.values = {tuple(path): kind for path, kind in values.items()}
-        self.sets = sets
-        self.derived = derived
-        self.references: dict[str, list[tuple[str, ...]]] = {}
+        self.keys = _PathRules(tuple((pattern, True) for pattern in keys))
+        normalized_values = {tuple(path): kind for path, kind in values.items()}
+        self.values = _PathRules(tuple(normalized_values.items()))
+        self.sets = _PathRules(tuple((pattern, True) for pattern in sets))
+        self.derived = _PathRules(tuple((pattern, True) for pattern in derived))
+        reference_rules: dict[Any, list[tuple[tuple[Any, ...], bool]]] = {}
         for pattern in references:
-            self.references.setdefault(pattern[-1], []).append(pattern)
-        self.reference_keys = reference_keys
+            reference_rules.setdefault(pattern[-1], []).append((pattern, True))
+        self.references = {last: _PathRules(tuple(rules)) for last, rules in reference_rules.items()}
+        self.reference_keys = _PathRules(tuple((pattern, True) for pattern in reference_keys))
         self.field_slots = dict(presentation.field_slots)
         self.field_coverage = dict(presentation.field_coverage)
 
-    def walk(self, value: Any, path: tuple[Any, ...], block: str | None = None, *,
-             expression: bool = False) -> Any:
-        if any(_matches(pattern, path) for pattern in self.derived):
+    def walk(self, value: Any, prefix: tuple[Any, ...]) -> Any:
+        # Resume one parent entry only after its child has been projected. The same
+        # node can appear in several positions with different projection rules.
+        identity = id(value)
+        active = {identity}
+        # Only the current occurrence needs its ancestor path. Suspended frames resume
+        # with that same path restored, without copying it for each child.
+        path = list(prefix)
+        exact_path = all(type(part) is str or part is _LIST_ITEM for part in prefix)
+        stack = [(identity, self._visit(value, path, None, False, exact_path))]
+        result = None
+        while stack:
+            identity, visit = stack[-1]
+            try:
+                child, part, block, expression, exact_path = visit.send(result)
+            except StopIteration as completed:
+                stack.pop()
+                active.remove(identity)
+                if stack:
+                    path.pop()
+                result = completed.value
+                continue
+            path.append(part)
+            kind = type(child)
+            if (child is None or kind is str or kind is bytes or kind is int
+                    or kind is float or kind is bool):
+                result = self._scalar(child, path, exact_path)
+                path.pop()
+                continue
+            child_identity = id(child)
+            if child_identity in active:
+                raise PresentationProjectionError("projection contains a cycle at %r" % (tuple(path),))
+            active.add(child_identity)
+            stack.append((child_identity, self._visit(child, path, block, expression, exact_path)))
+            result = None
+        return result
+
+    def _scalar(self, value: Any, path: list[Any], exact_path: bool) -> Any:
+        if self.derived.first(path, exact_path):
+            return None
+        return self._string_reference(value, path, exact_path) if type(value) is str else value
+
+    def _string_reference(self, value: str, path: list[Any], exact_path: bool) -> str:
+        if path:
+            last = path[-1]
+            rules = self.references.get("[]" if last is _LIST_ITEM else last)
+            if rules is not None and rules.first(path, exact_path):
+                return self._reference(value)
+        return value
+
+    def _visit(
+        self, value: Any, path: list[Any], block: str | None, expression: bool, exact_path: bool,
+    ) -> Generator[tuple[Any, Any, str | None, bool, bool], Any, Any]:
+        if self.derived.first(path, exact_path):
             return None
         if isinstance(value, dict):
-            return self._mapping(value, path, block, expression=expression)
+            return (yield from self._mapping(value, path, block, expression=expression,
+                                             exact_path=exact_path))
         if isinstance(value, (list, tuple)):
-            items = [self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
-                     for item in value]
+            items = []
+            for item in value:
+                items.append((yield item, _LIST_ITEM, block, expression, exact_path))
             # These two forms encode expression_handle_key and ValueExpr in the Expr DAG.
             if expression and len(value) == 2 and value[0] in ("qualified", "handle_value") \
                     and isinstance(value[1], str):
                 items[1] = self.map.project_string(value[1], self.digests)
-            if any(_matches(pattern, path) for pattern in self.sets):
+            if self.sets.first(path, exact_path):
                 items.sort(key=_order_key)
             return items if isinstance(value, list) else tuple(items)
         if isinstance(value, (set, frozenset)):
-            return frozenset(self.walk(item, path + (_LIST_ITEM,), block, expression=expression)
-                             for item in value)
+            projected = set()
+            for item in value:
+                projected.add((yield item, _LIST_ITEM, block, expression, exact_path))
+            return frozenset(projected)
         if isinstance(value, str):
-            if path and any(_matches(pattern, path)
-                            for pattern in self.references.get(
-                                "[]" if path[-1] is _LIST_ITEM else path[-1], ())):
-                return self._reference(value)
+            return self._string_reference(value, path, exact_path)
         return value
 
     def _reference(self, value: str) -> str:
@@ -444,25 +554,31 @@ class _Projection:
             return self.map.block_model_label(block)
         raise ValueError("unknown presentation kind %r" % (kind,))
 
-    def _mapping(self, value: dict[str, Any], path: tuple[Any, ...], block: str | None, *,
-                 expression: bool) -> dict[str, Any]:
+    def _mapping(
+        self, value: dict[str, Any], path: list[Any], block: str | None, *,
+        expression: bool, exact_path: bool,
+    ) -> Generator[tuple[Any, Any, str | None, bool, bool], Any, dict[str, Any]]:
         if set(value) == _OWNER_RECORD_KEYS and isinstance(value.get("nodes"), list):
             return self.map.project_owner_record(value)
         if value.keys() == _COMPONENT_KEY_FIELDS:
             return {**value, "owner_qid": self.map.project_owner_string(value["owner_qid"])}
-        keyed = any(_matches(pattern, path) for pattern in self.keys)
-        referenced = not keyed and any(_matches(pattern, path) for pattern in self.reference_keys)
+        keyed = self.keys.first(path, exact_path)
+        referenced = not keyed and self.reference_keys.first(path, exact_path)
         handle = {"qualified_id", "local_id", "kind", "owner_path"} <= value.keys()
         expression = expression or value.get("protocol") == "pops.expr.dag.v1"
         result = {}
         for key, item in value.items():
-            item_path = path + (key,)
+            exact_item_path = exact_path and type(key) is str
             projected_key = (self.map.block_label(key) if keyed
                              else self._reference(key)
                              if referenced and isinstance(key, str) else key)
             if projected_key in result:
-                raise PresentationProjectionError("projection merged two keys at %r" % (path,))
-            kind = _lookup(self.values, item_path) if isinstance(item, str) else None
+                raise PresentationProjectionError("projection merged two keys at %r" % (tuple(path),))
+            kind = None
+            if isinstance(item, str):
+                path.append(key)
+                kind = self.values.first(path, exact_item_path)
+                path.pop()
             if kind is not None:
                 result[projected_key] = self._bare(item, kind, block, value)
             elif handle and key == "qualified_id":
@@ -478,8 +594,8 @@ class _Projection:
                 derived = self.map.derived_local_id(value["qualified_id"])
                 result[projected_key] = item if derived is None else derived
             else:
-                result[projected_key] = self.walk(
-                    item, item_path, key if keyed else block, expression=expression)
+                result[projected_key] = yield (
+                    item, key, key if keyed else block, expression, exact_item_path)
         if value.get("op") == "state" and isinstance(value.get("block"), dict) \
                 and value.get("name") == value["block"].get("local_id") \
                 and isinstance(value.get("name"), str):
@@ -516,7 +632,7 @@ def _label_order(label: str) -> tuple[int, str]:
     return (int(digits), label) if digits.isdigit() else (-1, label)
 
 
-def _matches(pattern: tuple[Any, ...], path: tuple[Any, ...]) -> bool:
+def _matches(pattern: tuple[Any, ...], path: Sequence[Any]) -> bool:
     """Match a path; ``"*"`` is any key, and a leading ``"..."`` matches any prefix."""
     if pattern and pattern[0] == "...":
         pattern = pattern[1:]
@@ -525,18 +641,22 @@ def _matches(pattern: tuple[Any, ...], path: tuple[Any, ...]) -> bool:
         path = path[len(path) - len(pattern):]
     if len(pattern) != len(path):
         return False
-    return all(
-        (actual is _LIST_ITEM if expected == "[]" else
-         actual is not _LIST_ITEM if expected == "*" else expected == actual)
-        for expected, actual in zip(pattern, path)
-    )
+    for expected, actual in zip(pattern, path):
+        if not (actual is _LIST_ITEM if expected == "[]" else
+                actual is not _LIST_ITEM if expected == "*" else expected == actual):
+            return False
+    return True
 
 
-def _lookup(table: dict[tuple[Any, ...], str], path: tuple[Any, ...]) -> str | None:
-    for pattern, kind in table.items():
-        if _matches(pattern, path):
-            return kind
-    return None
+def _matches_exact(pattern: tuple[Any, ...], path: Sequence[Any], width: int) -> bool:
+    # Exact strings have no comparison hooks. Check the nearest ancestors first without
+    # slicing the path. Most suffix rules differ on one of these components.
+    for index in range(-1, -width - 1, -1):
+        expected, actual = pattern[index], path[index]
+        if not (actual is _LIST_ITEM if expected == "[]" else
+                actual is not _LIST_ITEM if expected == "*" else expected == actual):
+            return False
+    return True
 
 
 def _is_registry_fingerprint(fingerprint: str | None) -> bool:

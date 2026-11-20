@@ -27,6 +27,7 @@ from typing import Any
 
 from .. import math as _bm
 from .._ir import Expr
+from .._projection_authority import _closed_projection_reference
 from ..model.handles import Handle, OperatorHandle, StateShapeHandle
 from ._board_contract import (normalize_components, normalize_roles, normalize_sequence,
                               normalize_string_mapping, require_bool, require_name)
@@ -77,6 +78,7 @@ def _roles_for(hyp: Any) -> Any:
     return roles_for(hyp.cons_names, hyp.cons_roles)
 
 
+@_closed_projection_reference
 class StateHandle(StateShapeHandle):
     """A declared state: a name plus the ordered :mod:`pops.dsl` component vars.
 
@@ -137,6 +139,7 @@ class StateHandle(StateShapeHandle):
         return "StateHandle(%r, %r)" % (self.name, list(self.components))
 
 
+@_closed_projection_reference
 class FieldHandle(Handle):
     """A solved/auxiliary scalar field (e.g. the potential ``phi``)."""
 
@@ -149,6 +152,7 @@ class FieldHandle(Handle):
         return "FieldHandle(%r)" % (self.name,)
 
 
+@_closed_projection_reference
 class VectorHandle(Handle):
     """A named vector field indexed by the typed axes of its frame."""
 
@@ -182,6 +186,7 @@ class VectorHandle(Handle):
         return "VectorHandle(%r)" % (self.name,)
 
 
+@_closed_projection_reference
 class FluxHandle(Handle):
     """A declared physical flux (the default hyperbolic flux of a model)."""
 
@@ -199,6 +204,7 @@ class FluxHandle(Handle):
         return "FluxHandle(%r)" % (self.name,)
 
 
+@_closed_projection_reference
 class SourceHandle(Handle):
     """Identity of a declared local source term.
 
@@ -258,6 +264,7 @@ class SourceTermExpr(_bm.RateTerm):
         return "source_term(%r)" % (self.handle,)
 
 
+@_closed_projection_reference
 class RateHandle(OperatorHandle):
     """Callable rate reference with an immutable scientific balance view."""
 
@@ -388,6 +395,7 @@ class FieldOutputs:
         return "FieldOutputs(%r)" % (sorted(self._m),)
 
 
+@_closed_projection_reference
 class FieldsHandle(OperatorHandle):
     """The result of a field-solve operator: a typed ``OperatorHandle`` over a bundle of solved
     fields (ADC-556).

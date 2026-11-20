@@ -158,3 +158,49 @@ def test_failed_program_compile_leaves_no_partial_final_or_staging_binary(
     assert not tuple(tmp_path.glob(".*.pops-stage-*.so"))
     assert not tuple(tmp_path.glob("*.pops-artifact.json"))
     assert tuple(tmp_path.glob("*.failed.cpp"))
+
+
+def test_program_handle_releases_cache_lock_and_rejects_replacement(tmp_path, monkeypatch):
+    from pops.codegen import _compile_drivers as drivers
+    from pops.codegen.cache import _artifact_lock_owners
+    from pops.codegen.compile_provenance import read_artifact_sidecar, write_artifact_sidecar
+    from pops.codegen.loader import CompiledProblem
+    from pops.identity import Identity
+    from tests.python.unit.runtime.test_pops_env import (
+        INCLUDE, _program_fixture, _write_fake_compile_outputs,
+    )
+
+    for setting in ("POPS_CODEGEN_DIR", "POPS_KEEP_GENERATED", "POPS_DUMP_IR", "POPS_DUMP_CPP"):
+        monkeypatch.delenv(setting, raising=False)
+    monkeypatch.setenv("POPS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(drivers, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
+    monkeypatch.setattr(drivers, "pops_header_signature", lambda include: "MOCKSIG")
+    monkeypatch.setattr(drivers, "_probe_cxx_std", lambda cc, std: std or "c++23")
+    monkeypatch.setattr(drivers, "_run_compile", lambda cmd, _: _write_fake_compile_outputs(cmd))
+
+    construct = CompiledProblem.__init__
+    replace_binary = False
+
+    def construct_without_lock(self, so_path, *args, **kwargs):
+        assert str(Path(so_path).absolute()) + ".pops-cache.lock" not in _artifact_lock_owners.held
+        construct(self, so_path, *args, **kwargs)
+        if replace_binary:
+            with _artifact_cache_lock(so_path):
+                sidecar = read_artifact_sidecar(so_path)
+                Path(so_path).write_bytes(b"a different authenticated binary")
+                write_artifact_sidecar(
+                    so_path,
+                    semantic_identity=Identity.from_token(sidecar["semantic_identity"]),
+                    spec_identity=Identity.from_token(sidecar["artifact_spec_identity"]),
+                )
+
+    monkeypatch.setattr(CompiledProblem, "__init__", construct_without_lock)
+    program, module = _program_fixture("program-cache-lock")
+
+    def compile_program():
+        return drivers.compile_problem(model=module, time=program, include=INCLUDE)
+
+    assert compile_program().artifact_identity == compile_program().artifact_identity
+    replace_binary = True
+    with pytest.raises(drivers.StaleArtifactError, match="changed during Program handle construction"):
+        compile_program()

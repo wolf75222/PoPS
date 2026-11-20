@@ -30,6 +30,7 @@ from pops.codegen.cache import (
     _dsl_optflags,
 )
 from pops.codegen.compile_provenance import (
+    StaleArtifactError,
     artifact_sidecar_path,
     build_debug_banner,
     publish_staged_artifact,
@@ -746,7 +747,7 @@ def _compile_problem_impl(
                   for reference, index in time._block_indices().items()),
             program_param_routes)
 
-    def _compiled_handle(binary, artifact, *, compile_command=None, generated_source=None):
+    def _compiled_handle(binary, artifact, compile_command=None, generated_source=None):
         compiled = CompiledProblem(
             so_path,
             time,
@@ -911,12 +912,7 @@ def _compile_problem_impl(
             published = True
             _record_artifact_identity(so_path, spec_identity)
             cenv.log("compile_problem: compiled -> %s" % so_path)
-            return _compiled_handle(
-                binary,
-                artifact,
-                compile_command=compile_command,
-                generated_source=gen_src_path,
-            )
+            return binary, artifact, compile_command, gen_src_path
         finally:
             if staged or not published:
                 for leftover in (compile_path, artifact_sidecar_path(compile_path)):
@@ -940,8 +936,23 @@ def _compile_problem_impl(
                 )
                 verify_native_toolchain(toolchain_capture)
                 cenv.log("compile_problem: cache HIT -> %s" % so_path)
-                return _compiled_handle(binary, artifact)
-            return _compile_fresh(staged=True)
+                publication = (binary, artifact, None, None)
+            else:
+                publication = _compile_fresh(staged=True)
+            if force or cenv.codegen_dir or cenv.keep_generated or cenv.dump_ir or cenv.dump_cpp:
+                return _compiled_handle(*publication)
+
+        # Each caller detaches and verifies its own Program while building the handle.
+        # Only cache publication and on-disk authentication need to serialize callers.
+        compiled = _compiled_handle(*publication)
+        with _artifact_cache_lock(so_path):
+            current = verify_cached_artifact(
+                so_path, semantic_identity=semantic, spec_identity=spec_identity)
+            if current != publication[:2]:
+                raise StaleArtifactError(
+                    "pops.compile: cached artifact %r changed during Program handle construction"
+                    % so_path)
+        return compiled
 
     so_path = _artifact_distinct_so_path(so_path, spec_identity)
-    return _compile_fresh(staged=False)
+    return _compiled_handle(*_compile_fresh(staged=False))

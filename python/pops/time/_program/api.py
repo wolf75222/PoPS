@@ -77,6 +77,20 @@ class Program(
     ``sim.step``. Authoring and pure IR inspection methods come from the mixins.
     """
 
+    __slots__ = ("_sealed_canonical_form",)
+
+    def __getstate__(self) -> Any:
+        """Copy the authoring state without the witness owned by this exact Program."""
+        import copyreg
+
+        # Use the default copy protocol's slot names on Python 3.10 as well. This also keeps
+        # slots declared by a Program subclass, including mangled private names.
+        slot_names = getattr(copyreg, "_slotnames")(type(self))
+        slots = {name: getattr(self, name) for name in slot_names
+                 if name != "_sealed_canonical_form" and hasattr(self, name)}
+        attributes = vars(self)
+        return (attributes or None, slots) if slots else attributes or None
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "_global_field_history_issuance" and hasattr(self, name):
             raise AttributeError("global field history original issuance cannot be replaced")
