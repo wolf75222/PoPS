@@ -18,6 +18,13 @@ class StencilFlux:
     Offsets are integer tuples of the frame dimension, bounded by ``radius``.
     The callable executes once per axis in Python. Uniform periodic Cartesian
     meshes are the initial native realization; no AMR or wall closure is implied.
+
+    On node positions served by static geometry arrays (N17, C1: a graded box), the row of axis
+    a reads the two cells of its face and ``spacing[a]``, which is the distance between their
+    centroids across the face; the flux density is integrated over the measure of the face, the
+    divergence is divided by the measure of the cell, and the incident frequency, a rate per
+    unit of spacing, is rescaled by the distance and the measures (f d |S| / |K| per face).
+    Another read (a farther cell, the spacing of another axis, a field) is refused at resolution.
     """
     dimension: int
     components: int

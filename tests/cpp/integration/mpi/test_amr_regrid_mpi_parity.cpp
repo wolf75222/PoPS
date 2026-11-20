@@ -41,7 +41,8 @@
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include "test_harness.hpp"  // pops::test::checksum (somme des carres partagee)
-#include "amr_tagging_test_authority.hpp"
+#include "euler_amr_fixture_criteria.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
 
 #include <array>
 #include <cmath>
@@ -58,8 +59,6 @@ using namespace pops;
 
 namespace {
 
-constexpr std::array<const char*, 2> kStateRoutes{"tests.amr-regrid-mpi-parity/a/state@1",
-                                                  "tests.amr-regrid-mpi-parity/b/state@1"};
 constexpr std::array<const char*, 2> kConsumerQids{"tests.amr-regrid-mpi-parity/a/physical-flux@1",
                                                    "tests.amr-regrid-mpi-parity/b/physical-flux@1"};
 
@@ -184,33 +183,73 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   cfg.distribute_coarse = true;  // GROSSIER REPARTI : active la reduction collective des tags (R4)
   // n/2 par axe -> 2^Dim boites grossieres reparties round-robin entre les rangs.
 
-  AmrSystem<Dim> sys(cfg);
-  test::install_amr_runtime_authority(sys, "tests.amr-regrid-mpi-parity/runtime-instance@1");
-  sys.set_temporal_relations({2}, {1}, {"integral_only"});
-  sys.install_block_state_route("a", kStateRoutes[0]);
-  sys.install_block_state_route("b", kStateRoutes[1]);
-  add_compiled_model<Dim>(sys, "a", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-                          static_cast<double>(kWenoEpsilon), false, kConsumerQids[0]);
-  add_compiled_model<Dim>(sys, "b", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
-                          "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-                          static_cast<double>(kWenoEpsilon), false, kConsumerQids[1]);
-  const auto auxiliary_keys = install_exb_auxiliary_authority(sys);
-  const std::vector<double> zero_input(cell_count(cfg.shape), 0.0);
-  const std::vector<double> unit_input(cell_count(cfg.shape), 1.0);
-  for (int axis = 0; axis < Dim; ++axis)
-    sys.stage_auxiliary_input(auxiliary_keys[static_cast<std::size_t>(axis)],
-                              axis == 0 ? unit_input : zero_input);
-  for (int component = 0; component < 3; ++component)
-    sys.stage_auxiliary_input(
-        auxiliary_keys[static_cast<std::size_t>(Dim + component)],
-        component == 2 ? std::vector<double>(cell_count(cfg.shape), B0) : zero_input);
-  test::install_prepared_threshold_union(
-      sys, {{"a", "n", 1.5, test::PreparedThresholdRelation::Above, kStateRoutes[0]},
-            {"b", "n", 1.5, test::PreparedThresholdRelation::Above, kStateRoutes[1]}});
-  sys.set_density("a", rho0);
-  sys.set_density("b", rho1);
-  test::install_forward_euler_program(sys, false);
+  const auto build = [&](const auto& first, const auto& second) {
+    auto owner = std::make_unique<AmrSystem<Dim>>(cfg);
+    auto& sys = *owner;
+    test::install_amr_runtime_authority(sys, "tests.amr-regrid-mpi-parity/runtime-instance@1");
+    sys.set_temporal_relations({2}, {1}, {"integral_only"});
+    sys.install_block_state_route("a", test::regrid_parity.state_for("a"));
+    sys.install_block_state_route("b", test::regrid_parity.state_for("b"));
+    add_compiled_model<Dim>(sys, "a", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
+                            "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {},
+                            0.0, static_cast<double>(kWenoEpsilon), false, kConsumerQids[0]);
+    add_compiled_model<Dim>(sys, "b", exb_transport<Dim>(), "minmod", "rusanov", "conservative",
+                            "explicit", static_cast<double>(kPhysicalDefaultGamma), 1, 1, {}, {},
+                            0.0, static_cast<double>(kWenoEpsilon), false, kConsumerQids[1]);
+    const auto auxiliary_keys = install_exb_auxiliary_authority(sys);
+    const std::vector<double> zero_input(cell_count(cfg.shape), 0.0);
+    const std::vector<double> unit_input(cell_count(cfg.shape), 1.0);
+    for (int axis = 0; axis < Dim; ++axis)
+      sys.stage_auxiliary_input(auxiliary_keys[static_cast<std::size_t>(axis)],
+                                axis == 0 ? unit_input : zero_input);
+    for (int component = 0; component < 3; ++component)
+      sys.stage_auxiliary_input(
+          auxiliary_keys[static_cast<std::size_t>(Dim + component)],
+          component == 2 ? std::vector<double>(cell_count(cfg.shape), B0) : zero_input);
+    test::regrid_parity.install<Dim>(sys);
+    sys.set_density("a", first);
+    sys.set_density("b", second);
+    EXPECT_FALSE(sys.uses_runtime_engine());
+    sys.install_program(POPS_TEST_MPI_EULER_PROGRAM_SO);
+    sys.mark_bound();
+    EXPECT_TRUE(sys.uses_runtime_engine());
+    EXPECT_EQ(sys.installed_program_hash(),
+              std::string("test-forward-euler-amr/") + test::regrid_parity.identity);
+
+    return owner;
+  };
+  {
+    // Distinguish both named state rows without perturbing the historical trajectory.
+    constexpr std::array<double, 5> a{2., 1., 2., 1., 1.5};
+    constexpr std::array<double, 5> b{1., 2., 2., 1., 1.5};
+    constexpr std::array<bool, 5> expected{true, true, true, false, false};
+    std::vector<double> first(rho0.size()), second(rho1.size());
+    for (std::size_t cell = 0; cell < first.size(); ++cell) {
+      first[cell] = a[cell % a.size()];
+      second[cell] = b[cell % b.size()];
+    }
+    auto witness = build(first, second);
+    EXPECT_GT(witness->n_levels(), 1);
+    EXPECT_FALSE(witness->patch_boxes().empty());
+    EXPECT_EQ(witness->density("a"), first);
+    EXPECT_EQ(witness->density("b"), second);
+    const auto tags = witness->execute_prepared_tagging(0);
+    const auto checked = test::expect_fixture_tag_mask(
+        tags.refine, cfg.shape, [&](std::size_t cell) { return expected[cell % expected.size()]; });
+    EXPECT_EQ(all_reduce_sum(double(checked)), double(first.size()));
+
+    // The same generated authority sees equality in both inputs at the first bootstrap.
+    const std::vector<double> at_threshold(first.size(), 1.5);
+    auto hold = build(at_threshold, at_threshold);
+    EXPECT_EQ(hold->n_levels(), 1);
+    EXPECT_TRUE(hold->patch_boxes().empty());
+    EXPECT_EQ(hold->density("a"), at_threshold);
+    EXPECT_EQ(hold->density("b"), at_threshold);
+  }
+  auto owner = build(rho0, rho1);
+  auto& sys = *owner;
+  EXPECT_GT(sys.n_levels(), 1);
+  EXPECT_FALSE(sys.patch_boxes().empty());
 
   const double m0a = sys.mass("a");  // declenche le build paresseux
   const double m0b = sys.mass("b");

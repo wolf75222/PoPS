@@ -169,8 +169,10 @@ def test_native_amr_tagging_has_only_the_prepared_installation_route() -> None:
         + "\n  ".join(violations)
     )
     assert "_set_bootstrap_tagging" in sources["python/bindings/core/init/init_amr.cpp"]
-    assert "flow_bootstrap_tagging" in sources[
-        "python/pops/runtime/_runtime_mesh_lowering.py"]
+    assert "_install_amr_tagger_component" not in sources["python/bindings/core/init/init_amr.cpp"]
+    lowering = sources["python/pops/runtime/_runtime_mesh_lowering.py"]
+    assert "flow_bootstrap_tagging" in lowering and "sim._set_generated_tagging(" in lowering
+    assert "_set_bootstrap_tagging" not in lowering
     assert "struct Regrid" not in sources["include/pops/runtime/amr_system.hpp"]
     assert ".regrid.threshold" not in sources["src/runtime/amr/amr_system.cpp"]
 
@@ -389,8 +391,12 @@ def test_program_has_one_runtime_branch_spelling() -> None:
 def test_time_presets_are_factories_for_ordinary_programs() -> None:
     from pops.lib import time
 
+    from pops.lib.time import methods
+    from pops.surface._method import SurfaceMethod
+
     assert callable(time.SSPRK2)
-    assert not hasattr(time, "ssprk2")
+    # the lowercase name is the surface's @pops.method, re-exported (driver 14:12), not a factory
+    assert time.ssprk2 is methods.ssprk2 and type(time.ssprk2) is SurfaceMethod
 
 
 def test_tracked_tests_never_consume_retired_root_engine_attributes() -> None:

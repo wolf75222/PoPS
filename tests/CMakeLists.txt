@@ -695,13 +695,98 @@ pops_test_source(_src test_amr_synthetic_program_loader_transaction)
 pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_amr_synthetic_program_loader_transaction SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
-# CTest starts a fresh process for every case. Build the six exact source variants once,
+# Generate each test-owned predicate once with the production Python compiler. Only the
+# tagged fixture targets require this interpreter and its NumPy dependency.
+set(_amr_criteria_dir "${CMAKE_CURRENT_BINARY_DIR}/amr-fixture-criteria")
+set(_amr_criteria_outputs "${_amr_criteria_dir}/amr_fixture_criteria_generated.hpp")
+set(_standalone_amr_criteria
+  standalone_tracer standalone_energy standalone_density
+  standalone_history_budget standalone_named_field standalone_field_publication
+  standalone_positive_tracer standalone_bootstrap_sync standalone_distributed_tracer
+  standalone_secondary_block standalone_sparse_parent standalone_helmholtz
+  standalone_constant standalone_cell_integral standalone_gaussian)
+foreach(_criterion synthetic_history synthetic_interface synthetic_attempt field_rhs_value field_rhs_incidence
+    ${_standalone_amr_criteria})
+  list(APPEND _amr_criteria_outputs "${_amr_criteria_dir}/${_criterion}.cpp")
+endforeach()
+file(GLOB_RECURSE _pops_criterion_python_sources CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/python/pops/*.py")
+set(_generate_amr_criteria
+  "${CMAKE_COMMAND}" -E echo "The generated AMR fixture targets require Python >=3.10 and NumPy >=1.24"
+  COMMAND "${CMAKE_COMMAND}" -E false)
+set(_amr_fixture_python "${Python3_EXECUTABLE}")
+if(DEFINED ENV{POPS_AMR_FIXTURE_PYTHON})
+  set(_amr_fixture_python "$ENV{POPS_AMR_FIXTURE_PYTHON}")
+endif()
+if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
+  set(_generate_amr_criteria
+    "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+    "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+    "${_amr_criteria_dir}" "${POPS_NATIVE_DIM}")
+endif()
+add_custom_command(OUTPUT ${_amr_criteria_outputs}
+  COMMAND ${_generate_amr_criteria}
+  DEPENDS cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+  VERBATIM)
+add_custom_target(pops_amr_fixture_criteria DEPENDS ${_amr_criteria_outputs})
+function(pops_use_amr_fixture_criteria target)
+  add_dependencies(${target} pops_amr_fixture_criteria)
+  target_include_directories(${target} PRIVATE "${_amr_criteria_dir}")
+endfunction()
+pops_use_amr_fixture_criteria(test_amr_synthetic_program_loader_transaction)
+pops_use_amr_fixture_criteria(test_prepared_field_rhs_inputs)
+pops_use_amr_fixture_criteria(test_amr_seed_no_refine)
+pops_use_amr_fixture_criteria(test_amr_regrid_variable)
+
+function(pops_add_standalone_amr_criterion variant)
+  set(_module "pops_amr_${variant}")
+  set(_library "${_amr_criteria_dir}/${variant}.cpp")
+  add_library(${_module} SHARED EXCLUDE_FROM_ALL "${_library}")
+  target_link_libraries(${_module} PRIVATE pops::pops)
+  target_compile_definitions(${_module} PRIVATE POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
+  target_compile_options(${_module} PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
+  set_target_properties(${_module} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  add_dependencies(${_module} pops_amr_fixture_criteria)
+
+  set(_receipt "${_amr_criteria_dir}/${variant}-$<CONFIG>.binary-id")
+  add_custom_command(OUTPUT "${_receipt}"
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+      "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+      --binary-identity $<TARGET_FILE:${_module}> "${_receipt}"
+    DEPENDS ${_module} cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+    VERBATIM)
+  add_custom_target(${_module}_receipt DEPENDS "${_receipt}")
+endfunction()
+
+function(pops_use_standalone_amr_criterion target)
+  target_include_directories(${target} PRIVATE "${_amr_criteria_dir}")
+  foreach(variant IN LISTS ARGN)
+    set(_module "pops_amr_${variant}")
+    set(_receipt "${_amr_criteria_dir}/${variant}-$<CONFIG>.binary-id")
+    add_dependencies(${target} ${_module}_receipt)
+    target_compile_definitions(${target} PRIVATE
+      POPS_TEST_${variant}_DSO="$<TARGET_FILE:${_module}>" POPS_TEST_${variant}_RECEIPT="${_receipt}")
+  endforeach()
+endfunction()
+
+foreach(_criterion IN LISTS _standalone_amr_criteria)
+  pops_add_standalone_amr_criterion(${_criterion})
+endforeach()
+pops_use_standalone_amr_criterion(test_amr_seed_no_refine standalone_tracer)
+pops_use_standalone_amr_criterion(test_amr_regrid_variable standalone_energy standalone_density)
+pops_use_standalone_amr_criterion(test_amr_seed_no_refine standalone_positive_tracer)
+pops_use_standalone_amr_criterion(test_generated_amr_system_block
+  standalone_sparse_parent standalone_helmholtz standalone_constant standalone_cell_integral
+  standalone_gaussian)
+
+# CTest starts a fresh process for every case. Build the seven exact source variants once,
 # rather than repeating eleven expensive compiler invocations inside the test watchdog.
 # Reuse native_dso_compiler so compiler, -O2, header ABI, Kokkos and MPI flags stay identical.
 add_executable(pops_build_synthetic_loader_fixture EXCLUDE_FROM_ALL
   cpp/support/build_synthetic_loader_fixture.cpp)
 target_link_libraries(pops_build_synthetic_loader_fixture PRIVATE pops::pops)
 target_compile_features(pops_build_synthetic_loader_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+pops_use_amr_fixture_criteria(pops_build_synthetic_loader_fixture)
 target_compile_definitions(pops_build_synthetic_loader_fixture PRIVATE ${_native_defs})
 set(_synthetic_fixture_dir "${CMAKE_CURRENT_BINARY_DIR}/synthetic-loader-fixtures")
 file(MAKE_DIRECTORY "${_synthetic_fixture_dir}")
@@ -713,10 +798,18 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set(_synthetic_fixture_outputs "")
 foreach(_variant 4 8 9 10 12 28 42)
   set(_stem "${_synthetic_fixture_dir}/${_variant}")
+  if(_variant EQUAL 9)
+    set(_criterion synthetic_interface)
+  elseif(_variant EQUAL 4 OR _variant EQUAL 12 OR _variant EQUAL 28)
+    set(_criterion synthetic_attempt)
+  else()
+    set(_criterion synthetic_history)
+  endif()
+  set(_fragment "${_amr_criteria_dir}/${_criterion}.cpp")
   add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
     COMMAND $<TARGET_FILE:pops_build_synthetic_loader_fixture>
-      "${_variant}" "${_stem}.cpp" "${_stem}.so"
-    DEPENDS pops_build_synthetic_loader_fixture
+      "${_variant}" "${_stem}.cpp" "${_stem}.so" "${_fragment}"
+    DEPENDS pops_build_synthetic_loader_fixture "${_fragment}"
       cpp/support/synthetic_loader_fixture.hpp cpp/support/native_dso_compiler.hpp
       "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
     JOB_POOL pops_heavy_test_tu
@@ -745,7 +838,29 @@ add_custom_command(OUTPUT "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_
   VERBATIM)
 add_custom_target(pops_field_rhs_value_program_fixture
   DEPENDS "${_field_rhs_fixture_stem}.so" "${_field_rhs_fixture_stem}.cpp")
-add_dependencies(test_prepared_field_rhs_inputs pops_field_rhs_value_program_fixture)
+add_executable(pops_build_tagged_field_rhs_value_program_fixture EXCLUDE_FROM_ALL
+  cpp/support/build_field_rhs_value_program_fixture.cpp)
+target_link_libraries(pops_build_tagged_field_rhs_value_program_fixture PRIVATE pops::pops)
+target_compile_features(pops_build_tagged_field_rhs_value_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+target_compile_definitions(pops_build_tagged_field_rhs_value_program_fixture PRIVATE
+  ${_field_rhs_native_defs} POPS_TEST_GENERATED_FIXTURE_CRITERION)
+pops_use_amr_fixture_criteria(pops_build_tagged_field_rhs_value_program_fixture)
+set(_tagged_field_rhs_stem "${_field_rhs_fixture_stem}-tagged")
+set(_value_fragment "${_amr_criteria_dir}/field_rhs_value.cpp")
+add_custom_command(OUTPUT "${_tagged_field_rhs_stem}.so" "${_tagged_field_rhs_stem}.cpp"
+  COMMAND $<TARGET_FILE:pops_build_tagged_field_rhs_value_program_fixture>
+    "${_tagged_field_rhs_stem}.cpp" "${_tagged_field_rhs_stem}.so" "${_value_fragment}"
+  DEPENDS pops_build_tagged_field_rhs_value_program_fixture "${_value_fragment}"
+    cpp/support/field_rhs_value_program_fixture.hpp cpp/support/native_dso_compiler.hpp
+    "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+  JOB_POOL pops_heavy_test_tu
+  VERBATIM)
+add_custom_target(pops_tagged_field_rhs_value_program_fixture
+  DEPENDS "${_tagged_field_rhs_stem}.so" "${_tagged_field_rhs_stem}.cpp")
+add_dependencies(test_prepared_field_rhs_inputs
+  pops_field_rhs_value_program_fixture pops_tagged_field_rhs_value_program_fixture)
+target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
+  POPS_TEST_TAGGED_FIELD_RHS_VALUE_PROGRAM_SO="${_tagged_field_rhs_stem}.so")
 target_compile_definitions(test_prepared_field_rhs_inputs PRIVATE
   POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO="${_field_rhs_fixture_stem}.so")
 add_dependencies(test_generated_amr_system_block pops_field_rhs_value_program_fixture)
@@ -760,12 +875,14 @@ add_executable(pops_build_field_rhs_aux_incidence_program_fixture EXCLUDE_FROM_A
   cpp/support/build_field_rhs_aux_incidence_program_fixture.cpp)
 target_link_libraries(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE pops::pops)
 target_compile_features(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE cxx_std_${POPS_CXX_STD})
+pops_use_amr_fixture_criteria(pops_build_field_rhs_aux_incidence_program_fixture)
 target_compile_definitions(pops_build_field_rhs_aux_incidence_program_fixture PRIVATE ${_field_rhs_native_defs})
 set(_field_rhs_aux_incidence_stem "${CMAKE_CURRENT_BINARY_DIR}/field-rhs-aux-incidence-program-fixture")
+set(_incidence_fragment "${_amr_criteria_dir}/field_rhs_incidence.cpp")
 add_custom_command(OUTPUT "${_field_rhs_aux_incidence_stem}.so" "${_field_rhs_aux_incidence_stem}.cpp"
   COMMAND $<TARGET_FILE:pops_build_field_rhs_aux_incidence_program_fixture>
-    "${_field_rhs_aux_incidence_stem}.cpp" "${_field_rhs_aux_incidence_stem}.so"
-  DEPENDS pops_build_field_rhs_aux_incidence_program_fixture
+    "${_field_rhs_aux_incidence_stem}.cpp" "${_field_rhs_aux_incidence_stem}.so" "${_incidence_fragment}"
+  DEPENDS pops_build_field_rhs_aux_incidence_program_fixture "${_incidence_fragment}"
     "${POPS_HEADER_ROOT}/pops/runtime/nd_proof/field_rhs_aux_incidence_program_fixture.hpp"
     cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
   JOB_POOL pops_heavy_test_tu
@@ -828,6 +945,10 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_use_standalone_amr_criterion(test_amr_history_ring standalone_history_budget)
+pops_use_standalone_amr_criterion(test_amr_named_field standalone_named_field)
+pops_use_standalone_amr_criterion(test_amr_program_field_publication standalone_field_publication)
+pops_use_standalone_amr_criterion(test_amr_system_contract standalone_bootstrap_sync)
 
 pops_test_source(_src test_collective_step_rejection)
 pops_add_gtest_suite(NAME test_collective_step_rejection SOURCES "${_src}")
@@ -964,6 +1085,93 @@ pops_add_gtest_suite(NAME test_external_brick_isolation SOURCES "${_src}" EXTRA_
     POPS_ISO_FIXTURE_B_SO="$<TARGET_FILE:pops_iso_fixture_b>")
 add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixture_b)
 
+
+set(_euler_dir "${CMAKE_CURRENT_BINARY_DIR}/euler-amr-fixtures")
+set(_euler_outputs "${_euler_dir}/euler_amr_fixture_criteria_generated.hpp"
+  "${_euler_dir}/compiled_parity.cpp" "${_euler_dir}/regrid_parity.cpp"
+  "${_euler_dir}/gravity.cpp" "${_euler_dir}/riemann.cpp"
+  "${_euler_dir}/magnetic.cpp" "${_euler_dir}/magnetic_union.cpp" "${_euler_dir}/fickian.cpp"
+  "${_euler_dir}/empty_cadence.cpp" "${_euler_dir}/scalar_history.cpp")
+if(IS_ABSOLUTE "${_amr_fixture_python}" AND EXISTS "${_amr_fixture_python}")
+  set(_generate_euler "${CMAKE_COMMAND}" -E env --unset=PYTHONPATH PYTHONDONTWRITEBYTECODE=1
+    "${_amr_fixture_python}" "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support/generate_amr_fixture_criteria.py"
+    "${_euler_dir}" "${POPS_NATIVE_DIM}" --euler)
+else()
+  set(_generate_euler ${_generate_amr_criteria})
+endif()
+add_custom_command(OUTPUT ${_euler_outputs}
+  COMMAND ${_generate_euler}
+  DEPENDS cpp/support/generate_amr_fixture_criteria.py ${_pops_criterion_python_sources}
+  VERBATIM)
+add_custom_target(pops_euler_amr_criteria DEPENDS ${_euler_outputs})
+add_executable(pops_build_euler_amr_fixture_program EXCLUDE_FROM_ALL
+  cpp/support/build_euler_amr_fixture_program.cpp)
+target_link_libraries(pops_build_euler_amr_fixture_program PRIVATE pops::pops)
+target_compile_features(pops_build_euler_amr_fixture_program PRIVATE cxx_std_${POPS_CXX_STD})
+pops_native_loader_definitions(_euler_native_defs)
+target_compile_definitions(pops_build_euler_amr_fixture_program PRIVATE ${_euler_native_defs})
+add_dependencies(pops_build_euler_amr_fixture_program pops_euler_amr_criteria)
+target_include_directories(pops_build_euler_amr_fixture_program PRIVATE "${_euler_dir}")
+set(_fixture_support "${CMAKE_CURRENT_SOURCE_DIR}/cpp/support")
+set(_euler_variants gravity riemann fickian empty_cadence
+  scalar_history scalar_history_ghost scalar_history_output_2 scalar_history_dense_1
+  scalar_history_dense_2)
+if(POPS_NATIVE_DIM LESS_EQUAL 2)
+  list(APPEND _euler_variants magnetic prepared_constitutive)
+endif()
+if(POPS_NATIVE_DIM EQUAL 2)
+  list(APPEND _euler_variants magnetic_union)
+endif()
+if(POPS_HAS_MPI)
+  list(APPEND _euler_variants compiled_parity regrid_parity)
+endif()
+foreach(_variant IN LISTS _euler_variants)
+  set(_stem "${_euler_dir}/${_variant}-program")
+  set(_fragment "${_euler_dir}/${_variant}.cpp")
+  set(_step_headers cpp/support/explicit_amr_program.hpp)
+  if(_variant MATCHES "^scalar_history")
+    set(_fragment "${_euler_dir}/scalar_history.cpp")
+  elseif(_variant STREQUAL "prepared_constitutive")
+    set(_fragment "${_euler_dir}/fickian.cpp")
+    list(APPEND _step_headers cpp/support/prepared_constitutive_amr_program.hpp)
+  endif()
+  add_custom_command(OUTPUT "${_stem}.so" "${_stem}.cpp"
+    COMMAND $<TARGET_FILE:pops_build_euler_amr_fixture_program> "${_variant}"
+      "${_fixture_support}/euler_amr_fixture_program.cpp.in" "${_fragment}"
+      "${_fixture_support}" "${_stem}.cpp" "${_stem}.so"
+    DEPENDS pops_build_euler_amr_fixture_program "${_fragment}"
+      cpp/support/euler_amr_fixture_program.cpp.in ${_step_headers}
+      cpp/support/native_dso_compiler.hpp "${POPS_HEADER_MANIFEST}" ${_synthetic_fixture_headers}
+    JOB_POOL pops_heavy_test_tu
+    VERBATIM)
+  add_custom_target(pops_euler_amr_${_variant} DEPENDS "${_stem}.so" "${_stem}.cpp")
+endforeach()
+
+function(pops_use_euler_amr_fixture target variant program_macro)
+  add_dependencies(${target} pops_euler_amr_${variant})
+  target_include_directories(${target} PRIVATE "${_euler_dir}")
+  target_compile_definitions(${target} PRIVATE
+    ${program_macro}="${_euler_dir}/${variant}-program.so")
+  set_target_properties(${target} PROPERTIES ENABLE_EXPORTS ON)
+endfunction()
+pops_use_euler_amr_fixture(test_amr_distribute_coarse_serial gravity POPS_TEST_GRAVITY_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_seed_no_refine empty_cadence POPS_TEST_EMPTY_CADENCE_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history POPS_TEST_SCALAR_HISTORY_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_output_2 POPS_TEST_SCALAR_HISTORY_OUTPUT_2_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_dense_1 POPS_TEST_SCALAR_HISTORY_DENSE_1_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_scalar_output_history scalar_history_dense_2 POPS_TEST_SCALAR_HISTORY_DENSE_2_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_history_remap_collective scalar_history_ghost POPS_TEST_SCALAR_HISTORY_GHOST_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_riemann_native riemann POPS_TEST_RIEMANN_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_riemann_native gravity POPS_TEST_RIEMANN_WRONG_PROGRAM_SO)
+pops_use_euler_amr_fixture(test_amr_program_diffusion fickian POPS_TEST_FICKIAN_PROGRAM_SO)
+if(POPS_NATIVE_DIM LESS_EQUAL 2)
+  pops_use_euler_amr_fixture(test_amr_system_contract magnetic POPS_TEST_MAGNETIC_PROGRAM_SO)
+  pops_use_euler_amr_fixture(test_amr_program_diffusion prepared_constitutive
+    POPS_TEST_CONSTITUTIVE_PROGRAM_SO)
+endif()
+if(POPS_NATIVE_DIM EQUAL 2)
+  pops_use_euler_amr_fixture(test_amr_system_contract magnetic_union POPS_TEST_MAGNETIC_UNION_PROGRAM_SO)
+endif()
 
 if(POPS_HAS_MPI)
   pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
@@ -1186,6 +1394,11 @@ if(POPS_HAS_MPI)
         COMPILE_DEFINITIONS ${_compile_definitions})
     endif()
   endforeach()
+  pops_use_euler_amr_fixture(test_mpi_amr_compiled_parity compiled_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
+  pops_use_euler_amr_fixture(test_amr_regrid_mpi_parity regrid_parity POPS_TEST_MPI_EULER_PROGRAM_SO)
+  pops_use_standalone_amr_criterion(test_mpi_amr_twoblock_parity
+    standalone_distributed_tracer standalone_positive_tracer)
+  pops_use_standalone_amr_criterion(test_mpi_field_plan_consensus standalone_secondary_block)
   # Runtime-generated Kokkos components resolve symbols from their authenticated host.
   # Static Kokkos requires the same export contract as the other native-loader fixtures.
   set_target_properties(test_mpi_system_layout_transfer PROPERTIES ENABLE_EXPORTS ON)

@@ -12,6 +12,15 @@ from pops.identity import Identity, make_identity
 from ._plans import ResolvedSimulationPlan, _deep_freeze, _evidence
 
 
+def _thaw(value: Any) -> Any:
+    """Undo :func:`_deep_freeze` on identity data (mappings and tuples only)."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_thaw(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledPlanBlock:
     """Compiler facts retained for one block after authoring objects are discarded."""
@@ -27,6 +36,8 @@ class CompiledPlanBlock:
     model_owner: Any = None
     declares_auxiliary_providers: bool = False
     resolved_operations: Any = None
+    moving_volume_component: int | None = None
+    moving_incidence: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -46,6 +57,12 @@ class CompiledPlanBlock:
             raise TypeError(
                 "CompiledPlanBlock state_identities must uniquely qualify every state space")
         object.__setattr__(self, "state_identities", state_identities)
+        if self.moving_volume_component is not None and (
+                type(self.moving_volume_component) is not int or self.moving_volume_component < 0):
+            raise TypeError("CompiledPlanBlock moving volume must identify a component ordinal")
+        if type(self.moving_incidence) is not bool or (
+                self.moving_incidence and self.moving_volume_component is None):
+            raise TypeError("moving incidence requires an exact moving geometry owner")
         if not isinstance(self.instance_owner_qid, str) or not self.instance_owner_qid:
             raise TypeError(
                 "CompiledPlanBlock instance_owner_qid must be a canonical Case-block instance owner"
@@ -139,6 +156,10 @@ class CompiledPlanRecord:
         if type(plan) is not ResolvedSimulationPlan:
             raise TypeError("CompiledPlanRecord requires an exact ResolvedSimulationPlan")
         plan.verify()
+        from pops.mesh.moving_configuration import MEMBER_COMPONENTS, members_of
+        from ._moving_members_consumers import moving_incidence_states
+
+        incidences = moving_incidence_states(plan.time)
         return cls(
             plan_identity=Identity.from_data(plan.plan_identity.to_data()),
             snapshot=plan.snapshot,
@@ -170,7 +191,10 @@ class CompiledPlanRecord:
                     instance_owner=block.instance_owner,
                     model_owner=block.model_owner,
                     declares_auxiliary_providers=block.declares_auxiliary_providers,
-                    resolved_operations=block.resolved_operations)
+                    resolved_operations=block.resolved_operations,
+                    moving_volume_component=(None if members_of(block.model) is None
+                                             else MEMBER_COMPONENTS.index("volume")),
+                    moving_incidence=not incidences.isdisjoint(block.state_identities))
                 for block in plan.blocks
             ),
             time_identity=_evidence(plan.time, where="resolved time"),
@@ -352,6 +376,9 @@ class CompiledPlanRecord:
                     "backend": block.backend,
                     "state_spaces": block.state_spaces,
                     "state_identities": block.state_identities,
+                    **({"moving_volume_component": block.moving_volume_component}
+                       if block.moving_volume_component is not None else {}),
+                    **({"moving_incidence": True} if block.moving_incidence else {}),
                     "instance_owner_qid": block.instance_owner_qid,
                     "instance_owner": block.instance_owner,
                     "model_owner": block.model_owner,
@@ -590,8 +617,10 @@ class CompiledSimulationArtifact:
     layout_programs: tuple[CompiledLayoutProgram, ...] = ()
     component_artifacts: tuple[Any, ...] = ()
     artifact_identity: Identity = field(init=False)
+    program_id: Identity = field(init=False)
     platform_manifest: Any = field(init=False)
     _component_evidence: Any = field(init=False, repr=False)
+    _program_evidence: Any = field(init=False, repr=False)
     _retained_source_evidence: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -708,6 +737,39 @@ class CompiledSimulationArtifact:
         object.__setattr__(
             self, "artifact_identity", make_identity(
                 "artifact", self._payload(evidence, platform)))
+        program_evidence = self._current_program_evidence(platform)
+        object.__setattr__(self, "_program_evidence", _deep_freeze(program_evidence))
+        object.__setattr__(self, "program_id", make_identity("program", program_evidence))
+
+    def _current_program_evidence(self, platform: Any) -> dict[str, Any]:
+        """The ``program_id`` preimage (spec 0.3 CC2, CN9; N11 lot 2b).
+
+        The normalized IR and every resolved choice (the name-free plan identity, which holds the
+        name-free artifact projection), the target and platform, the toolchain, flags, routes and
+        libraries of each Program, and the emitter, ``codegen_source_authority()``. Not the binary
+        bytes, the generated source or the names, which are manifest provenance (CC10, CC11).
+        """
+        from pops.codegen.model_compile_evidence import codegen_source_authority
+
+        programs = []
+        for row in self.layout_programs:
+            toolchain = getattr(row.program, "toolchain_evidence", None)
+            programs.append(None if toolchain is None else _evidence(
+                toolchain, where="layout program toolchain"))
+        return {
+            "schema_version": 1,
+            "plan_identity": self.plan.plan_identity.to_data(),
+            "target": self.plan.target,
+            "backend": self.plan.backend,
+            "platform_manifest": platform.to_data(),
+            "programs": programs,
+            "blocks": [
+                {name: _evidence(getattr(block.model, name, None), where="block %s" % name)
+                 for name in ("target", "backend", "abi_key")}
+                for block in self.blocks
+            ],
+            "codegen_source_authority": codegen_source_authority(),
+        }
 
     @property
     def authoring_snapshot(self) -> Any:
@@ -892,6 +954,10 @@ class CompiledSimulationArtifact:
                     "availability": "retained" if source is not None else "unavailable",
                     "model_compile": component.source_provenance()
                     if callable(getattr(component, "source_provenance", None)) else None,
+                    "guard_origins": tuple(
+                        (site.to_data(), site.python_origin.to_data())
+                        for site in getattr(component, "guard_failure_sites", ())
+                    ),
                 }
             )
         return {"contract": "pops.compiled-program.source-evidence@2", "components": evidence,
@@ -946,14 +1012,33 @@ class CompiledSimulationArtifact:
                 or self._component_evidence != _deep_freeze(current)
                 or self.platform_manifest != current_platform):
             raise ValueError("CompiledSimulationArtifact identity verification failed")
+        recorded = _thaw(self._program_evidence)
+        if (recorded.get("plan_identity") != self.plan.plan_identity.to_data()
+                or recorded.get("platform_manifest") != current_platform.to_data()
+                or self.program_id != make_identity("program", recorded)):
+            raise ValueError("CompiledSimulationArtifact program_id verification failed")
 
     @property
     def source_maps(self) -> dict[str, Any]:
-        """Owner-qualified exact Program maps; no model-carrier substitution."""
+        """Owner-qualified exact maps; no model-carrier substitution.
+
+        The Program maps (``pops.program-source-map@1``), under ``layout:<id>`` or ``program``,
+        and, under ``block:<name>``, the map of each block whose model C++ holds a policy
+        generated from a Python body (``pops.model-source-map@1``): the face of a
+        ``riemann.User`` and the trace of a ``reconstruction.User``, with the file and line where
+        each body is written."""
         if self.layout_programs:
-            return {"layout:" + row.layout_id: row.program.source_maps["program"]
+            maps = {"layout:" + row.layout_id: row.program.source_maps["program"]
                     for row in self.layout_programs if "program" in row.program.source_maps}
-        return {} if self.program is None else self.program.source_maps
+        else:
+            maps = {} if self.program is None else dict(self.program.source_maps)
+        from .model_source_map import model_source_map, user_bodies
+
+        for block in getattr(self, "blocks", ()):
+            source = getattr(block.model, "_generated_cpp", None)
+            if type(source) is str and user_bodies(block.spatial):
+                maps["block:" + block.name] = model_source_map(source, block.spatial)
+        return maps
 
     def inspect(self) -> Any:
         from pops.codegen.inspect_report import build_compiled_report

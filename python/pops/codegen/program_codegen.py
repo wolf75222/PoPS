@@ -307,6 +307,7 @@ def _emit_cpp_program_impl(
                                          instance_contracts=graph_instance_contracts(authority))
     from pops.codegen.program_value_authority import prepare_program_value_authority
     value_authority = prepare_program_value_authority(program, authority, field_plans or {}, target=target)
+    exchange_metadata: list[str] = []
     prelude, body, post_synchronization, operator_authorities = _emit_body(
         program,
         authority,
@@ -316,6 +317,7 @@ def _emit_cpp_program_impl(
         has_shared_interface_implicit_jacvec=has_shared_interface_implicit_jacvec,
         provider_plans=provider_plans,
         value_authority=value_authority,
+        exchange_metadata=exchange_metadata,
     )
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and one target-qualified entry accepting the authenticated runtime
@@ -357,6 +359,7 @@ def _emit_cpp_program_impl(
         dt_bound=_emit_dt_bound_entry(target, dt_bound_body, dt_bound_value),
         advance_control=(_emit_advance_control(program)
                          + _emit_advance_outputs(program, authority, target)
+                         + _emit_advance_step_bound(program, authority, target)
                          + _refuse_advance_memory_route(program, target)),
         module_metadata=(_emit_module_metadata(program, authority)
                          + _emit_uniform_history_metadata(program, target)),
@@ -406,7 +409,7 @@ def _emit_cpp_program_impl(
             'extern "C" std::uint64_t pops_relayout_byte_count() {\n'
             "  return pops::runtime::program::relayout_bytes().load(std::memory_order_relaxed);\n"
             "}\n")
-    return _PROGRAM_CPP_TEMPLATE.format(**parts)
+    return _PROGRAM_CPP_TEMPLATE.format(**parts) + "".join(exchange_metadata)
 
 
 def _emit_uniform_clock_manifest(program: Any) -> str:
@@ -612,6 +615,15 @@ def _emit_advance_outputs(program: Any, model: Any, target: str) -> str:
         "  switch (output) {\n%s    default: break;\n  }\n"
         '  throw std::out_of_range("pops_program_advance_output_scalars: no such Output");\n'
         "}\n" % (len(regions), count_cases, "".join(cases)))
+
+
+def _emit_advance_step_bound(program: Any, model: Any, target: str) -> str:
+    """The step bound of the cells rule of the elaborated Advance (N8 « dt= as a function of cell »,
+    D2), read by its loader; a Program without a cells rule exports no entry, so its translation
+    unit is unchanged."""
+    from pops.codegen.program_emit_step_bound import emit_step_bound
+
+    return emit_step_bound(program, model, target)
 
 
 def _emit_dt_bound_entry(target: str, body: str, value_name: str | None = None) -> str:

@@ -107,3 +107,11 @@ metric = "program_cg_throughput_over_native_cg"
 minimum_ratio = 0.9
 job_script = "benchmarks/romeo/n9_m08_gap.sbatch"
 submit_script = "benchmarks/romeo/submit_n9_m08_gap.sh"
+
+[campaigns.n9_relation_cost]
+routine_ci = false
+source = "benchmarks/n9_relation_cost"
+measurement_schema = "pops.n9.relation_cost.v1"
+protocol = "paired_ABBA"
+metric = "reference_relation_time_per_step_over_native_witness"
+maximum_ratio = 10.0

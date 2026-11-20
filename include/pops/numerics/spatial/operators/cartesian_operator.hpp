@@ -210,6 +210,20 @@ struct IdentityFaceTrace {
                           const FaceIndex<Dim, Axis>&, Pair&) const {}
 };
 
+template <int Dim, class Model, class ProviderStorage>
+struct FaceCoordinateProviders {
+  static constexpr bool certified_face_point = true;
+  const ProviderStorage& cell;
+  RealVector<Dim> point;
+
+  POPS_HD Real operator()(const Index<Dim>& index, int slot) const {
+    for (const auto& coordinate : Model::flux_coordinate_slots)
+      if (coordinate.storage_slot == slot)
+        return point[coordinate.axis];
+    return cell(index, slot);
+  }
+};
+
 template <int Axis, ReconstructionVariables Variables, int Dim, class Model, class Metric,
           class Reconstruction, class NumericalFlux, class ProviderStorage, class TraceTransform>
 struct MaterializeFaceFlux {
@@ -282,13 +296,31 @@ struct MaterializeFaceFlux {
     // The face law on the logical axis of a Cartesian metric, or on the physical normal that a
     // mapped metric publishes (N17): the choice is a property of the metric type.
     const auto evaluation = [&] {
-      if constexpr (metric_has_physical_face_normals<Metric>)
+      if constexpr (model_uses_flux_coordinates<Model> &&
+                    !metric_has_physical_face_normals<Metric>) {
+        // Both traces use the same point from the installed global periodic metric. The
+        // remaining provider slots keep their original trace indices.
+        auto point = face[Axis] == integrated_fluxes.cells.lo[Axis]
+                         ? metric.template face_center<Axis, MetricFaceSide::Lower>(right_cell)
+                         : metric.template face_center<Axis, MetricFaceSide::Upper>(left_cell);
+        if (static_cast<std::int64_t>(face[Axis]) ==
+            static_cast<std::int64_t>(domain.hi[Axis]) + 1) {
+          Index<Dim> representative = right_cell;
+          representative[Axis] = domain.lo[Axis];
+          point[Axis] =
+              metric.template face_center<Axis, MetricFaceSide::Lower>(representative)[Axis];
+        }
+        const FaceCoordinateProviders<Dim, Model, ProviderStorage> at_face{providers, point};
+        return evaluate_numerical_flux_at(numerical_flux, model, traces.left, at_face, left_cell,
+                                          traces.right, at_face, right_cell, context);
+      } else if constexpr (metric_has_physical_face_normals<Metric>) {
         return evaluate_numerical_flux_on_normal_at(numerical_flux, model, traces.left, providers,
                                                     left_cell, traces.right, providers, right_cell,
                                                     context);
-      else
+      } else {
         return evaluate_numerical_flux_at(numerical_flux, model, traces.left, providers, left_cell,
                                           traces.right, providers, right_cell, context);
+      }
     }();
     if (!evaluation.succeeded()) {
       fail(face, FiniteVolumeStatus::InvalidWaveSpeed);

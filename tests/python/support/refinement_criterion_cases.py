@@ -58,6 +58,8 @@ def advection_case(
     buffer: Buffer | None = None,
     name: str = "refinement_criterion_case",
     when: Callable[[SimpleNamespace], Any] | None = None,
+    model_parameters: dict[str, float] | None = None,
+    unread_model_parameters: tuple[str, ...] = (),
 ) -> tuple[Any, Any, SimpleNamespace]:
     """(case, layout, names); ``rules(names)`` returns the Tag and Coarsen rules of the case.
 
@@ -68,6 +70,13 @@ def advection_case(
     ``Buffer(cells=2)`` of tutorial 09. ``when(names)``, if given, returns the ``when`` body of the
     ``Regrid`` that the Program then writes, with the criterion; the layout writes neither
     ``tagging=`` nor ``regrid=``.
+
+    ``model_parameters`` declares RuntimeParams of the model, each read by a formula of the model:
+    the rate adds the source ``0 * p * u`` for each, which changes no value but gives each a slot in
+    the block's RuntimeParams table. ``names.model_value(key)`` is ``model.value(p)`` and
+    ``names.model_params[key]`` the block instance ``tracer[p]`` that ``bind`` keys. A key of
+    ``unread_model_parameters`` is declared without that source, so its block's table has no slot
+    for it.
     """
     domain = Rectangle("unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0)).tag("fluid")
     frame = domain.frame(Cartesian2D())
@@ -81,7 +90,19 @@ def advection_case(
     flux = model.flux("advection_flux", frame=frame, state=U,
                       components={x_axis: (1.0 * u,), y_axis: (0.25 * u,)},
                       waves={x_axis: (1.0,), y_axis: (0.25,)})
-    rate = model.rate("advection_rate", equation=ddt(U) == -div(flux))
+    model_handles = {key: model.param(RuntimeParam(key, default=value))
+                     for key, value in (model_parameters or {}).items()}
+    if set(model_handles) - set(unread_model_parameters):
+        terms = None
+        for key, handle in model_handles.items():
+            if key in unread_model_parameters:
+                continue
+            term = 0.0 * model.value(handle) * u
+            terms = term if terms is None else terms + term
+        source = model.source("parameter_reads", on=U, value=(terms,))
+        rate = model.rate("advection_rate", equation=ddt(U) == -div(flux) + source)
+    else:
+        rate = model.rate("advection_rate", equation=ddt(U) == -div(flux))
     method = FiniteVolume(
         flux=flux, variables=variables.Conservative(U),
         reconstruction=reconstruction.MUSCL(limiters.VanLeer()),
@@ -113,6 +134,8 @@ def advection_case(
     names = SimpleNamespace(
         case=case, frame=frame, state=state, params=params, program=program,
         value=lambda key: case.value(params[key]),
+        model_value=lambda key: model.value(model_handles[key]),
+        model_params={key: tracer[handle] for key, handle in model_handles.items()},
         gradient=method.amr_indicator_stencil(dimension=len(frame.axes)))
     tagging = AMRTagging(
         rules=tuple(rules(names)) + (Buffer(cells=2) if buffer is None else buffer,),

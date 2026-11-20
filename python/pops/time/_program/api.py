@@ -205,6 +205,10 @@ class Program(
         # The Outputs of that Advance (outputs.OutputRegion), each a read-only region of the builder
         # evaluated by the compiled run between steps (spec 0.3 CC14); they enter the identity.
         self._advance_outputs = ()
+        # The step bound of that Advance's cells rule (pops.time._step.bound.ResolvedStepBound), or
+        # None: dt= as a function of cell, generated into the Program (N8); it enters the identity
+        # through the compiled control, which records its qualified id.
+        self._advance_step_bound = None
         # ADC-563 freeze: a Program is MUTABLE while authored and FROZEN by pops.compile. After
         # freeze, adding an IR node (via _new) RAISES -- a compiled artifact is frozen to exactly the
         # program it was compiled from. Emission / hashing are pure reads and stay allowed.
@@ -331,6 +335,18 @@ class Program(
         if self._advance_outputs:
             raise ValueError("Program already elaborates the Outputs of an Advance")
         self._advance_outputs = regions
+
+    def _set_advance_step_bound(self, bound: Any) -> None:
+        """Record, once, the resolved step bound of the cells rule of the Advance that this Program
+        elaborates (N8 « dt= as a function of cell »)."""
+        from pops.time._step.bound import ResolvedStepBound
+
+        self._guard_mutable("set the Advance step bound")
+        if type(bound) is not ResolvedStepBound:
+            raise TypeError("Program._set_advance_step_bound takes a ResolvedStepBound")
+        if self._advance_step_bound is not None:
+            raise ValueError("Program already elaborates the step bound of an Advance")
+        self._advance_step_bound = bound
 
     def cadence(self, *, substeps: Any = 1, stride: Any = 1) -> Any:
         """Declare the global Program cadence once, before compile.

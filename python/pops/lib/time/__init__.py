@@ -4,6 +4,10 @@ Every factory returns an ordinary :class:`pops.Program` built from the same
 public operations available to user code.  Factories take exact block-owned
 state handles and exact model operator handles; they do not select physics by
 name, boolean flags, hidden defaults, or a preset-specific runtime route.
+
+The package also re-exports the methods of the surface, ``ssprk2`` and ``imex_euler`` of
+:mod:`.methods` (``@pops.method``), so that a case writes ``from pops.lib.time import ssprk2`` as
+spec 17.1 does (L1, CF17), on the model of ``pops.lib.numerics`` re-exporting ``ghosts`` (N3).
 """
 
 from .dirk import (BACKWARD_EULER_TABLEAU, DIRK, DiagonallyImplicitRungeKuttaTableau,
@@ -11,6 +15,7 @@ from .dirk import (BACKWARD_EULER_TABLEAU, DIRK, DiagonallyImplicitRungeKuttaTab
 from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
 from .imex import IMEX, IMEX_ARS222_TABLEAU, IMEX_EULER_TABLEAU
 from .limits import cfl_limit
+from .methods import imex_euler, ssprk2
 from .multistep import AdamsBashforth, BDF
 from .predictor_corrector import PredictorCorrector
 from .rk import (
@@ -59,4 +64,6 @@ __all__ = [
     "Strang",
     "cfl_limit",
     "every",
+    "imex_euler",
+    "ssprk2",
 ]

@@ -15,11 +15,14 @@ name (P10). Point dependence and linearity are derived on the normal form of dec
 This lot elaborates no form of its own. A definition equal to the one of ``CellAverage()``, one
 constant mode of scale 1 and no rule, takes the b6 route of ``pops.CellAverage()``
 (``ConservativeCellAverage()``): the transitional table of N16 5.5, which matches the whole
-definition identity, never a name. Every other definition is refused with the lot that elaborates
-it: a total by G03 lot M1 (the surface route of a total, with the moving configuration), a sample and
-a stated rule by the N16 lot that retires the transitional table (the projection by encode), a
-point-dependent decode and the loads by N16 lot 2, node carriers by N16 lot 3, face and edge carriers
-by G08.
+definition identity, never a name. The definitions of ``CellTotal()``, ``PointValue()`` and
+``CellAverage(quadrature=Q)``, matched the same way, take the row of b6 that serves them
+(``plan.representations.add``, G03 lot R-b): a total is decoded and encoded on a static
+configuration, a sample and a stated rule have the rate of an average (N16 5.1, A1), and the initial
+value of each is bound as data until N16 lot 2 gives the projection by encode (the N16 lot that
+lifts the table for these three words). Every other definition is refused with the lot that
+elaborates it: another constant mode, a point-dependent decode and the loads by N16 lot 2, node
+carriers by N16 lot 3, face and edge carriers by G08.
 """
 from __future__ import annotations
 
@@ -32,10 +35,6 @@ from ._refusal import (
     user_site,
 )
 
-_M1 = ("G03 lot M1 (the surface route of a total, with the moving configuration), with the oracle "
-       "tests of a total on a graded layout")
-_TABLE = ("the N16 lot that retires the transitional table of CellAverage() (the projection by "
-          "encode, line 4 of plan/routes_transitoires.md), with the oracle tests on a graded layout")
 _LOT_2 = ("N16 lot 2 (point-dependent cell carriers: the current point, the Gram matrix of the "
           "stated rule and the Riesz map)")
 _LOT_2_LOADS = "N16 lot 2 (loads, cell.load and the Riesz map of D2)"
@@ -462,8 +461,10 @@ def is_cell_average(definition: Any) -> bool:
 
 
 def elaborate(value: Any, quantity: Any) -> Any:
-    """The definition of the representation of ``quantity``, which this lot elaborates on the b6
-    route of ``pops.CellAverage()``, or the refusal of the lot that elaborates it."""
+    """The definition of the representation of ``quantity``, which the surface elaborates on the b6
+    route of ``pops.CellAverage()`` (the table of N16 5.5) or on the row of b6 that serves a total,
+    a sample or an average under a stated rule (``plan.representations.add``), or the refusal of
+    the lot that elaborates it."""
     if isinstance(value, SurfaceRepresentation):
         raise NotAPopsOperation("represent={%s: %s} holds the representation uncalled; a call "
                                 "states its options and runs nothing (SU5)"
@@ -492,17 +493,19 @@ def elaborate(value: Any, quantity: Any) -> Any:
             write="a decode linear in coefficients, or encode=", site=value.site)
     if is_cell_average(definition):
         return definition
+    from pops.numerics.plan import served_representation
     from pops.representations.definition import constant_mode_scale
 
-    scale = constant_mode_scale(definition)
-    if scale is not None:
-        # A total (c = 1 / cell.measure) is served by G03 lot M1; a sample or a stated rule differs
-        # from the table's average by its encode or its projection rule only, and is served by the
-        # lot that gives the projection by encode (review of #800, R1; driver 13/11 12:10).
+    if served_representation(definition) is not None:
+        # A total (c = 1/cell.measure), a sample or an average under a stated rule: the row of
+        # b6 that serves it (G03 lot R-b, N16 5.1, A1); its initial value is bound as data until
+        # N16 lot 2 gives the projection by encode (``_Elaboration.initial``).
+        return definition
+    if constant_mode_scale(definition) is not None:
         raise NotYetElaborated("represent={%s: %r}, one constant mode of kind %r%s"
                                % (quantity, value, definition.kind,
                                   "" if definition.pairing is None else " with a stated rule"),
-                               _M1 if scale == "unit" else _TABLE, site=value.site)
+                               _LOT_2, site=value.site)
     raise NotYetElaborated("represent={%s: %r}, whose constant mode is not 1 or 1/cell.measure"
                            % (quantity, value), _LOT_2, site=value.site)
 

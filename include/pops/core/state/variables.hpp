@@ -50,9 +50,13 @@ struct VariableSemantic {
 
   constexpr bool operator==(const VariableSemantic&) const = default;
   constexpr bool has_axis() const noexcept { return axis >= 0; }
+  constexpr bool is_axial() const noexcept { return kind == VariableRoleKind::Axial; }
   constexpr bool is_vector() const noexcept {
-    return kind == VariableRoleKind::Momentum || kind == VariableRoleKind::Velocity ||
-           kind == VariableRoleKind::Axial;
+    return kind == VariableRoleKind::Momentum || kind == VariableRoleKind::Velocity || is_axial();
+  }
+  /// The Cartesian scalar and polar actions do not serve undeclared or axial components.
+  constexpr bool has_cartesian_value_action() const noexcept {
+    return *this != custom() && !is_axial();
   }
 
   constexpr void validate() const {
@@ -64,10 +68,10 @@ struct VariableSemantic {
   template <int Dim>
   constexpr void validate_for_dimension() const {
     validate();
-    if (kind == VariableRoleKind::Axial && axis >= 3)
+    if (is_axial() && axis >= 3)
       throw std::invalid_argument(
           "axial variable semantic axis lies outside the physical x/y/z embedding");
-    if (kind != VariableRoleKind::Axial && has_axis() && axis >= Dim)
+    if (!is_axial() && has_axis() && axis >= Dim)
       throw std::invalid_argument("variable semantic axis lies outside the native dimension");
   }
 

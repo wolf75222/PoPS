@@ -10,6 +10,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/identity/sha256.hpp>
 #include <pops/mesh/execution/for_each.hpp>
+#include <pops/mesh/geometry/centroid_slope.hpp>
 #include <pops/mesh/geometry/swept_interval.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/parallel/consensus_words.hpp>
@@ -20,6 +21,7 @@
 #include <pops/runtime/program/solve_gates.hpp>
 #include <pops/numerics/elliptic/nd/cartesian_tensor_operator.hpp>
 #include <pops/numerics/spatial/nd/face_frequency.hpp>
+#include <pops/numerics/spatial/nd/static_geometry_face_frequency.hpp>
 #include <pops/runtime/config/runtime_params.hpp>
 #include <pops/runtime/multiblock/evaluation_point.hpp>
 #include <pops/runtime/program/clock_schedule.hpp>
@@ -28,6 +30,7 @@
 #include <pops/runtime/program/prepared_integral_capture.hpp>
 #include <pops/runtime/program/program_value_authority.hpp>
 #include <pops/runtime/program/field_exchange_expression.hpp>
+#include <pops/runtime/program/cell_total_scale.hpp>
 #include <pops/runtime/program/spatial_direct_interaction.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
 #include <pops/runtime/program/spatial_interaction_history_source.hpp>
@@ -110,6 +113,33 @@ struct GradientKernel {
       ++upper[axis];
       result(cell, axis) = (value(upper, 0) - value(lower, 0)) / (Real(2) * geometry.spacing(axis));
     }
+  }
+};
+
+/// The centred slope on static geometry arrays (N17 L2b-2, DN38): the differences of the two
+/// neighbour values along each axis, solved against the differences of the neighbour centroids by
+/// the header function that the generated cell read of N15 shares.
+template <int Dim>
+struct CentroidSlopeKernel {
+  FieldView<Real, Dim> result{};
+  FieldView<const Real, Dim> value{};
+  StaticGeometryView<Dim> arrays{};
+
+  POPS_HD Real operator()(const Index<Dim>& cell) const {
+    RealVector<Dim> differences{};
+    for (int axis = 0; axis < Dim; ++axis) {
+      Index<Dim> lower = cell;
+      Index<Dim> upper = cell;
+      --lower[axis];
+      ++upper[axis];
+      differences[axis] = value(upper, 0) - value(lower, 0);
+    }
+    RealVector<Dim> slope{};
+    if (centroid_slope(arrays, cell, differences, slope) != CentroidSlopeStatus::ok)
+      return Real(1);
+    for (int axis = 0; axis < Dim; ++axis)
+      result(cell, axis) = slope[axis];
+    return Real(0);
   }
 };
 
@@ -1159,6 +1189,16 @@ class ProgramContext {
     axpy(destination, factor, source);
   }
 
+  /// G03 lot R-b (ROM-21): ū = U/μ(K), the decode of a cell total into the stage field that the
+  /// face pass, the ghost fill and the diffusion read (cell_total_scale.hpp). Transitional: see
+  /// plan/routes_transitoires.md.
+  void decode_cell_total(const field_type& total, field_type& density) const {
+    scale_by_cell_measure_(total, density, true);
+  }
+
+  /// G03 lot R-b (ROM-21): R <- μ(K) R, the rate of the total from the rate of its density.
+  void encode_cell_total_rate(field_type& rate) const { scale_by_cell_measure_(rate, rate, false); }
+
   void lincomb(field_type& destination, Real left_factor, const field_type& left, Real right_factor,
                const field_type& right) const {
     const std::array<FieldExchangeExpressions::WeightedField, 2> terms{
@@ -1329,6 +1369,8 @@ class ProgramContext {
     runtime::system::require_active_mask_consensus(words, mask);
     return local.mask;
   }
+
+#include <pops/runtime/program/program_context_owned_guard_fold.inc>
 
   /// Uniform faces have no coarse coverage to exclude. Accepted-exchange producers
   /// query this separately from the embedded-boundary mask so the AMR route can
@@ -1926,6 +1968,11 @@ class ProgramContext {
                                const Boundary& boundary) const {
     require_scalar_stencil_(output, input, Dim, "Program gradient");
     boundary.fill(input);
+    if (const auto arrays = static_geometry()) {
+      evaluate_centroid_slopes_(output, input, arrays->view());
+      count_kernel_();
+      return;
+    }
     const Geometry<Dim> geom = boundary.geometry();
     for (std::size_t local = 0; local < output.local_size(); ++local) {
       const FieldView<Real, Dim> result = output.fab(local).view();
@@ -1934,6 +1981,40 @@ class ProgramContext {
                     program_context_detail::GradientKernel<Dim>{result, value, geom});
     }
     count_kernel_();
+  }
+
+  void evaluate_centroid_slopes_(field_type& output, const field_type& input,
+                                 const StaticGeometryView<Dim>& arrays) const {
+    constexpr long numerical_failure = 1;
+    constexpr long execution_failure = 2;
+    const auto& lane = prepared_execution_lane();
+    long local_status = 0;
+    std::exception_ptr local_error;
+    try {
+      for (std::size_t local = 0; local < output.local_size(); ++local) {
+        const auto result = output.fab(local).view();
+        const auto value = input.fab(local).view();
+        if (for_each_cell_reduce_max(
+                output.box(local),
+                program_context_detail::CentroidSlopeKernel<Dim>{result, value, arrays}) != Real(0))
+          local_status = numerical_failure;
+      }
+    } catch (...) {
+      local_error = std::current_exception();
+      local_status = execution_failure;
+    }
+    // A rank with no local cells votes success. This vote identifies the collective operation,
+    // without attributing a particular numerical cause to a cell or a rank.
+    const long status = all_reduce_max(local_status, lane);
+    if (status == execution_failure) {
+      if (lane.size() == 1 && local_error)
+        std::rethrow_exception(local_error);
+      throw std::runtime_error("Centred slope evaluation failed collectively");
+    }
+    if (status == numerical_failure)
+      throw StepAttemptRejected(SolveStatus::kInvalidEvaluation, StepAttemptDisposition::kReject, 0,
+                                "centroid_slope",
+                                "singular centroid differences or non-finite slope evaluation");
   }
 
  public:
@@ -2799,6 +2880,35 @@ class ProgramContext {
   /// neg_div_flux_default_into prepares a boundary session for it per evaluation
   /// (System::requires_block_boundary_session). The Outflow row of
   /// test_api_v02_python_faces_native.py compares the two routes on such a block.
+  void scale_by_cell_measure_(const field_type& source, field_type& destination,
+                              bool divide) const {
+    if (source.layout() != destination.layout() || source.ncomp() != destination.ncomp())
+      throw std::invalid_argument("cell total scaling requires fields of one layout");
+    const std::array<const void*, 1> inputs{{&source}};
+    field_exchanges_->prepare_write(&destination, inputs);
+    CellTotalScaleKernel<Dim> kernel{};
+    const auto arrays = system_->static_geometry();
+    kernel.mapped = arrays != nullptr;
+    if (kernel.mapped)
+      kernel.arrays = arrays->view();
+    const Geometry<Dim> uniform = geometry();
+    for (int axis = 0; axis < Dim; ++axis)
+      kernel.uniform_measure *= uniform.spacing(axis);
+    if (!std::isfinite(kernel.uniform_measure) || !(kernel.uniform_measure > Real(0)))
+      throw std::runtime_error("cell total scaling requires a positive cell measure");
+    kernel.divide = divide;
+    count_kernel_();
+    for (std::size_t local = 0; local < destination.local_size(); ++local) {
+      kernel.destination = destination.fab(local).view();
+      kernel.source = source.fab(local).view();
+      for (int component = 0; component < destination.ncomp(); ++component) {
+        kernel.component = component;
+        for_each_cell(destination.box(local), kernel);
+      }
+    }
+    field_exchanges_->finish_write(&destination);
+  }
+
   void neg_div_flux_default_observed_into_(int program_block, field_type& state_value,
                                            field_type& rhs, int rate_id,
                                            std::vector<nd::FaceField<Dim>>* faces,
@@ -2826,9 +2936,18 @@ class ProgramContext {
       std::exception_ptr error;
       try {
         boundary->transport().with_boundary_scratch(state_value, [&](auto& scratch) {
-          if (transport_frequency)
-            local_frequency = nd::maximum_incident_face_frequency(
-                state_value, scratch.cartesian_operator.face_speeds(), geometry(), frequency_rule);
+          // A layout served by static geometry arrays weighs each face speed by the measures of
+          // its face and cell (N17, C1); the uniform box by its spacings.
+          if (transport_frequency) {
+            if (const auto arrays = system_->static_geometry())
+              local_frequency = nd::maximum_incident_face_frequency(
+                  state_value, scratch.cartesian_operator.face_speeds(), arrays->view(),
+                  frequency_rule);
+            else
+              local_frequency = nd::maximum_incident_face_frequency(
+                  state_value, scratch.cartesian_operator.face_speeds(), geometry(),
+                  frequency_rule);
+          }
           if (faces)
             *faces = scratch.generated_faces;
         });
@@ -3103,7 +3222,7 @@ class ProgramContext {
   }
 
   BoundaryTopology<Dim> scalar_boundary_topology_() const {
-    return BoundaryTopology<Dim>::axis_periodic(system_->prepared_block_periodicity());
+    return system_->prepared_block_topology();
   }
 
   std::uint64_t next_scalar_boundary_generation_() const {

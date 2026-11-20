@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._expr import Call, walk
-from ._model import Balance, DiffusiveFlux, Flux, Quantity, Term
+from ._model import Balance, DiffusiveFlux, Flux, Quantity, Source, Term
 from ._refusal import (
     CoverageNotExact, LevelMismatch, NotYetElaborated, Site, SpellingRefusal, user_site,
 )
@@ -33,10 +33,9 @@ class CellAverage:
     def __init__(self, *, quadrature: Any = None) -> None:
         if quadrature is not None:
             raise NotYetElaborated("pops.CellAverage(quadrature=...) (D3)",
-                                   "the N16 lot that retires the transitional table of "
-                                   "CellAverage() (the projection by encode), under "
                                    "CellAverage(quadrature=...) of pops.lib.representations "
-                                   "(N16 lot 1)")
+                                   "(N16 lot 1), which the surface elaborates with its initial "
+                                   "value bound as data")
 
     def definition(self, rank: int) -> Any:
         """The definition of contract @2 that this spelling elaborates, the one of
@@ -94,6 +93,15 @@ class TermView:
         from ._model import Parameter
 
         return [node.name for node in walk(value) if isinstance(node, Parameter)]
+
+    def sign(self, value: Any) -> int | None:
+        """1, -1, 0 or None: the sign that the declarations of the model derive for a value,
+        whatever the bind gives its parameters (R2, K7): a parameter has the sign of its admissible
+        set, ``pops.Positive()`` the only one elaborated, and a parameter with none has no sign
+        (§3.5 of the N9 lot « La référence sous les solves de relation »)."""
+        from ._model import _sign
+
+        return _sign(value)
 
     def number(self, value: Any) -> Any:
         """The number of a value written with numbers, mathematical constants and model
@@ -190,7 +198,7 @@ class Numerics:
         self.represent = self._table(represent, "represent", Quantity)
         for quantity, representation in self.represent:
             self._check_representation(quantity, representation)
-        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux))
+        self.schemes = self._table(schemes, "schemes", (Flux, DiffusiveFlux, Source))
         for key, scheme in self.schemes:
             self._check_scheme(key, scheme)
 
@@ -315,6 +323,15 @@ class Numerics:
             if key is quantity:
                 return representation
         return None
+
+    def definition_of(self, quantity: Quantity) -> Any:
+        """The definition of contract @2 of the representation of ``quantity``, at the rank of its
+        support: the one of ``CellAverage()`` when none is stated (N16 5.5)."""
+        from pops.representations.definition import cell_average
+
+        representation = self.representation_of(quantity)
+        rank = quantity.support.rank
+        return cell_average(rank) if representation is None else representation.definition(rank)
 
     def of(self, subject: Any) -> _Realization:
         """``numerics.of(x)``: the realization of a balance or of a term."""

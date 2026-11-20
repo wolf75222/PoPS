@@ -84,6 +84,7 @@ struct AuxiliaryCheckpointAcceptedState final {
   std::vector<AuxiliaryCheckpointProviderPublication> providers;
   // Accepted storage may retain a lazy cache whose last publication is now invalidated.
   std::vector<std::string> invalidated_providers;
+  bool positional = false;
 
   friend bool operator==(const AuxiliaryCheckpointAcceptedState&,
                          const AuxiliaryCheckpointAcceptedState&) = default;
@@ -109,6 +110,11 @@ inline constexpr std::array<std::uint8_t, 8> kMagic{'P', 'O', 'P', 'S', 'A', 'U'
 
 inline constexpr std::array<std::uint8_t, 8> kInvalidatedMagic{'P', 'O', 'P', 'S',
                                                                'A', 'U', 'X', '3'};
+
+inline constexpr std::array<std::uint8_t, 8> kPositionalMagic{'P', 'O', 'P', 'S',
+                                                              'A', 'U', 'X', '4'};
+inline constexpr std::array<std::uint8_t, 8> kPositionalInvalidatedMagic{'P', 'O', 'P', 'S',
+                                                                         'A', 'U', 'X', '5'};
 
 class Writer final {
  public:
@@ -141,14 +147,19 @@ class Reader final {
  public:
   explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
 
-  [[nodiscard]] bool read_invalidated_version() {
+  [[nodiscard]] std::pair<bool, bool> read_version(bool allow_positional) {
     require_(kMagic.size());
     const auto magic = bytes_.subspan(cursor_, kMagic.size());
-    const bool invalidated = std::equal(magic.begin(), magic.end(), kInvalidatedMagic.begin());
-    if (!invalidated && !std::equal(magic.begin(), magic.end(), kMagic.begin()))
+    const auto equal = [&magic](const auto& expected) {
+      return std::equal(magic.begin(), magic.end(), expected.begin());
+    };
+    const bool positional =
+        allow_positional && (equal(kPositionalMagic) || equal(kPositionalInvalidatedMagic));
+    const bool invalidated = equal(positional ? kPositionalInvalidatedMagic : kInvalidatedMagic);
+    if (!invalidated && !equal(positional ? kPositionalMagic : kMagic))
       fail_("unsupported magic/version");
     cursor_ += kMagic.size();
-    return invalidated;
+    return {positional, invalidated};
   }
 
   void expect_raw(std::span<const std::uint8_t> expected) {
@@ -343,11 +354,13 @@ inline void require_valid_kind(AuxiliaryProviderKind kind) {
 }
 
 template <int Dim>
-[[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> read_state(Reader& in) {
-  const bool invalidated_version = in.read_invalidated_version();
+[[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> read_state(Reader& in,
+                                                               bool allow_positional = false) {
+  const auto [positional, invalidated_version] = in.read_version(allow_positional);
   if (in.i32() != Dim)
     throw std::runtime_error("invalid exact auxiliary checkpoint: native dimension differs");
   AuxiliaryCheckpointAcceptedState<Dim> state;
+  state.positional = positional;
   state.registry_contract = in.string();
   state.accepted_generation = in.u64();
   state.groups.resize(in.size(kMinStorageGroupBytes<Dim>));
@@ -505,7 +518,11 @@ template <int Dim>
   namespace detail = auxiliary_checkpoint_detail;
   detail::validate_state(state);
   detail::Writer out;
-  out.raw(state.invalidated_providers.empty() ? detail::kMagic : detail::kInvalidatedMagic);
+  if (state.positional)
+    out.raw(state.invalidated_providers.empty() ? detail::kPositionalMagic
+                                                : detail::kPositionalInvalidatedMagic);
+  else
+    out.raw(state.invalidated_providers.empty() ? detail::kMagic : detail::kInvalidatedMagic);
   out.i32(Dim);
   out.string(state.registry_contract);
   out.u64(state.accepted_generation);
@@ -547,10 +564,10 @@ template <int Dim>
 
 template <int Dim>
 [[nodiscard]] AuxiliaryCheckpointAcceptedState<Dim> deserialize_auxiliary_checkpoint_state(
-    std::span<const std::uint8_t> bytes) {
+    std::span<const std::uint8_t> bytes, bool allow_positional = false) {
   namespace detail = auxiliary_checkpoint_detail;
   detail::Reader in(bytes);
-  auto state = detail::read_state<Dim>(in);
+  auto state = detail::read_state<Dim>(in, allow_positional);
   detail::validate_state(state);
   return state;
 }
@@ -602,6 +619,29 @@ void require_auxiliary_checkpoint_storage(const AuxiliaryCheckpointAcceptedState
   }
 }
 
+/// Compare exact structure while leaving accepted points and component values untouched.
+template <int Dim>
+[[nodiscard]] bool auxiliary_checkpoint_structure_matches(
+    const AuxiliaryCheckpointAcceptedState<Dim>& state,
+    const AuxiliaryCheckpointAcceptedState<Dim>& expected) {
+  if (state.registry_contract != expected.registry_contract ||
+      state.groups.size() != expected.groups.size() || state.components != expected.components ||
+      state.providers.size() != expected.providers.size())
+    return false;
+  for (std::size_t index = 0; index < state.groups.size(); ++index) {
+    const auto& stored = state.groups[index];
+    const auto& live = expected.groups[index];
+    if (stored.identity != live.identity || stored.contract != live.contract ||
+        stored.shape != live.shape || stored.component_count != live.component_count)
+      return false;
+  }
+  for (std::size_t index = 0; index < state.providers.size(); ++index)
+    if (state.providers[index].identity != expected.providers[index].identity ||
+        state.providers[index].kind != expected.providers[index].kind)
+      return false;
+  return true;
+}
+
 /// Reject a checkpoint before mutating registry provenance.  The caller must have restored the
 /// rank-local group payload only into a private candidate; after this returns it may atomically
 /// publish that candidate alongside the registry's accepted generation.
@@ -627,16 +667,6 @@ void restore_auxiliary_checkpoint_state(const AuxiliaryCheckpointAcceptedState<D
           {{std::string_view("pops.exact-auxiliary-checkpoint"), payload}}, lane))
     throw std::runtime_error("exact auxiliary checkpoint differs between communicator ranks");
 
-  bool compatible = state.registry_contract == expected.registry_contract &&
-                    state.groups.size() == expected.groups.size() &&
-                    state.components == expected.components &&
-                    state.providers.size() == expected.providers.size();
-  for (std::size_t index = 0; index < state.groups.size() && compatible; ++index) {
-    const auto& restored = state.groups[index];
-    const auto& live = expected.groups[index];
-    compatible = restored.identity == live.identity && restored.contract == live.contract &&
-                 restored.shape == live.shape && restored.component_count == live.component_count;
-  }
   std::vector<std::optional<AuxiliaryEvaluationPoint>> accepted_points;
   try {
     accepted_points.reserve(state.providers.size());
@@ -645,11 +675,7 @@ void restore_auxiliary_checkpoint_state(const AuxiliaryCheckpointAcceptedState<D
   } catch (...) {
     local_preflight_failure = 1;
   }
-  for (std::size_t index = 0; index < state.providers.size() && compatible; ++index)
-    if (state.providers[index].identity != expected.providers[index].identity ||
-        state.providers[index].kind != expected.providers[index].kind)
-      local_preflight_failure = 1;
-  if (!compatible)
+  if (!auxiliary_checkpoint_structure_matches(state, expected))
     local_preflight_failure = 1;
   if (all_reduce_max(local_preflight_failure, lane) != 0)
     throw std::invalid_argument("auxiliary checkpoint differs from the sealed provider registry");

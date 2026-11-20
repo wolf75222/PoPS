@@ -259,7 +259,9 @@ class _FacadeCompileMixin(_FacadeModel):
         semantic_identity = semantic_identity_of(model=self)
         feature_key = _native_feature_key()
         from pops.codegen.model_compile_evidence import codegen_source_authority
+        from pops.codegen._checkpoint_provenance import model_cache_components
         spec_components = {
+            **model_cache_components(target),
             "codegen_source_authority": codegen_source_authority(),
             "model_hash": str(model_hash),
             "emitted_name": str(name or ""),

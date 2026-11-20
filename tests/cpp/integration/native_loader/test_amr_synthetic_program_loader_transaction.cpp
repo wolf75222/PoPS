@@ -7,7 +7,8 @@
 
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "amr_fixture_criteria.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
 #include "component_abi_test_helpers.hpp"
 #include "gtest_compat.hpp"
 #include "legacy_amr_attempt_fixture.hpp"
@@ -36,6 +37,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -48,10 +50,10 @@ namespace {
 constexpr int Dim = pops::kNativeDimension;
 constexpr std::uint32_t kSyntheticLoaderRetryReason = 0x534C5452u;
 constexpr const char* kBlock = "tracer";
-constexpr const char* kStateRoute = "tests.synthetic-loader/state/tracer";
+constexpr const char* kStateRoute = pops::test::synthetic_history.state;
 constexpr const char* kProviderConsumer = "tests.synthetic-loader/providers/tracer";
-constexpr const char* kSyntheticLoaderProgramHash =
-    "tests.synthetic-loader/program/loader-transaction-v1";
+const std::string kSyntheticLoaderProgramHash = pops::test::synthetic_history.program_hash(
+    "tests.synthetic-loader/program/loader-transaction-v1");
 
 std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_execution() {
   const PopsExecutionContextV1 execution = pops::component::test_support::host_execution_context();
@@ -145,16 +147,17 @@ std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> prepare_exact_loader_arti
   std::string preparation_error;
   if (lane.rank() == 0) {
     try {
-      {
-        std::ofstream source(source_path);
-        source.exceptions(std::ios::badbit | std::ios::failbit);
-        source << pops::test::synthetic_loader::source(interface_blocks, histories, attempt_cursor,
-                                                       with_flux, mapping, history_metadata);
-      }
       const auto variant = pops::test::synthetic_loader::variant(
           interface_blocks, histories, attempt_cursor, with_flux, mapping, history_metadata);
-      const std::string prepared =
-          std::string(POPS_TEST_SYNTHETIC_LOADER_FIXTURES) + "/" + std::to_string(variant) + ".so";
+      const auto stem =
+          std::string(POPS_TEST_SYNTHETIC_LOADER_FIXTURES) + "/" + std::to_string(variant);
+      std::ifstream input(stem + ".cpp", std::ios::binary);
+      if (!input)
+        throw std::runtime_error("cannot read the source of the compiled AMR fixture");
+      std::ofstream source(source_path, std::ios::binary);
+      source.exceptions(std::ios::badbit | std::ios::failbit);
+      source << input.rdbuf();
+      const auto prepared = stem + ".so";
       std::ifstream binary(prepared, std::ios::binary);
       binary.exceptions(std::ios::badbit);
       if (!binary)
@@ -192,7 +195,8 @@ std::unique_ptr<pops::dynlib::AuthenticatedNativeFile> prepare_exact_loader_arti
 }
 
 void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& shared_object,
-                          const std::vector<double>& state, bool synchronous = false) {
+                          const std::vector<double>& state, bool synchronous = false,
+                          bool reject_other_criterion = false) {
   if (!system.has_package_assembly_lane()) {
     auto lane = std::make_shared<pops::ExecutionLane>(
         pops::ExecutionLane::duplicate_world_collectively("test.synthetic-loader.package"));
@@ -222,8 +226,26 @@ void build_refined_system(pops::AmrSystem<Dim>& system, const std::string& share
       "tests.synthetic-loader/bootstrap/prolongation", {kStateRoute},
       "tests.synthetic-loader/bootstrap/provider", "cell", "cell", "conservative", "dense",
       "prolongation", "conservative_linear", 2, transfer_ghosts, refinement_ratio);
-  pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
-                                               "tests.synthetic-loader.tagging@1");
+  pops::test::synthetic_history.install<Dim>(system);
+  if (reject_other_criterion) {
+    const std::string wrong = std::string(POPS_TEST_SYNTHETIC_LOADER_FIXTURES) + "/4.so";
+    const auto before = std::tuple(system.lifecycle_state(), system.installed_program_hash(),
+                                   system.program_block_map(), system.block_names(), system.time(),
+                                   system.macro_step());
+    try {
+      system.install_program(wrong);
+      ADD_FAILURE() << "the Program with another generated criterion was accepted";
+    } catch (const std::runtime_error& error) {
+      const std::string_view message(error.what());
+      EXPECT_NE(message.find(pops::n_ranks() == 1 ? "refinement criterion of the compiled Program"
+                                                  : "preparation failed collectively"),
+                std::string_view::npos);
+    }
+    EXPECT_EQ((std::tuple(system.lifecycle_state(), system.installed_program_hash(),
+                          system.program_block_map(), system.block_names(), system.time(),
+                          system.macro_step())),
+              before);
+  }
   // The real loader authenticates the Program block table, hash and four flux-expression budget
   // symbols before it calls the artifact installer and materializes the hierarchy.
   system.install_program(shared_object);
@@ -304,7 +326,7 @@ AttemptCursorFixture make_attempt_cursor_fixture(const AttemptCursorArtifact& ar
       prepared_execution()->for_lane(*lane));
   system.install_prepared_boundary_execution_context(std::move(lane), std::move(execution));
   system.set_temporal_relations({1}, {1}, {"integral_only"});
-  system.install_block_state_route(kBlock, kStateRoute);
+  system.install_block_state_route(kBlock, pops::test::synthetic_attempt.state);
   system.add_native_block(kBlock, artifact.path,
                           "2222222222222222222222222222222222222222222222222222222222222222",
                           artifact.authenticated->binary_identity(), "minmod", "rusanov",
@@ -321,36 +343,33 @@ AttemptCursorFixture make_attempt_cursor_fixture(const AttemptCursorArtifact& ar
     if (centered)
       initial[cell] = 2.0;
   }
-  system.bind_bootstrap_subject(kStateRoute, kBlock, "bound_level_zero");
-  system.stage_bootstrap_array(kStateRoute, kBlock, "cell", "cell", 1, system.spatial_shape(),
-                               initial);
+  system.bind_bootstrap_subject(pops::test::synthetic_attempt.state, kBlock, "bound_level_zero");
+  system.stage_bootstrap_array(pops::test::synthetic_attempt.state, kBlock, "cell", "cell", 1,
+                               system.spatial_shape(), initial);
   pops::Extent<Dim> transfer_ghosts{}, refinement_ratio{};
   for (int axis = 0; axis < Dim; ++axis) {
     transfer_ghosts[axis] = 1;
     refinement_ratio[axis] = 2;
   }
   system.register_bootstrap_transfer_route(
-      "tests.attempt-cursor/bootstrap/prolongation", {kStateRoute},
+      "tests.attempt-cursor/bootstrap/prolongation", {pops::test::synthetic_attempt.state},
       "tests.attempt-cursor/bootstrap/provider", "cell", "cell", "conservative", "dense",
       "prolongation", "conservative_linear", 2, transfer_ghosts, refinement_ratio);
-  pops::test::install_prepared_refine_coarsen_threshold(
-      system, {kBlock, "u", 1.5, pops::test::PreparedThresholdRelation::Above, kStateRoute},
-      {kBlock, "u", 1.5, pops::test::PreparedThresholdRelation::Below, kStateRoute},
-      "tests.attempt-cursor/tagging@1");
+  pops::test::synthetic_attempt.install<Dim>(system);
   // The public loader must grant authority BEFORE explicit materialization. A direct callback
   // install deliberately cannot qualify the facade's snapshot, restore or RegridOnRestart hooks.
   system.install_program(artifact.path);
   if (!fixture.program_is_artifact_backed())
     throw std::logic_error("attempt-cursor witness requires loader-granted artifact authority");
   system.begin_bootstrap_plan();
-  (void)system.materialize_bootstrap_action(kStateRoute, "initialize_level_zero",
-                                            "bound_level_zero", 0);
+  (void)system.materialize_bootstrap_action(pops::test::synthetic_attempt.state,
+                                            "initialize_level_zero", "bound_level_zero", 0);
   if (!system.bootstrap_next_level()) {
     system.rollback_bootstrap_level();
     throw std::logic_error("attempt-cursor witness requires an actual partial fine level");
   }
-  (void)system.materialize_bootstrap_action(kStateRoute, "prolong_from_parent",
-                                            "conservative_linear", 1);
+  (void)system.materialize_bootstrap_action(pops::test::synthetic_attempt.state,
+                                            "prolong_from_parent", "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.mark_bound();
   if (system.engine()->hierarchy().num_levels() != 2)
@@ -463,20 +482,22 @@ TEST(test_amr_synthetic_program_loader_transaction,
   system.install_prepared_boundary_execution_context(lane, execution);
   const std::vector<std::string> blocks{kBlock, "tracer2"};
   for (const auto& block : blocks)
-    system.install_block_state_route(block, "state/" + block);
+    system.install_block_state_route(block, block == kBlock
+                                                ? pops::test::synthetic_interface.state
+                                                : pops::test::synthetic_interface_second_state);
   for (const auto& block : blocks) {
     system.add_native_block(
         block, shared_object, "2222222222222222222222222222222222222222222222222222222222222222",
         authenticated->binary_identity(), "minmod", "rusanov", "conservative", "explicit", 1.4, 1);
   }
   for (const auto& block : blocks) {
-    const std::string route = "state/" + block;
+    const std::string route = block == kBlock ? pops::test::synthetic_interface.state
+                                              : pops::test::synthetic_interface_second_state;
     system.bind_bootstrap_subject(route, block, "bound_level_zero");
     system.stage_bootstrap_array(route, block, "cell", "cell", 1, system.spatial_shape(), initial);
   }
   system.set_temporal_relations({2}, {1}, {"integral_only"});
-  pops::test::install_prepared_threshold_union(system, {{kBlock, "u", 1.03}},
-                                               "tests.interface-publication.tagging@1");
+  pops::test::synthetic_interface.install<Dim>(system);
   system.install_program(shared_object);
   ASSERT_EQ(system.prepared_amr_program_flux_expression_budget().blocks.size(), 2u);
   ASSERT_EQ(
@@ -573,8 +594,10 @@ TEST(test_amr_synthetic_program_loader_transaction,
 
   system.begin_bootstrap_plan();
   for (const auto& block : blocks)
-    (void)system.materialize_bootstrap_action("state/" + block, "initialize_level_zero",
-                                              "bound_level_zero", 0);
+    (void)system.materialize_bootstrap_action(block == kBlock
+                                                  ? pops::test::synthetic_interface.state
+                                                  : pops::test::synthetic_interface_second_state,
+                                              "initialize_level_zero", "bound_level_zero", 0);
   system.install_prepared_amr_interface_flux_provider("tests.interface.bootstrap-prefix",
                                                       [](auto&) {});
   system.commit_bootstrap_level();
@@ -609,7 +632,7 @@ TEST(test_amr_synthetic_program_loader_transaction,
   constexpr double dt = 3.0e-2;
 
   pops::AmrSystem<Dim> continuous(system_config);
-  build_refined_system(continuous, shared_object, initial);
+  build_refined_system(continuous, shared_object, initial, false, true);
   ASSERT_EQ(continuous.n_levels(), 2);
   ASSERT_GT(continuous.n_patches(), 0);
   EXPECT_EQ(continuous.installed_program_hash(), kSyntheticLoaderProgramHash);
@@ -751,7 +774,8 @@ TEST(test_amr_synthetic_program_loader_transaction,
   pops::AmrSystem<Dim> system(settings);
   ASSERT_NO_THROW(build_refined_system(system, stem + ".so", initial_state(settings.shape), true));
   ASSERT_EQ(system.installed_program_hash(),
-            "tests.synthetic-loader/program/history-metadata-restart-v1");
+            pops::test::synthetic_history.program_hash(
+                "tests.synthetic-loader/program/history-metadata-restart-v1"));
   ASSERT_NO_THROW(system.step(0.125));
   const auto accepted = system.program_accepted_state();
   const auto boxes = system.patch_boxes();
@@ -838,9 +862,11 @@ TEST(test_amr_synthetic_program_loader_transaction,
   {
     SCOPED_TRACE("install, bootstrap, and seal frozen history capacity");
     ASSERT_NO_THROW(
-        build_refined_system(system, shared_object, initial_state(settings.shape), true));
+        build_refined_system(system, shared_object, initial_state(settings.shape), true, true));
   }
-  ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+  ASSERT_EQ(system.installed_program_hash(),
+            pops::test::synthetic_history.program_hash(
+                "tests.synthetic-loader/program/history-restart-v1"));
   const auto handle = pops::dynlib::open(shared_object);
   ASSERT_NE(handle, nullptr);
   using RejectRefresh = void (*)(bool);
@@ -1372,6 +1398,37 @@ TEST(test_amr_synthetic_program_loader_transaction,
 TEST(test_amr_synthetic_program_loader_transaction,
      AttemptCursorRemainsMonotoneThroughRegridAndRegridOnRestart) {
   auto artifact = make_attempt_cursor_artifact(false);
+  {
+    auto witness = make_attempt_cursor_fixture(artifact);
+    auto& owner = *witness.system;
+    std::vector<double> values(std::size_t{1} << (4 * Dim));
+    const pops::Real threshold = pops::Real(1.5);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      switch (i % 3) {
+        case 0:
+          values[i] = std::nextafter(threshold, pops::Real(0));
+          break;
+        case 1:
+          values[i] = threshold;
+          break;
+        case 2:
+          values[i] = std::nextafter(threshold, pops::Real(2));
+          break;
+      }
+    }
+    owner.set_conservative_state(kBlock, values);
+    const auto accepted = owner.block_level_state_global(kBlock, 0);
+    EXPECT_EQ(accepted, values);
+    const auto tags = owner.execute_prepared_tagging(0);
+    EXPECT_EQ(pops::test::expect_fixture_tag_mask(
+                  tags.refine, owner.spatial_shape(),
+                  [&](std::size_t cell) { return accepted.at(cell) > threshold; }),
+              values.size());
+    EXPECT_EQ(pops::test::expect_fixture_tag_mask(
+                  tags.coarsen, owner.spatial_shape(),
+                  [&](std::size_t cell) { return accepted.at(cell) < threshold; }),
+              values.size());
+  }
   auto fixture = make_attempt_cursor_fixture(artifact);
   ASSERT_TRUE(fixture.program_is_artifact_backed());
   auto& system = *fixture.system;
@@ -1506,7 +1563,9 @@ TEST(test_amr_synthetic_program_loader_transaction,
   const auto settings = config(3);
   pops::AmrSystem<Dim> system(settings);
   ASSERT_NO_THROW(build_refined_system(system, shared_object, initial_state(settings.shape), true));
-  ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+  ASSERT_EQ(system.installed_program_hash(),
+            pops::test::synthetic_history.program_hash(
+                "tests.synthetic-loader/program/history-restart-v1"));
   ASSERT_EQ(system.n_levels(), 3);
   constexpr double dt = 0.125;
   ASSERT_NO_THROW(system.step(dt));
@@ -1727,7 +1786,9 @@ TEST(test_amr_synthetic_program_loader_transaction,
     pops::AmrSystem<Dim> system(settings);
     ASSERT_NO_THROW(
         build_refined_system(system, shared_object, initial_state(settings.shape), true));
-    ASSERT_EQ(system.installed_program_hash(), "tests.synthetic-loader/program/history-restart-v1");
+    ASSERT_EQ(system.installed_program_hash(),
+              pops::test::synthetic_history.program_hash(
+                  "tests.synthetic-loader/program/history-restart-v1"));
     ASSERT_EQ(system.n_levels(), 2);
     ASSERT_EQ(system.history_names(), names);
     const auto capture = [&] {

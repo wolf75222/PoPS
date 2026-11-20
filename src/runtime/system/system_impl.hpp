@@ -16,6 +16,7 @@
 #include <pops/runtime/system/system_lifecycle.hpp>
 #include <pops/runtime/system/native_package_capability.hpp>
 #include <pops/runtime/program/program_runtime_state.hpp>
+#include <pops/runtime/dynamic/authenticated_native_file.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_builtins.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace_prepare.hpp>
 #include <pops/parallel/comm.hpp>
@@ -164,6 +165,10 @@ struct System<Dim>::Impl {
   boundary_registry_type boundary_registry_;
   runtime::system::SystemCouplingRegistry<Dim> coupling_;
   runtime::system::SystemLifecycle lifecycle_;
+  // Keep the authenticated backing image until Program closures have been destroyed.
+  std::shared_ptr<pops::dynlib::AuthenticatedNativeFile> installed_exchange_program_file_;
+  std::vector<runtime::program::MountedExchangeIncidenceRow> mounted_exchange_incidence_;
+  std::uint64_t exchange_incidence_generation_ = 0;
   runtime::program::ProgramRuntimeState<Dim> program_;
   using embedded_boundary_type = runtime::system::PreparedEmbeddedBoundaryGeometry<Dim>;
   std::shared_ptr<const embedded_boundary_type> embedded_boundary_;
@@ -187,6 +192,8 @@ struct System<Dim>::Impl {
   NewtonReport last_newton_report_{};
   std::string poisson_solver_ = "cartesian_cg";
   bool explicit_default_poisson_requested_ = false;
+  // The same request, read by the plan guard of a cells rule (N8 « dt= as a function of cell »).
+  bool default_field_solve_requested_ = false;
   std::string poisson_bc_ = "auto";
   double poisson_abs_tol_ = 0.0;
   double poisson_rel_tol_ = static_cast<double>(kCartesianCGDefaultRelTol);

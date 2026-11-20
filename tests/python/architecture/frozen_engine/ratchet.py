@@ -23,8 +23,9 @@ on them, so an edit elsewhere in a file that shifts its lines, or a statement re
 lines, does not fail the guard. ``refresh_exceptions.py`` rewrites the line numbers and refuses a
 site the list does not hold. Since a list is a file that a PR can edit by hand, CI also scans the
 base of the PR with the same scanner and fails on any site of the head that the base does not hold
-(``new_sites``, ``refresh_exceptions.py --check-base``); a vocabulary change adds the same sites to
-both scans.
+(``new_sites``, ``refresh_exceptions.py --check-base``), unless it moved from another file with its
+source line or the PR declares the move in ``accepted_moves.txt`` (``moves_against_base``); a
+vocabulary change adds the same sites to both scans.
 """
 from __future__ import annotations
 
@@ -199,6 +200,21 @@ def new_sites(base, head, base_root: pathlib.Path, head_root: pathlib.Path):
     over has moved when a base site left over in another file has its term, its excerpt and its
     source line: a file renamed or split keeps its lines. Every other head site left over is new.
     """
+    moved, added, _ = moves_against_base(base, head, base_root, head_root, ())
+    return moved, added
+
+
+def moves_against_base(base, head, base_root: pathlib.Path, head_root: pathlib.Path, declared):
+    """(moves, new, unused): ``new_sites``, with the moves that a PR declares.
+
+    @p declared holds ``(source path, target path, term, excerpt)``, one per move that the PR
+    declares in ``accepted_moves.txt``. A head site left over that no base site explains by its
+    source line has moved when a declaration names its file as the target, its term and its
+    excerpt, and a base site left over in the source file has the same term and excerpt, whatever
+    its line: a statement merged into another file, such as a private list that becomes rows of a
+    table, changes its line. Each declaration explains one site. ``unused`` holds the declarations
+    that explain none, which a check refuses: a declaration names a move that the PR makes.
+    """
     @functools.lru_cache(maxsize=None)
     def lines_of(root: pathlib.Path, path: str) -> tuple[str, ...]:
         try:
@@ -218,17 +234,34 @@ def new_sites(base, head, base_root: pathlib.Path, head_root: pathlib.Path):
     for sites, _ in comparison.useless.values():
         for site in sites:
             pool[(site.term, site.excerpt, source_line(base_root, site))].append(site)
-    moved, added = [], []
+    moved, unexplained = [], []
     for sites, _ in comparison.new.values():
         for site in sites:
             candidates = pool.get((site.term, site.excerpt, source_line(head_root, site)), [])
             origin = next((other for other in candidates if other.path != site.path), None)
             if origin is None:
-                added.append(site)
+                unexplained.append(site)
             else:
                 candidates.remove(origin)
                 moved.append((origin, site))
-    return moved, added
+    unused, added = list(declared), []
+    for site in unexplained:
+        origin = None
+        for index, (source, target, term, excerpt) in enumerate(unused):
+            if (target, term, excerpt) != (site.path, site.term, site.excerpt) or source == target:
+                continue
+            origin = next((other for (other_term, other_excerpt, _), candidates in pool.items()
+                           if (other_term, other_excerpt) == (term, excerpt)
+                           for other in candidates if other.path == source), None)
+            if origin is not None:
+                pool[(origin.term, origin.excerpt, source_line(base_root, origin))].remove(origin)
+                del unused[index]
+                break
+        if origin is None:
+            added.append(site)
+        else:
+            moved.append((origin, site))
+    return moved, added, unused
 
 
 def describe(comparison: Comparison, list_name: str, rule: str) -> str:

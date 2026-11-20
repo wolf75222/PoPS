@@ -58,6 +58,9 @@ from pops.time import (
     every_dt,
 )
 from tests.python.support.native_execution_context import artifact_execution_context
+from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from tests.python.unit.codegen.test_install_tagging_authority import _install as _metadata_install
+from tests.python.unit.codegen.test_install_tagging_authority import metadata_platform
 from tests.python.unit.runtime.test_runtime_planning import _artifact as _planning_artifact
 
 
@@ -128,6 +131,7 @@ class _Executor:
             artifact_identity=plan.artifact.artifact_identity,
             bind_identity=plan.bind_identity,
         )
+        self._program_id = plan.artifact.program_id
         from pops.runtime._checkpoint_resource_budget import (
             _producer_checkpoint_resource_budget,
         )
@@ -204,6 +208,9 @@ class _Executor:
             self.bound_snapshot.artifact_identity,
             self.bound_snapshot.bind_identity,
         )
+
+    def _checkpoint_program_id(self):
+        return self._program_id
 
     def _restore_checkpoint_run_identity(self, identity):
         assert type(identity) is Identity
@@ -2731,7 +2738,7 @@ def test_checkpoint_provider_requires_a_compensatable_snapshot_protocol(tmp_path
         RestartV3().validate_snapshot(object())
 
 
-def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(monkeypatch):
+def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(monkeypatch, metadata_platform):
     from pops.output import _checkpoint_collective
 
     events = []
@@ -2832,6 +2839,7 @@ def test_checkpoint_restore_invalidates_geometry_after_native_topology_restore(m
     )
     cursors = ConsumerCursorSet()
     owner = SimpleNamespace(
+        _install_plan=_metadata_install(artifact_fixture()),
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),
@@ -3090,7 +3098,7 @@ def test_collective_restart_refuses_an_ignored_recorded_hierarchy_identity():
         )
 
 
-def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkeypatch):
+def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkeypatch, metadata_platform):
     from pops.output import RegridOnRestart
     from pops.output import _checkpoint_collective
     from pops.runtime._amr_system_io import _AMRRegridRestartEvidence
@@ -3214,6 +3222,7 @@ def test_regrid_restart_derives_distinct_run_identity_from_global_receipt(monkey
         authority="test-amr-regrid-restore",
     )
     runtime = SimpleNamespace(
+        _install_plan=_metadata_install(artifact_fixture(target="amr_system", block_names=("tracer",))),
         _executor=native,
         _snapshot_builder=_SnapshotBuilder(),
         _publisher=_Publisher(),

@@ -69,13 +69,7 @@ name = "tagger"
 issue = "N12"
 reason = "physics-level native interface (C38): the refinement criterion is a generated region (DM13b)"
 
-# The next three are not physics-level. Spec 0.3 settled them on 29/10 (FC6b and C38, adjudication
-# section 17): they leave the protocol too, with these owners in C38.
-
-[[exception]]
-name = "clustering"
-issue = "N12"
-reason = "clustering is core machinery with no reference region to bind a native to (section 2.3, DM13); FC6b, C38, Phase 1"
+# These interfaces also leave the protocol under FC6b and C38 (adjudication section 17).
 
 [[exception]]
 name = "field_topology"

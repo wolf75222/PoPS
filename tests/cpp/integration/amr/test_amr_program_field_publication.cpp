@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "explicit_amr_program.hpp"
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
@@ -143,8 +143,10 @@ TEST(AmrProgramFieldPublication, ThreeFieldsReachPreparedSourcesAtEveryLevelAndR
   System system(config);
   test::install_amr_runtime_authority(system, "tests.fields/publication-runtime");
   const auto keys = install_outputs(system);
-  constexpr const char* state_identity = "tests.fields/transport-state";
-  system.install_block_state_route("transport", state_identity);
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_field_publication, POPS_TEST_standalone_field_publication_DSO,
+      POPS_TEST_standalone_field_publication_RECEIPT};
+  system.install_block_state_route("transport", criterion.criterion.state);
   add_compiled_model<Dim>(system, "transport", FieldConsumerModel{}, "none", "rusanov",
                           "conservative", "euler", static_cast<double>(kPhysicalDefaultGamma), 1, 1,
                           {}, {}, 0.0, static_cast<double>(kWenoEpsilon), false,
@@ -152,10 +154,7 @@ TEST(AmrProgramFieldPublication, ThreeFieldsReachPreparedSourcesAtEveryLevelAndR
   std::vector<double> initial(cells, 1.0);
   initial[cells / 2] = 2.0;
   system.set_conservative_state("transport", initial);
-  test::install_prepared_threshold_union(
-      system,
-      {{"transport", "scalar", 1.5, test::PreparedThresholdRelation::Above, state_identity}},
-      "tests.fields/partial-refinement");
+  criterion.install(system);
   system.set_program_block_map({0});
   system.refresh_prepared_amr_levels();
   ASSERT_EQ(system.n_levels(), 2);

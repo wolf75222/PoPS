@@ -201,6 +201,7 @@ def test_current_checkpoint_envelope_roundtrips():
             snapshot.artifact_identity,
             snapshot.bind_identity,
         ),
+        _checkpoint_program_id=lambda: make_identity("program", {"test": "npz-envelope"}),
         last_run_identity=run.run_identity,
     )
     temporal_state = TemporalRestartState()
@@ -975,13 +976,17 @@ def _run_section_c(t):
         reject_foreign_artifact(fe, "checkpoint NPZ member count exceeds its live resource budget")
         # An equally sized AB2 ring reaches the independent canonical identity guard. Its model
         # and method match, but its explicitly different Program identity must never be accepted.
+        # Since N11 lot 2b the guard reads program_id first: the other case name is projected out
+        # of it, but the grid frame keeps its name (`<case>-uniform-grid`, gap C52), so the
+        # program_id differs and the refusal names it.
         other_ab2 = _compile_artifact(
             pops, t, lt.AdamsBashforth, {"order": 2},
             "program_identity_other_c", "program_identity_model_c", n,
         )
         assert ab2.blocks[0].model.model_hash == other_ab2.blocks[0].model.model_hash
         assert ab2.program.program_hash != other_ab2.program.program_hash
-        reject_foreign_artifact(other_ab2, "identity.*bound runtime")
+        assert ab2.program_id != other_ab2.program_id
+        reject_foreign_artifact(other_ab2, r"program identity \(program_id\).*bound runtime")
         print("  foreign FE resource budget and equal-footprint AB2 identity both refused before mutation")
         return True
 

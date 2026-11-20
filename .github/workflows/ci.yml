@@ -396,6 +396,8 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
+          amr-fixture-python: ${{ contains(steps.test-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
+                                contains(steps.test-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs') }}
           extra-apt: mold
 
       # actions/cache est immutable. restore/save separes + cle unique par tentative permettent a
@@ -1005,7 +1007,7 @@ jobs:
       fail-fast: false
       matrix:
         # Keep original duration-bin identities even when the plan omits empty bins.
-        # Watchdogs and native-dimension routing continue to use the fixed 165-bin partition.
+        # Watchdogs and native-dimension routing continue to use the fixed 176-bin partition.
         shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}
 
     env:
@@ -1018,7 +1020,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: "166"
+      SHARD_TOTAL: "176"
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
       # failure in a shard's DSL tests leaves the ADC-536 provenance sidecars (<so>.cpp + <so>.cachekey)
       # on disk for the on-failure upload. Setting POPS_CACHE_DIR here just relocates the default cache
@@ -1713,6 +1715,7 @@ jobs:
             ccache libeigen3-dev libhdf5-openmpi-dev libopenmpi-dev ninja-build openmpi-bin \
             pybind11-dev python3-dev python3-h5py python3-venv python3-pip python3-packaging \
             python3-numpy python3-pytest python3-vtk9 python3-mpmath python3-scipy
+          echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
       - name: Resolve runner and compiler cache identity
         id: kokkos-platform
@@ -2410,6 +2413,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev ninja-build ccache mold
+
+      - name: Install the AMR fixture generator dependency
+        if: >-
+          matrix.kind == 'cpp' &&
+          (contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_amr_synthetic_program_loader_transaction') ||
+           contains(steps.openmp-cpp-plan.outputs.cpp_shard_targets, 'test_prepared_field_rhs_inputs'))
+        run: |
+          sudo apt-get install -y python3-numpy
+          echo "POPS_AMR_FIXTURE_PYTHON=/usr/bin/python3" >> "$GITHUB_ENV"
 
       - name: Install MPI SDK for required Python syntax witnesses
         if: matrix.kind == 'python'

@@ -17,8 +17,8 @@ inline constexpr int kCheckpointEnvelopeSchemaVersion = 2;
 inline constexpr int kCheckpointSpatialSchemaVersion = 1;
 inline constexpr int kUniformCheckpointPayloadVersion = 9;
 inline constexpr int kAmrCheckpointPayloadVersion = 12;
-inline constexpr const char* kComponentCatalogSha256 = "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "d5b9b39c34236696fee592a902560209576475cf07119e33bd7e0a8d3519352d";
-inline constexpr const char* kContractSha256 = "21cef9a2b8abb8e78c5c98fddaa6797f246d9725b1d723a84353d64ebe2608e1";
+inline constexpr const char* kComponentCatalogSha256 = "eb2feac6afcc6b06eb7868d9ff6fc2a79ba57c36093aff363f762fe45bb5d9a2";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "4897c3ccc339e94a6d2b3150876ec013f7c692ff46b718cc4900f264818907a3";
+inline constexpr const char* kContractSha256 = "8d81b5e909a5e9db25f787e862ad1db9805327ee47777d5e6a77b9c89b3c9f12";
 }  // namespace pops::release_contract
 // clang-format on

@@ -52,6 +52,13 @@ class ContinuationTransitionPlan:
         return tuple(rows)
 
 
+def retained_auxiliary_component_identity(owner: str, component: dict[str, Any]) -> str:
+    return make_identity("retained-auxiliary-component", {
+        "consumer_owner_qid": owner,
+        "component": component,
+    }).token
+
+
 def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
     rows = []
 
@@ -134,10 +141,7 @@ def derive_continuation_transitions(plan: Any) -> ContinuationTransitionPlan:
                 # Its retained buffer is auxiliary to the block, not the Case-owned solve scratch.
             # Ordinary auxiliary storage belongs to the consumer block instance. Two
             # instances may share a model declaration without sharing their input buffers.
-            identity = make_identity("retained-auxiliary-component", {
-                "consumer_owner_qid": block.instance_owner_qid,
-                "component": component["key"],
-            }).token
+            identity = retained_auxiliary_component_identity(block.instance_owner_qid, component["key"])
             add("auxiliary", identity, block.name,
                 ("transfer" if producer == "runtime_input" else "invalidate",
                  "preserve", "invalidate", "invalidate", "preserve"),

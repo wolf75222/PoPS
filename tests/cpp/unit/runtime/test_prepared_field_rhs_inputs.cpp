@@ -3,7 +3,8 @@
 #include <gtest/gtest.h>
 #include <Kokkos_Core.hpp>
 #include "explicit_amr_program.hpp"
-#include "amr_tagging_test_authority.hpp"
+#include "amr_fixture_criteria.hpp"
+#include "amr_fixture_tag_mask_oracle.hpp"
 #include "field_rhs_value_program_fixture.hpp"
 #include <pops/runtime/builders/compiled/generated_system_block.hpp>
 #include <pops/runtime/builders/compiled/dsl_block.hpp>
@@ -376,12 +377,14 @@ void install_value_program(Runtime& system) {
 }
 
 template <class Context, class Runtime>
-Context& started_value_context(Runtime& system, const char* symbol) {
+Context& started_value_context(
+    Runtime& system, const char* symbol, const char* path = POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO,
+    const std::string& expected = test::field_rhs_value_program::identity) {
   // Plan installation runs inside the real first Program entry after official hash publication.
   system.step(.03125);
-  if (system.installed_program_hash() != test::field_rhs_value_program::identity)
+  if (system.installed_program_hash() != expected)
     throw std::logic_error("Field RHS test Program failed to retain its exported identity");
-  const auto library = dynlib::open(POPS_TEST_FIELD_RHS_VALUE_PROGRAM_SO);
+  const auto library = dynlib::open(path);
   if (!dynlib::valid(library))
     throw std::runtime_error("cannot reopen installed Field RHS test Program");
   const auto getter = reinterpret_cast<void* (*)(Runtime*)>(dynlib::sym(library, symbol));
@@ -401,7 +404,8 @@ runtime::program::AmrProgramContext<D>& installed_value_context(AmrSystem<D>& sy
   // The AMR caller installed the real artifact before any hierarchy materialization,
   // then completed bootstrap. Starting it here must never reinstall a live runtime.
   return started_value_context<runtime::program::AmrProgramContext<D>>(
-      system, "pops_test_field_rhs_amr_context");
+      system, "pops_test_field_rhs_amr_context", POPS_TEST_TAGGED_FIELD_RHS_VALUE_PROGRAM_SO,
+      test::field_rhs_value.program_hash(test::field_rhs_value_program::identity));
 }
 
 template <class Context>
@@ -815,7 +819,7 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrRefusesMissingSuccessfulStageVal
   }
   AmrSystem<D> system(config);
   test::install_amr_runtime_authority(system, "test.field-rhs-v2.amr-execution");
-  system.install_block_state_route("material", "test.field-rhs-v2.state");
+  system.install_block_state_route("material", test::field_rhs_value.state);
   // This is the same generated storage factory as the production program-only block route.
   system.install_prepared_amr_block(prepare_compiled_amr_system_block<D>(
       "material", StorageModel{}, "state_storage", "unavailable", "conservative", "imex", 1.4, 1, 1,
@@ -836,32 +840,29 @@ TEST(PreparedFieldRhsInputs, ActualMultilevelAmrRefusesMissingSuccessfulStageVal
   system.set_block_elliptic_field_v2("material", "potential", "test.field-rhs-v2.executable-rhs",
                                      "test.field-rhs-v2.binding", "test.field-rhs-v2.consumer", 2,
                                      observing_callback(observed));
-  test::install_prepared_threshold_union(
-      system,
-      {{"material", "u", 2.4, test::PreparedThresholdRelation::Above, "test.field-rhs-v2.state"}},
-      "test.field-rhs-v2.tagging", "test.field-rhs-v2.clock");
-  system.bind_bootstrap_subject("test.field-rhs-v2.state", "material", "bound_level_zero");
-  system.stage_bootstrap_array("test.field-rhs-v2.state", "material", "cell", "cell", 1,
+  test::field_rhs_value.install<D>(system);
+  system.bind_bootstrap_subject(test::field_rhs_value.state, "material", "bound_level_zero");
+  system.stage_bootstrap_array(test::field_rhs_value.state, "material", "cell", "cell", 1,
                                config.shape, initial());
   Extent<D> prolongation{}, restriction{};
   for (int axis = 0; axis < D; ++axis)
     prolongation[axis] = 1;
   system.register_bootstrap_transfer_route(
-      "test.field-rhs-v2.prolongation", {"test.field-rhs-v2.state"},
+      "test.field-rhs-v2.prolongation", {test::field_rhs_value.state},
       "test.field-rhs-v2.conservative-linear", "cell", "cell", "conservative", "dense",
       "prolongation", "conservative_linear", 2, prolongation, config.transition_ratios.front());
   system.register_bootstrap_transfer_route(
-      "test.field-rhs-v2.restriction", {"test.field-rhs-v2.state"},
+      "test.field-rhs-v2.restriction", {test::field_rhs_value.state},
       "test.field-rhs-v2.volume-average", "cell", "cell", "conservative", "dense", "restriction",
       "volume_average", 1, restriction, config.transition_ratios.front());
-  install_value_program(system);
+  system.install_program(POPS_TEST_TAGGED_FIELD_RHS_VALUE_PROGRAM_SO);
   system.begin_bootstrap_plan();
   system.seed_program_params(0, {double(kParameter)});
-  (void)system.materialize_bootstrap_action("test.field-rhs-v2.state", "initialize_level_zero",
+  (void)system.materialize_bootstrap_action(test::field_rhs_value.state, "initialize_level_zero",
                                             "bound_level_zero", 0);
   ASSERT_TRUE(
       system.bootstrap_next_level());  // A real hierarchy action, not a declared level count.
-  (void)system.materialize_bootstrap_action("test.field-rhs-v2.state", "prolong_from_parent",
+  (void)system.materialize_bootstrap_action(test::field_rhs_value.state, "prolong_from_parent",
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.mark_bound();
@@ -1085,7 +1086,8 @@ Real incidence_local_dependency_error(AmrSystem<D>& system, const AuxiliaryCompo
 }
 runtime::program::AmrProgramContext<D>& incidence_context(AmrSystem<D>& system) {
   system.step(.03125);  // Real installer entry, value plan and hierarchy advance.
-  if (system.installed_program_hash() != test::aux_incidence_value_program::identity)
+  if (system.installed_program_hash() !=
+      test::field_rhs_incidence.program_hash(test::aux_incidence_value_program::identity))
     throw std::logic_error("incidence Program identity differs from its real DSO");
   const auto library = dynlib::open(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
   if (!dynlib::valid(library))
@@ -1108,7 +1110,8 @@ enum class IncidenceRestoreWitness {
   scaled_phi_failure
 };
 
-void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
+void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra,
+                                      bool check_adjacent_tags = false) {
   ready();
   AmrSystemConfig<D> config;
   config.level_count = 2;
@@ -1126,7 +1129,7 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
   IncidenceObservation observed;
   AmrSystem<D> system(config);
   test::install_amr_runtime_authority(system, "test.amr-aux.incidence-execution");
-  system.install_block_state_route("material", "test.amr-aux.incidence-state");
+  system.install_block_state_route("material", test::field_rhs_incidence.state);
   if (extra == IncidenceRestoreWitness::accepted_state_consumer) {
     auto prepared = prepare_compiled_amr_system_block<D>(
         "material", IncidenceForcedStateModel{}, "none", "rusanov", "conservative", "imex", 1.4, 1,
@@ -1246,41 +1249,58 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
           observed.snapshots.push_back({inputs.level(), inputs.boundary_point(),
                                         system.capture_auxiliary_checkpoint_accepted_state()});
       });
-  test::install_prepared_threshold_union(
-      system,
-      {{"material", "tag", 2.4, test::PreparedThresholdRelation::Above,
-        "test.amr-aux.incidence-state"}},
-      "test.amr-aux.incidence-tagging", "test.field-rhs-v2.clock");
-  system.bind_bootstrap_subject("test.amr-aux.incidence-state", "material", "bound_level_zero");
-  const auto tagging = initial();
+  test::field_rhs_incidence.install<D>(system);
+  system.bind_bootstrap_subject(test::field_rhs_incidence.state, "material", "bound_level_zero");
+  auto tagging = initial();
+  constexpr double threshold = 2.4;
+  if (check_adjacent_tags) {
+    const Real equal = Real(threshold);
+    tagging[0] = std::nextafter(equal, Real(0));
+    tagging[1] = equal;
+    tagging[2] = std::nextafter(equal, Real(3));
+  }
   std::vector<double> state(2 * tagging.size());
   for (std::size_t cell = 0; cell < tagging.size(); ++cell) {
     state[cell] = 3.;
     state[tagging.size() + cell] = tagging[cell];  // Public component-major array.
   }
-  system.stage_bootstrap_array("test.amr-aux.incidence-state", "material", "cell", "cell", 2,
+  system.stage_bootstrap_array(test::field_rhs_incidence.state, "material", "cell", "cell", 2,
                                config.shape, state);
   Extent<D> prolongation{}, restriction{};
   for (int axis = 0; axis < D; ++axis)
     prolongation[axis] = 1;
   system.register_bootstrap_transfer_route(
-      "test.amr-aux.incidence-prolongation", {"test.amr-aux.incidence-state"},
+      "test.amr-aux.incidence-prolongation", {test::field_rhs_incidence.state},
       "test.amr-aux.conservative-linear", "cell", "cell", "conservative", "dense", "prolongation",
       "conservative_linear", 2, prolongation, config.transition_ratios.front());
   system.register_bootstrap_transfer_route(
-      "test.amr-aux.incidence-restriction", {"test.amr-aux.incidence-state"},
+      "test.amr-aux.incidence-restriction", {test::field_rhs_incidence.state},
       "test.amr-aux.volume-average", "cell", "cell", "conservative", "dense", "restriction",
       "volume_average", 1, restriction, config.transition_ratios.front());
   system.install_program(POPS_TEST_FIELD_RHS_AUX_INCIDENCE_PROGRAM_SO);
   system.begin_bootstrap_plan();
   system.seed_program_params(0, {double(kParameter)});
-  (void)system.materialize_bootstrap_action("test.amr-aux.incidence-state", "initialize_level_zero",
-                                            "bound_level_zero", 0);
+  (void)system.materialize_bootstrap_action(test::field_rhs_incidence.state,
+                                            "initialize_level_zero", "bound_level_zero", 0);
   ASSERT_TRUE(system.bootstrap_next_level());
-  (void)system.materialize_bootstrap_action("test.amr-aux.incidence-state", "prolong_from_parent",
+  (void)system.materialize_bootstrap_action(test::field_rhs_incidence.state, "prolong_from_parent",
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
   system.mark_bound();
+  const auto served = system.block_level_state_global("material", 0);
+  ASSERT_EQ(served.size(), 2 * tagging.size());
+  EXPECT_TRUE(std::all_of(served.begin(), served.begin() + tagging.size(),
+                          [](double value) { return value == 3.; }));
+  const auto tags = system.execute_prepared_tagging(0);
+  EXPECT_EQ(test::expect_fixture_tag_mask(
+                tags.refine, config.shape,
+                [&](std::size_t cell) { return served.at(tagging.size() + cell) > threshold; }),
+            tagging.size());
+  if (check_adjacent_tags) {
+    for (std::size_t i = 0; i < 3; ++i)
+      EXPECT_EQ(served[tagging.size() + i], tagging[i]);
+    return;
+  }
   auto& context = incidence_context(system);
   const auto& actual_fine = system.prepared_amr_block_state(0, 1);
   Real local_fine_cells = 0;
@@ -1693,6 +1713,7 @@ void actual_field_incidence_lifecycle(IncidenceRestoreWitness extra) {
 }
 
 TEST(PreparedFieldRhsInputs, ActualFieldPublicationReopensCoarseAuxWhileFineRemainsDirty) {
+  actual_field_incidence_lifecycle(IncidenceRestoreWitness::original, true);
   actual_field_incidence_lifecycle(IncidenceRestoreWitness::original);
 }
 

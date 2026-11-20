@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <pops/core/foundation/native_dimension.hpp>
+#include <pops/runtime/amr/prepared_tagger_component.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 #include <pops/runtime/dynamic/authenticated_native_file.hpp>
@@ -87,7 +88,14 @@ PopsFieldViewV1 field_view(double* data, const std::array<std::size_t, Dim>& ext
   return result;
 }
 
-enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize, WrongAbi };
+enum class FluxTableFixture {
+  Exact,
+  HeaderOnly,
+  ForgedEntrySize,
+  WrongAbi,
+  PriorCatalogue,
+  RetiredInterface
+};
 
 constexpr const char* kComponentId = "pops://test/final-flux@1.0.0";
 constexpr const char* kSemanticIdentity = "semantic-final-flux";
@@ -122,6 +130,7 @@ std::string component_source() {
     } prepared_state_lifetime_oracle;
 
     int tag_call_count = 0;
+    bool tag_retry_issued = false;
     int partial_tag_output = 0;
     const void* last_tag_state_data = nullptr;
     std::int64_t last_tag_logical_tick = -1;
@@ -261,6 +270,12 @@ std::string component_source() {
                    "unsupported non-finite policy"};
         return 21;
       }
+      if (request->logical_time.tick > 0 && request->logical_time.level == 1 && !tag_retry_issued) {
+        tag_retry_issued = true;
+        *status = {sizeof(PopsComponentStatusV1), 73, POPS_COMPONENT_RETRY_STEP_V1,
+                   "injected rank-local Tagger failure"};
+        return 0;
+      }
       const std::size_t points = request->refine_candidates.size;
       std::fill_n(request->refine_candidates.data, points, std::uint8_t{0});
       if (!partial_tag_output) {
@@ -376,38 +391,6 @@ std::string component_source() {
       return 0;
     }
 
-    int cluster(void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* status) {
-      if (request->dimension < 1 || request->dimension > 3 || request->box_capacity < 1)
-        return 2;
-      std::array<std::int64_t, 3> lo{0, 0, 0};
-      std::array<std::int64_t, 3> hi{-1, -1, -1};
-      for (std::int32_t axis = 0; axis < request->dimension; ++axis)
-        lo[axis] = request->extents[axis];
-      for (std::size_t point = 0; point < request->tags.size; ++point) {
-        if (request->tags.data[point] == 0)
-          continue;
-        std::size_t remaining = point;
-        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
-          const auto coordinate = static_cast<std::int64_t>(
-              remaining % static_cast<std::size_t>(request->extents[axis]));
-          remaining /= static_cast<std::size_t>(request->extents[axis]);
-          lo[axis] = std::min(lo[axis], coordinate);
-          hi[axis] = std::max(hi[axis], coordinate);
-        }
-      }
-      if (hi[0] < 0) {
-        *request->box_count = 0;
-      } else {
-        for (std::int32_t axis = 0; axis < request->dimension; ++axis) {
-          request->boxes[axis] = lo[axis];
-          request->boxes[request->dimension + axis] = hi[axis];
-        }
-        *request->box_count = 1;
-      }
-      *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
-      return 0;
-    }
-
     int prepare(const PopsComponentPrepareRequestV1* request, void** state,
                 PopsComponentStatusV1* status) {
       const bool canonical_execution =
@@ -459,10 +442,17 @@ std::string component_source() {
     const PopsTaggerApiV2 tagger{{sizeof(PopsTaggerApiV2), POPS_COMPONENT_PROTOCOL_ABI_V1,
                                   POPS_NATIVE_INTERFACE_TAGGER_V2, 2, &prepare, &destroy},
                                  &tag_batch};
-    const PopsClusteringApiV1 clustering{
-        {sizeof(PopsClusteringApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
-         POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, &prepare, &destroy},
-        &cluster};
+#if defined(POPS_TEST_RETIRED_INTERFACE)
+    constexpr auto retired_clustering_id = static_cast<PopsNativeInterfaceIdV1>(4);
+    struct RetiredClusteringTable {
+      PopsComponentTableHeaderV1 header;
+      int (*cluster)(void*, const void*, PopsComponentStatusV1*);
+    };
+    const RetiredClusteringTable retired_clustering{
+        {sizeof(RetiredClusteringTable), POPS_COMPONENT_PROTOCOL_ABI_V1, retired_clustering_id, 1,
+         &prepare, &destroy},
+        +[](void*, const void*, PopsComponentStatusV1*) { return 0; }};
+#endif
     const PopsComponentInterfaceEntryV1 interfaces[]{
         {POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
 #if defined(POPS_TEST_FORGED_FLUX_ENTRY_SIZE)
@@ -474,7 +464,10 @@ std::string component_source() {
         {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1), &ghost},
         {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1), &boundary_flux},
         {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2), &tagger},
-        {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1), &clustering}};
+#if defined(POPS_TEST_RETIRED_INTERFACE)
+        {retired_clustering_id, 1, sizeof(retired_clustering), &retired_clustering},
+#endif
+    };
     const PopsComponentApiV1 component{
         sizeof(PopsComponentApiV1),
         POPS_COMPONENT_PROTOCOL_ABI_V1,
@@ -483,11 +476,15 @@ std::string component_source() {
 #else
         POPS_ABI_KEY_LITERAL,
 #endif
+#if defined(POPS_TEST_PRIOR_CATALOGUE)
+        "3300f2e69852d0b12cbcb12b2c90c1c1dbdd9cddde375d4633062a64d0857985",
+#else
         POPS_COMPONENT_CATALOG_SHA256_V1,
+#endif
         "pops://test/final-flux@1.0.0",
         "semantic-final-flux",
         "manifest-final-flux",
-        6,
+        sizeof(interfaces) / sizeof(interfaces[0]),
         interfaces};
     }  // namespace
 
@@ -533,6 +530,10 @@ std::filesystem::path compile_component(FluxTableFixture fixture = FluxTableFixt
     fixture_flags += " -DPOPS_TEST_FORGED_FLUX_ENTRY_SIZE";
   if (fixture == FluxTableFixture::WrongAbi)
     fixture_flags += " -DPOPS_TEST_WRONG_COMPONENT_ABI";
+  if (fixture == FluxTableFixture::PriorCatalogue)
+    fixture_flags += " -DPOPS_TEST_PRIOR_CATALOGUE";
+  if (fixture == FluxTableFixture::RetiredInterface)
+    fixture_flags += " -DPOPS_TEST_RETIRED_INTERFACE";
   const auto package = pops::test::native_dso::compile_shared(source, library, fixture_flags);
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_amr_native_loader", package);
@@ -554,8 +555,7 @@ pops::component::ExpectedNativeComponent expected(const std::filesystem::path& l
            {POPS_NATIVE_INTERFACE_TRANSFER_V2, 2, sizeof(PopsTransferApiV2)},
            {POPS_NATIVE_INTERFACE_GHOST_BOUNDARY_V1, 1, sizeof(PopsGhostBoundaryApiV1)},
            {POPS_NATIVE_INTERFACE_BOUNDARY_FLUX_V1, 1, sizeof(PopsBoundaryFluxApiV1)},
-           {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)},
-           {POPS_NATIVE_INTERFACE_CLUSTERING_V1, 1, sizeof(PopsClusteringApiV1)}}};
+           {POPS_NATIVE_INTERFACE_TAGGER_V2, 2, sizeof(PopsTaggerApiV2)}}};
 }
 
 std::shared_ptr<const pops::component::PreparedExecutionContextV1> prepared_execution() {
@@ -618,6 +618,86 @@ TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
     EXPECT_THROW(
         (void)loaded.prepared_state(POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, mismatched_context),
         std::invalid_argument);
+  }
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, PreparedTaggerPreservesTypedLateRetry) {
+  namespace amr = pops::runtime::amr;
+  namespace program = pops::runtime::program;
+  using Tagger = amr::PreparedTaggerComponent<kDim>;
+  const auto library = compile_component();
+  {
+    auto loaded = std::make_shared<pops::component::LoadedComponent>(
+        pops::component::LoadedComponent::load(library.string(), expected(library)));
+    auto lane = pops::ExecutionLane::world("test::prepared-tagger-retry");
+    const auto make_layout = [](int level, int last_cell) {
+      pops::Index<kDim> lower{}, upper{}, rank_origin{};
+      pops::Extent<kDim> rank_extent{};
+      std::array<int, kDim> ratio{};
+      for (int axis = 0; axis < kDim; ++axis) {
+        upper[axis] = last_cell;
+        rank_extent[axis] = 1;
+        ratio[axis] = level == 0 ? 1 : 2;
+      }
+      const pops::Box<kDim> domain(lower, upper);
+      const pops::mesh::BoxArray<kDim> patches(std::vector<pops::Box<kDim>>{domain});
+      const auto distribution = pops::mesh::Distribution<kDim>::replicated(
+          patches, pops::mesh::RankSpace<kDim>{rank_origin, rank_extent});
+      return pops::amr::hierarchy::LevelLayout<kDim>{
+          level, domain, patches, distribution, pops::amr::RefinementRatio<kDim>{ratio}, {1, 1}};
+    };
+    const std::vector layouts{make_layout(0, 1), make_layout(1, 3)};
+    pops::MultiFab<kDim> coarse(layouts[0].patches(), layouts[0].distribution(), {}, 1, {});
+    pops::MultiFab<kDim> fine(layouts[1].patches(), layouts[1].distribution(), {}, 1, {});
+    coarse.set_val(pops::Real(1));
+    fine.set_val(pops::Real(1));
+    Tagger::Program criterion;
+    criterion.leaves = {{0, 0, POPS_TAGGING_ABOVE_V1, 0.0, POPS_TAGGING_NO_STENCIL_V1}};
+    criterion.refine_ops = {POPS_TAGGING_ABOVE_V1};
+    criterion.refine_args = {0};
+    criterion.clock_identity = "test::clock";
+    criterion.provider_identity = "test::prepared-tagger";
+    criterion.prepared = true;
+    amr::PreparedTaggerComponentSpec spec{kComponentId,
+                                          kManifestIdentity,
+                                          criterion.provider_identity,
+                                          "test::graph",
+                                          "test::layout",
+                                          criterion.clock_identity,
+                                          2,
+                                          POPS_TAGGER_EXECUTION_HOST_V2,
+                                          prepared_execution(),
+                                          "{}",
+                                          "{}"};
+    const std::vector<std::vector<Tagger::Field>> fields{{{"test::state", &coarse}},
+                                                         {{"test::state", &fine}}};
+    std::vector<amr::PreparedTaggingExecutionBudget> budgets;
+    for (const auto& layout : layouts) {
+      const auto cells = static_cast<std::size_t>(layout.domain().numPts());
+      budgets.push_back({{1, 1, cells, cells, cells, 1U << 20}, cells * 16, cells * 2});
+    }
+    auto tagger = Tagger::prepare(std::move(loaded), std::move(spec), criterion, fields, layouts,
+                                  budgets, 1, 0, lane);
+    std::array<pops::Real, kDim> spacing;
+    spacing.fill(pops::Real(0.5));
+    const auto& accepted = tagger.execute(1, layouts[1], spacing, 1, 0, 0.0);
+    const auto cells = static_cast<std::size_t>(layouts[1].domain().numPts());
+    ASSERT_EQ(accepted.refine.count(), cells);
+    EXPECT_EQ(tagger.execute(0, layouts[0], spacing, 1, 1, 0.001).refine.count(),
+              static_cast<std::size_t>(layouts[0].domain().numPts()));
+    try {
+      (void)tagger.execute(1, layouts[1], spacing, 1, 1, 0.001);
+      ADD_FAILURE() << "late Tagger call must report its typed retry";
+    } catch (const program::StepAttemptRejected& rejected) {
+      EXPECT_EQ(rejected.status(), pops::SolveStatus::kInvalidEvaluation);
+      EXPECT_EQ(rejected.disposition(), program::StepAttemptDisposition::kRetry);
+      EXPECT_EQ(rejected.reason_code(), 73u);
+      EXPECT_EQ(rejected.phase(), "amr_tagger");
+      EXPECT_EQ(rejected.detail(), "injected rank-local Tagger failure");
+    }
+    EXPECT_EQ(accepted.refine.count(), cells);
+    EXPECT_EQ(tagger.execute(1, layouts[1], spacing, 1, 1, 0.001).refine.count(), cells);
   }
   std::filesystem::remove(library);
 }
@@ -754,6 +834,44 @@ TEST(test_amr_native_loader, RefusesHeaderOnlyTableWithForgedFullEntrySize) {
   const auto library = compile_component(FluxTableFixture::ForgedEntrySize);
   EXPECT_THROW(pops::component::LoadedComponent::load(library.string(), expected(library)),
                std::runtime_error);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesPriorCatalogueWithCurrentAbiAndRetainedTables) {
+  const auto library = compile_component(FluxTableFixture::PriorCatalogue);
+  const auto manifest = expected(library);
+  try {
+    (void)pops::component::LoadedComponent::load(library.string(), manifest);
+    ADD_FAILURE() << "a DSO with a prior catalogue digest must be refused";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(), "native component API identity mismatch");
+  }
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesRetiredIdWithCurrentCatalogueAndCoherentManifest) {
+  constexpr auto retired_id = static_cast<PopsNativeInterfaceIdV1>(4);
+  EXPECT_EQ(pops::component::generated_native_interface_version(retired_id), 0u);
+  EXPECT_EQ(pops::component::generated_native_interface_table_size(retired_id), 0u);
+  const PopsComponentTableHeaderV1 header{sizeof(PopsComponentTableHeaderV1),
+                                          POPS_COMPONENT_PROTOCOL_ABI_V1,
+                                          retired_id,
+                                          1,
+                                          nullptr,
+                                          nullptr};
+  EXPECT_FALSE(pops::component::generated_native_interface_table_is_complete(retired_id, &header,
+                                                                             sizeof(header)));
+
+  const auto library = compile_component(FluxTableFixture::RetiredInterface);
+  auto manifest = expected(library);
+  manifest.interfaces.push_back({retired_id, 1, sizeof(PopsComponentTableHeaderV1)});
+  try {
+    (void)pops::component::LoadedComponent::load(library.string(), manifest);
+    ADD_FAILURE() << "retired ABI id 4 must be refused";
+  } catch (const std::runtime_error& error) {
+    EXPECT_STREQ(error.what(),
+                 "native component interface version differs from the closed catalog");
+  }
   std::filesystem::remove(library);
 }
 
