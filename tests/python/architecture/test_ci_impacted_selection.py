@@ -2513,7 +2513,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            shard_total: 1\n"
         "            ccache_maxsize: 2G"
     ) in openmp_block
-    assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
+    assert openmp_block.count("if: matrix.kind == 'cpp'") == 7
     assert openmp_block.count("if: matrix.kind == 'python'") == 14
     assert "Install MPI SDK for required Python syntax witnesses" in openmp_block
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
