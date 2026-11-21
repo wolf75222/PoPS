@@ -1486,6 +1486,8 @@ mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_api_v02_continuation_auxiliary_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py", nproc = 2, native_dimension = 2 },
+  { path = "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py", nproc = 3, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_history_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_regrid_native_mpi2.py", nproc = 2, native_dimension = 2 },
   { path = "tests/python/integration/mpi/test_api_v02_continuation_forest_native_mpi2.py", nproc = 2, native_dimension = 2 },

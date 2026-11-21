@@ -3064,7 +3064,7 @@
           "registration": "v10"
         },
         "tests/python/integration/runtime/test_api_v02_unconstrained_distributed_native.py": {
-          "basis": "Unmeasured cold-compiler scheduling allowance for N10 lot 4 (DM3): two distributed cases built as written and with their offsets replaced by a balanced domain, each compiled and run twice on two ranks. MPI2 CI via exact per-rank pytest receipts. MPI3 local reception only. No execution claimed by registration.",
+          "basis": "Unmeasured cold-compiler scheduling allowance for N10 lot 4 (DM3). The ordered algebra replaces written offsets with balanced domains. The historical roundtrip retains its declared placement constraints. MPI2 CI via exact per-rank pytest receipts.",
           "ci_ranks": [
             2
           ],
@@ -3079,6 +3079,20 @@
           ],
           "native_dimension": 2,
           "registration": "n10_lot4_20261113"
+        },
+        "tests/python/integration/runtime/test_distributed_ragged_dm3_native.py": {
+          "basis": "Unmeasured cold-compiler scheduling allowance for two small continuation artifacts in each world. MPI2 and MPI3 use exact per-rank pytest receipts.",
+          "ci_ranks": [1, 2, 3],
+          "declared_cases": 1,
+          "entrypoints": [
+            "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py",
+            "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py"
+          ],
+          "estimated_seconds": 300,
+          "execution_lane": "serial_and_mpi",
+          "kind": "native_profile",
+          "native_dimension": 2,
+          "registration": "n10_lot4_20261121"
         },
         "tests/python/integration/runtime/test_api_v02_drift_wetdry_native.py": {
           "kind": "native_profile",
@@ -6762,7 +6776,7 @@
         "native_dimension": 2
       }
     },
-    "estimated_count": 1245,
+    "estimated_count": 1246,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -6978,6 +6992,7 @@
       "tests/python/integration/runtime/test_diocotron_analytic_initial.py",
       "tests/python/integration/runtime/test_distributed_balanced_domain_native.py",
       "tests/python/integration/runtime/test_distributed_derivatives_v14_native.py",
+      "tests/python/integration/runtime/test_distributed_ragged_dm3_native.py",
       "tests/python/integration/runtime/test_dsl_runtime_params.py",
       "tests/python/integration/runtime/test_dt_bound_capture_independent_runtime.py",
       "tests/python/integration/runtime/test_exact_analytic_initial.py",
@@ -8210,7 +8225,7 @@
       "run_id": 35717678423,
       "source_commit": "19b2bb544ed214aaf1ca5e3c9aea409d33bc5bf4"
     },
-    "total_files": 1313,
+    "total_files": 1314,
     "unit_seconds": "per-file scheduling weight; measured history and explicitly marked estimates",
     "v18_amr_field_maps_estimate_source": "Unmeasured scheduling estimate copied from test_amr_physical_maps (600 s): one complete native runtime module compiles repeated field solves and authenticated maps on three AMR layouts, in both operation orders, with restart and same-context failed-attempt retry. Replace from complete CI per-file timing artifacts; this is not a measured duration.",
     "v18_amr_maps_estimate_source": "Unmeasured scheduling estimate copied from test_interstage_physical_maps (600 s): a complete runtime module compiling authenticated native transfers and checking multiple layouts, intermediate stages, failures and restart. This module adds independently prepared AMR hierarchies. Replace from a complete CI per-file timing artifact; no measured duration is claimed.",
@@ -10722,6 +10737,7 @@
   "tests/python/integration/runtime/test_diocotron_analytic_initial.py": 120.0,
   "tests/python/integration/runtime/test_distributed_balanced_domain_native.py": 900,
   "tests/python/integration/runtime/test_distributed_derivatives_v14_native.py": 1200,
+  "tests/python/integration/runtime/test_distributed_ragged_dm3_native.py": 300,
   "tests/python/integration/runtime/test_dsl_runtime_params.py": 415,
   "tests/python/integration/runtime/test_dt_bound_capture_independent_runtime.py": 600,
   "tests/python/integration/runtime/test_exact_analytic_initial.py": 1320,
