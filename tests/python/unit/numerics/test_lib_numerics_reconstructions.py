@@ -39,6 +39,7 @@ import pytest
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.numerics import reconstruction
+from pops.codegen.cache import _STRICT_FLOATING_FLAGS  # the generated policies are built with these
 
 from examples.api_v02.b6_reconstructions import (Reconstruct, mc, minmod, muscl, superbee,
                                                  vanleer, weno5)
@@ -217,7 +218,7 @@ def test_generated_muscl_policy_is_the_native_limiter_bit_for_bit(name, native_c
     source.write_text(_program(name))
     binary = tmp_path / ("muscl_%s" % name)
     compiled = subprocess.run(
-        [native_cxx, "-std=c++20", "-O2", "-I", str(REPO / "include"), str(source),
+        [native_cxx, "-std=c++20", "-O2", *_STRICT_FLOATING_FLAGS, "-I", str(REPO / "include"), str(source),
          "-o", str(binary)], capture_output=True, text=True, check=False)
     assert compiled.returncode == 0, compiled.stderr[-4000:]
     ran = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
@@ -312,7 +313,7 @@ def test_generated_weno5_policy_is_the_native_weno5z_bit_for_bit(epsilon, native
     source.write_text(_weno_program(epsilon))
     binary = tmp_path / "weno5"
     compiled = subprocess.run(
-        [native_cxx, "-std=c++20", "-O2", "-I", str(REPO / "include"), str(source),
+        [native_cxx, "-std=c++20", "-O2", *_STRICT_FLOATING_FLAGS, "-I", str(REPO / "include"), str(source),
          "-o", str(binary)], capture_output=True, text=True, check=False)
     assert compiled.returncode == 0, compiled.stderr[-4000:]
     ran = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
