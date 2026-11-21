@@ -48,6 +48,7 @@ from pops.surface._expr import Expr, Predicate, walk
 from pops.surface.math import ddt, div
 from pops.time._program.elaboration import Advance, Proposal, elaborate
 from pops.time._program.traced_method import Candidate, method
+from pops.codegen.cache import _STRICT_FLOATING_FLAGS  # the generated policies are built with these
 
 from examples.api_v02 import b6_numerics, b6_reconstructions
 
@@ -280,7 +281,7 @@ def test_the_generated_policy_of_the_word_is_the_native_weno5z_bit_for_bit(
     source.write_text(_program(epsilon))
     binary = tmp_path / "weno5"
     compiled = subprocess.run(
-        [native_cxx, "-std=c++20", "-O2", "-I", str(REPO / "include"), str(source),
+        [native_cxx, "-std=c++20", "-O2", *_STRICT_FLOATING_FLAGS, "-I", str(REPO / "include"), str(source),
          "-o", str(binary)], capture_output=True, text=True, check=False)
     assert compiled.returncode == 0, compiled.stderr[-4000:]
     ran = subprocess.run([str(binary)], capture_output=True, text=True, check=False)
