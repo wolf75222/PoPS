@@ -46,12 +46,12 @@ if reports:
 def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps():
     plan = runner.make_plan()
     assert (len(plan['groups']), plan['contract_count'], plan['orchestrator_count'],
-            plan['entrypoint_count']) == (156, 133, 31, 102)
-    assert plan['parent_launch_count'] == 194
+            plan['entrypoint_count']) == (159, 136, 31, 105)
+    assert plan['parent_launch_count'] == 197
     launches = [launch for group in plan['groups'] for launch in group['launches']]
     assert len({(launch['path'], launch.get('parent_node', launch.get('partition_id', '')))
-                for launch in launches}) == 194
-    assert len({launch['path'] for launch in launches}) == 133
+                for launch in launches}) == 197
+    assert len({launch['path'] for launch in launches}) == 136
     pairs = [row for row in plan['groups'] if row['group'].startswith('worlds-')]
     assert len(pairs) == 38
     for pair in pairs:
@@ -62,7 +62,8 @@ def test_exact_groups_cover_all_declared_contracts_and_nodes_with_existing_caps(
         assert sum(row['timeout_seconds'] + 30 for row in group['launches']) <= 35 * 60
         for row in group['launches']:
             if row['kind'] == 'ranked':
-                assert row['timeout_seconds'] == 1200 and row['nproc'] == 2
+                ranks = 3 if row['path'].endswith('/test_distributed_ragged_dm3_mpi3.py') else 2
+                assert row['timeout_seconds'] == 1200 and row['nproc'] == ranks
             elif group['group'].startswith('driver-'):
                 assert row['timeout_seconds'] == 1500
     assert all('test_public_ns_conduction' not in row['path'] for group in plan['groups']
@@ -251,7 +252,7 @@ def test_plan_cli_exports_the_same_complete_dynamic_matrix(tmp_path):
     values = dict(line.split('=', 1) for line in outputs.read_text().splitlines())
     matrix = json.loads(values['matrix'])
     assert matrix['include'] == [{'group': row['group']} for row in plan['groups']]
-    assert values['group_count'] == '156'
+    assert values['group_count'] == '159'
 
 
 def wheel_artifact(tmp_path):

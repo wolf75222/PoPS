@@ -33,6 +33,8 @@ ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # With the N16 representation modules, 172 keeps the maximum at 1886 s.
 # The two-point mapped-face module brings the maximum to 1886 s at 173 bins.
 # Budgeting the cold WENO5 parity runs needs 174 bins, with a maximum of 1882 s.
+# The 1800 s native file of N10 lot 4 (test_unconstrained_storage_n10_native.py) is packed
+# within the same 176 bins.
 SHARD_TOTAL = 176
 
 

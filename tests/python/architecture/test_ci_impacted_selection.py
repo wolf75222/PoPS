@@ -1219,6 +1219,12 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_api_v14_actions_mpi2.py",
             "nproc": 2,
             "native_dimension": 2,
@@ -1412,6 +1418,18 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
             "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py",
             "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py",
+            "nproc": 3,
             "native_dimension": 2,
         },
         {
@@ -1847,6 +1865,7 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_api_v02_temporal_hierarchy_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_terminal_failure_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v02_transport_oracles_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_api_v02_unconstrained_distributed_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_actions_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_array_derivatives_mpi2.py",
         "2\ttests/python/integration/mpi/test_api_v14_bundle_remap_mpi2.py",
@@ -1880,6 +1899,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
         "2\ttests/python/integration/mpi/test_diffusion_device_publication_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py",
+        "3\ttests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py",
         "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
         "2\ttests/python/integration/mpi/test_finite_structural_depth_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
@@ -1925,8 +1946,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "133"
-    assert outputs["python_mpi_entrypoint_count"] == "102"
+    assert outputs["python_mpi_count"] == "136"
+    assert outputs["python_mpi_entrypoint_count"] == "105"
     assert outputs["python_mpi_orchestrator_count"] == "31"
 
 
@@ -2506,7 +2527,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            shard_total: 1\n"
         "            ccache_maxsize: 2G"
     ) in openmp_block
-    assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
+    assert openmp_block.count("if: matrix.kind == 'cpp'") == 7
     assert openmp_block.count("if: matrix.kind == 'python'") == 14
     assert "Install MPI SDK for required Python syntax witnesses" in openmp_block
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 from pops._ir.data_model import is_finite_array, is_finite_index, value_kind
+from pops._ir.refusals import LayoutMismatch
 
 if TYPE_CHECKING:
     from pops.time.value_signatures import ValueSignature
@@ -236,6 +237,16 @@ def _domain_capacity(value):
 
 def _distributed(value, kind=None) -> ValueSignature:
     sig = signature(value)
+    if kind is None or value.vtype == kind:
+        if sig.get("ownership") == "replicated":
+            # DM3 (N10 lot 4): a layout fact, still a TypeError.
+            program = getattr(value, "prog", None)
+            raise LayoutMismatch(
+                "the distributed builder reads Contiguous values; this %s is stored Replicated "
+                "by the replicated builder" % value.vtype,
+                region=None if program is None else program._current_region(),
+                op="distributed %s" % (kind or value.vtype), expected="Contiguous",
+                found="Replicated")
     if (kind is not None and value.vtype != kind) or sig.get("ownership") != OWNERSHIP:
         raise TypeError("operation requires an authenticated contiguous distributed value")
     return sig

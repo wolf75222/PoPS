@@ -31,7 +31,8 @@ def test_api_v02_receivers_have_explicit_disjoint_native_dimensions():
         "test_computed_scratch_ssa_native.py", "test_stencil_flux_v02_native.py",
         "test_relations_v09_native.py", "test_continuation_v10_native.py",
         "test_collective_control_preparation_v10.py", "test_finite_structural_depth_native.py",
-        "test_diffusion_device_publication_native.py", "test_distributed_balanced_domain_native.py"))
+        "test_diffusion_device_publication_native.py", "test_distributed_balanced_domain_native.py",
+        "test_distributed_ragged_dm3_native.py"))
     assert set(native) == discovered
     contract = json.loads((ROOT / "tests/python/native_dimensions.json").read_text())
     for path, row in native.items():
@@ -186,7 +187,14 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
                   if row.get("registration") == "completion_20261015"
                   and row["kind"] == "native_profile"}
     assert len(completion) == 54
-    assert set(found) == set(native) | mixed | set(completion)
+    later = {path: row for path, row in rows.items()
+             if row.get("registration") == "n10_lot4_20261113"}
+    assert set(later) == {RUNTIME + "test_api_v02_unconstrained_distributed_native.py"}
+    for path, row in later.items():
+        assert sum(_test_case_count(path).values()) == row["declared_cases"], path
+        assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}
+        assert row["execution_lane"] == "mpi_only" and row["ci_ranks"] == [2]
+    assert set(found) == set(native) | mixed | set(completion) | set(later)
     for path, row in completion.items():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path
         assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}
@@ -196,6 +204,20 @@ def test_v10_receivers_have_exact_cardinality_and_ranked_pytest_entrypoints():
         assert sum(_test_case_count(path).values()) == row["declared_cases"], path
         assert found[path] == {"expected_cases": row["declared_cases"], "ranks": 2}
         assert row["ci_ranks"] == [2] and row["local_reception_ranks"] == [2, 3]
+
+    path = RUNTIME + "test_distributed_ragged_dm3_native.py"
+    row = rows[path]
+    assert row["execution_lane"] == "serial_and_mpi" and row["ci_ranks"] == [1, 2, 3]
+    assert sum(_test_case_count(path).values()) == row["declared_cases"]
+    assert [entries[entry]["nproc"] for entry in row["entrypoints"]] == [2, 3]
+    for entry in row["entrypoints"]:
+        assert entries[entry]["native_dimension"] == row["native_dimension"]
+        tree = ast.parse((ROOT / entry).read_text())
+        call, = (node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "run")
+        assert [ast.literal_eval(arg) for arg in call.args] == [path]
+        assert {item.arg: ast.literal_eval(item.value) for item in call.keywords} == {
+            "expected_cases": row["declared_cases"], "ranks": entries[entry]["nproc"]}
 
 
 def test_v14_receivers_have_exact_counts_and_unchanged_bounded_mpi2_launches():
@@ -251,6 +273,7 @@ def test_api_v02_mpi_only_modules_have_exact_exclusive_receivers_without_serial_
     expected = {RUNTIME + "test_" + name + "_v14_native.py" for name in (
         "bundle_repartition", "distributed_algebra", "distributed_failure", "distributed_gc")}
     expected.add(RUNTIME + "test_api_v02_distributed_program_native.py")
+    expected.add(RUNTIME + "test_api_v02_unconstrained_distributed_native.py")
     assert {row["path"] for row in receivers} == expected
     serial = {path for suite in selection.manifest_python_suites(manifest) for path in suite["files"]}
     assert not serial & expected
