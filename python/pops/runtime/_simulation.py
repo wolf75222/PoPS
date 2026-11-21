@@ -49,15 +49,19 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from pops.time._program.control import AdvanceControl, memory_rings
+from pops.time._program.control import AdvanceControl, FaceFrequencyStop, memory_rings
 from pops.time._program.elaboration import Proposal, StepRule
+from pops.time._step.strategy import FACE_STEP_FREQUENCY_SCHEMA, CellStepBound, FixedDt
 from pops.time._program.memory import MemoryView
 from pops.time._program.outputs import EveryDt, OutputRegion, Product, landing
+from pops.time.solve_outcome import solve_status_variant
 
 DEFAULT_MAX_STEPS = 1_000_000
 """``max_steps`` when a run leaves it out: master's (``_runtime_instance.py:1598@bb9``), CC14."""
 
-_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE = 0, 1, 2, 3
+_REACHED, _STEP_BUDGET, _ATTEMPT_BUDGET, _TRIAL_FAILURE, _FACE_FREQUENCY, _TERMINAL_FAILURE = (
+    0, 1, 2, 3, 4, 5,
+)
 _TRIAL_PHASES = ("trial", "trial_failure")
 
 
@@ -70,6 +74,7 @@ class RunFailed(RuntimeError):
             raise TypeError("RunFailed is raised with the RunResult whose failure is its variant")
         super().__init__(failure.describe())
         self.result = result
+        self.failure = failure
 
 
 class BudgetExhausted(RunFailed):
@@ -96,9 +101,10 @@ class Failure:
     the run rather than of an attempt, has the origin ``None``.
     """
 
-    __slots__ = ("variant", "origin", "payload")
+    __slots__ = ("variant", "origin", "payload", "site")
 
-    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any]) -> None:
+    def __init__(self, variant: type, origin: str | None, payload: Mapping[str, Any],
+                 *, site: Any = None) -> None:
         if not (isinstance(variant, type) and issubclass(variant, RunFailed)) \
                 or variant is RunFailed:
             raise TypeError("Failure.variant is a subclass of RunFailed")
@@ -107,16 +113,40 @@ class Failure:
         object.__setattr__(self, "variant", variant)
         object.__setattr__(self, "origin", origin)
         object.__setattr__(self, "payload", MappingProxyType(dict(payload)))
+        object.__setattr__(self, "site", site)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("Failure is immutable")
 
     def describe(self) -> str:
         payload = self.payload
+        if self.site is not None and "site" not in payload:
+            return "%s at the trial site %s: predicate %d observed %s" % (
+                self.variant.__name__, self.site.name, payload["predicate"], payload["value"])
         if self.variant is BudgetExhausted and payload["budget"] == "max_steps":
             return ("%s: max_steps=%d accepted steps ended the run at t=%r before until=%r"
                     % (self.variant.__name__, payload["max_steps"], payload["time"],
                        payload["until"]))
+        if self.variant is NotAdmissible and "face_frequency" in payload:
+            return ("%s: the face guard (%s) ended the step from t=%r after %d attempt(s) "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["time"],
+                       payload["attempts"], payload["face_frequency"], payload["rejection"]))
+        if self.variant is BudgetExhausted and "face_frequency" in payload:
+            return ("%s: the face guard (%s) rejected the last of %d attempt(s) from t=%r "
+                    "at frequency %r; last: %s"
+                    % (self.variant.__name__, payload["face_schema"], payload["attempts"],
+                       payload["time"], payload["face_frequency"], payload["rejection"]))
+        if self.variant is BudgetExhausted and payload["budget"] == "max_iterations":
+            # A solve of a failure site reached its iteration limit (SV10, N9 relation solves
+            # §3.6): the budget is the solve's, not the step's.
+            if "attempts" not in payload:
+                return "%s at the trial site %s: its solve reached max_iterations: %s" % (
+                    self.variant.__name__, payload["site"], payload["reason"])
+            return ("%s: the solve of the fixed failure site %s reached max_iterations and ended "
+                    "the step from t=%r after %d attempt(s), which a retry cannot change (T38): %s"
+                    % (self.variant.__name__, payload["site"], payload["time"],
+                       payload["attempts"], payload["reason"]))
         if self.variant in (SolveFailed, NotAdmissible):
             if "attempts" not in payload:
                 return "%s at the trial site %s: %s" % (
@@ -143,7 +173,7 @@ class Continuation:
 
     __slots__ = ("time", "macro_step", "proposal", "memory")
 
-    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule,
+    def __init__(self, time: float, macro_step: int, proposal: Proposal | StepRule | CellStepBound,
                  memory: MemoryView | None = None) -> None:
         object.__setattr__(self, "time", time)
         object.__setattr__(self, "macro_step", macro_step)
@@ -154,7 +184,7 @@ class Continuation:
         raise AttributeError("Continuation is immutable")
 
     def __repr__(self) -> str:
-        if type(self.proposal) is StepRule:
+        if type(self.proposal) is not Proposal:
             return "Continuation(time=%r, macro_step=%d, proposal=%r)" % (
                 self.time, self.macro_step, self.proposal)
         return "Continuation(time=%r, macro_step=%d, proposal=Proposal(dt=%r))" % (
@@ -289,21 +319,74 @@ def _trial_site(report: Mapping[str, Any]) -> dict:
     return {"site": site, "reason": reason}
 
 
-_VARIANTS = {"SolveFailed": SolveFailed, "NotAdmissible": NotAdmissible}
+_VARIANTS = {"BudgetExhausted": BudgetExhausted, "SolveFailed": SolveFailed,
+             "NotAdmissible": NotAdmissible}
 
 
-def _trial_variant(control: Any, site: str) -> type:
-    """The T39 variant of the failure site ``site``, from its row of the compiled control."""
-    variants = {row["site"]: row["variant"] for row in control.to_data().get("trial_failures", ())}
-    if variants.get(site) not in _VARIANTS:
+def _trial_variant(control: Any, site: str, status: str) -> type:
+    """The T39 variant of the failure site ``site`` rejected with the solve status ``status``.
+
+    The row of the compiled control lists what the site can report (N9 « La référence sous les
+    solves de relation » §3.6). A solve site maps the status through the table of solve failures:
+    ``iteration_limit`` gives ``BudgetExhausted``, every other rejected status ``SolveFailed``. An
+    admissibility guard rejects with ``invalid_evaluation`` and gives ``NotAdmissible``. A status
+    that the row does not allow is an error, never a guess."""
+    rows = {row["site"]: row for row in control.to_data().get("trial_failures", ())}
+    row = rows.get(site)
+    if row is None or not row["classified"]:
         raise RuntimeError("the failure site %r has no classified row in the compiled control"
                            % site)
-    return _VARIANTS[variants[site]]
+    if row["guard"] == "solve":
+        variant = solve_status_variant(status)
+    elif row["guard"] == "admissibility" and status == "invalid_evaluation":
+        variant = "NotAdmissible"
+    else:
+        variant = None
+    if variant is None or variant not in row["variant"]:
+        raise RuntimeError("the failure site %r was rejected with the status %r, which its row "
+                           "(%s) does not list" % (site, status, ", ".join(row["variant"])))
+    return _VARIANTS[variant]
 
 
-def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int) -> dict:
+def _trial_failure(control: Any, report: Mapping[str, Any], *, catalog: Any = None,
+                   action: str = "reject_attempt", **extra: Any) -> Failure:
+    """Resolve native trial control to the bound site, retaining the b6 diagnostic fields."""
+    if "typed_failure_schema" in report or "typed_failure_payload" in report:
+        from pops.runtime._guard_failure import decode_guard_failure
+
+        if catalog is None:
+            raise RuntimeError("typed trial failure requires the bound guard catalog")
+
+        failure = decode_guard_failure(
+            report.get("typed_failure_schema"), report.get("typed_failure_payload"), catalog,
+            action=action, compatibility=extra,
+        )
+        if failure is None:
+            raise RuntimeError("System::run_advance returned an unknown typed trial failure")
+        if action == "reject_attempt":
+            site = failure.site
+            phase = "trial" if site.retry_can_change else "trial_failure"
+            if (report["rejection_phase"] != phase
+                    or _trial_variant(control, site.name, report["rejection_status"])
+                    is not failure.variant):
+                raise RuntimeError("native trial failure disagrees with its bound control")
+        return failure
+    if action == "fail_run":
+        raise RuntimeError("System::run_advance lost its terminal failure record")
+    site = _trial_site(report)
+    variant = _trial_variant(control, site["site"], report["rejection_status"])
+    payload = dict(site, **extra)
+    if variant is BudgetExhausted:
+        payload["budget"] = "max_iterations"
+    return Failure(variant, "trial", payload)
+
+
+def _run_data(start: float, until: float, dt: float, rule: Any, max_steps: int,
+              cells: Any = None) -> dict:
     data: dict[str, Any] = {"start": start.hex(), "until": until.hex()}
-    if rule is None:
+    if cells is not None:
+        data["cells"] = {"fraction": cells[0].hex(), "bound": cells[1]}
+    elif rule is None:
         data["proposal"] = dt.hex()
     else:
         data["rule"] = {"fraction": rule[0].hex(),
@@ -346,6 +429,7 @@ class Simulation:
         if native._advance_max_attempts() != control.max_attempts:
             raise RuntimeError("the installed Program does not export the attempt budget of its "
                                "compiled control")
+        # The native startup checks the bound identity collectively before the first output.
         self._runtime = runtime
         self._control = control
         self._continuation: Continuation | None = None
@@ -372,9 +456,10 @@ class Simulation:
         runtime = self._runtime
         until = _binary64(until, "Simulation.run(until=...)")
         rule = self._control.step_rule
-        if rule is not None:
-            # The step rule chooses every proposal (N8 « Règle de pas compilée »); the native run
-            # does not read the proposal argument.
+        cells = self._control.step_bound
+        if rule is not None or cells is not None:
+            # The step rule chooses every proposal (N8 « Règle de pas compilée », « dt= as a
+            # function of cell »); the native run does not read the proposal argument.
             if proposal is not None:
                 raise TypeError("Simulation.run(proposal=...): the step rule of this Advance "
                                 "chooses every proposal")
@@ -404,18 +489,52 @@ class Simulation:
             schedule.append((0 if output.when is None else output.when.steps,
                              _ahead(times, start, until, anchored=anchored),
                              [item for _, kind, item in region.record if kind == "array"]))
+        temporal = runtime._executor._temporal_restart_state
+        installed_strategy = runtime._executor._step_strategy
+        project_fixed = (
+            type(installed_strategy) is FixedDt and rule is None and cells is None
+            and dt == self._control.first_dt == installed_strategy.dt == temporal.fixed_dt()
+            and (temporal.time_hex, temporal.macro_step) == (start.hex(), start_step)
+        )
+        manifest = None
+        if project_fixed and until > start and max_steps > 0:
+            from pops.runtime._run_manifest import prepare_run_manifest
+            from pops.runtime._step_strategy import prepare_program_run
+
+            prepared = prepare_program_run(runtime._executor, compiled=True)
+            manifest = prepare_run_manifest(
+                runtime._executor, t_end=until, max_steps=max_steps, output_dir=None,
+                step_transaction={
+                    **prepared.control_payload,
+                    "compiled_advance": self._control.to_data(),
+                },
+            )
         try:
             report = self._run_native(until, dt, max_steps, schedule, None if rule is None else (
-                rule[0], math.inf if rule[1] is None else rule[1]))
+                rule[0], math.inf if rule[1] is None else rule[1]), cells)
         finally:
             # A failure of a trial leaves the accepted state of its step; the next proposal is
             # the one of this run (T28, next=None).
             time, macro_step = runtime.time(), runtime.macro_step()
+            if manifest is not None and macro_step > start_step:
+                from pops.runtime._run_manifest import publish_run_manifest
+
+                publish_run_manifest(runtime._executor, manifest)
             self._continuation = Continuation(
-                time, macro_step, Proposal(dt) if rule is None else StepRule(*rule),
+                time, macro_step, CellStepBound(*cells) if cells is not None
+                else Proposal(dt) if rule is None else StepRule(*rule),
                 MemoryView(runtime, time, macro_step, memory_rings(self._control)))
         time = runtime.time()
         report = dict(report)
+        if project_fixed:
+            temporal.publish_compiled_fixed_run(
+                report, before_time=start, before_step=start_step, time=time,
+                macro_step=runtime.macro_step(),
+                rejected=report["stop"] in (_ATTEMPT_BUDGET, _FACE_FREQUENCY),
+                failed=report["stop"] in (_TRIAL_FAILURE, _TERMINAL_FAILURE),
+            )
+        for name in ("last_accepted_begin", "segment_proposal", "segment_time", "segment_macro_step"):
+            report.pop(name, None)
         published: dict[Any, list] = {region.output: [] for region in self._outputs}
         for sample in report.pop("outputs"):
             region = self._outputs[sample["output"]]
@@ -426,7 +545,19 @@ class Simulation:
                 Publication(sample["time"], sample["macro_step"], values))
         stop = report["stop"]
         failure = None
-        if stop == _STEP_BUDGET:
+        guard = None
+        stopped = None
+        if stop == _FACE_FREQUENCY:
+            if report.get("typed_failure_schema") != FACE_STEP_FREQUENCY_SCHEMA:
+                raise RuntimeError("System::run_advance stopped on the faces' frequency without "
+                                   "its typed rejection")
+            stopped = float(report["face_frequency"])
+            failure = Failure(NotAdmissible, "trial", {
+                "attempts": report["attempts"], "time": time, "rejection": report["rejection"],
+                "face_schema": FACE_STEP_FREQUENCY_SCHEMA, "face_frequency": stopped,
+                "face_site": report["rejection_detail"],
+            })
+        elif stop == _STEP_BUDGET:
             failure = Failure(BudgetExhausted, None, {
                 "budget": "max_steps", "max_steps": max_steps, "steps": report["steps"],
                 "time": time, "until": until})
@@ -435,10 +566,16 @@ class Simulation:
             payload = {"budget": "max_attempts", "max_attempts": self._control.max_attempts,
                        "attempts": report["attempts"], "time": time,
                        "rejection": report["rejection"]}
-            if phase == "trial":
-                site = _trial_site(report)
-                payload["cause"] = Failure(_trial_variant(self._control, site["site"]), "trial",
-                                           site)
+            if report.get("typed_failure_schema") == FACE_STEP_FREQUENCY_SCHEMA:
+                phase = "trial"
+                payload["face_schema"] = report.pop("typed_failure_schema")
+                report.pop("typed_failure_payload")
+                payload["face_frequency"] = float(report["face_frequency"])
+                payload["face_site"] = report["rejection_detail"]
+            elif phase == "trial":
+                guard = _trial_failure(self._control, report,
+                                       catalog=runtime._guard_failure_catalog)
+                payload["cause"] = guard
             elif phase != "assessment":
                 raise RuntimeError("System::run_advance spent an attempt budget on a rejection "
                                    "of phase %r" % phase)
@@ -447,26 +584,41 @@ class Simulation:
             if report["rejection_phase"] != "trial_failure":
                 raise RuntimeError("System::run_advance ended a step at a fixed failure site "
                                    "without its phase")
-            site = _trial_site(report)
-            failure = Failure(_trial_variant(self._control, site["site"]), "trial", dict(
-                site, time=time, attempts=report["attempts"]))
+            guard = failure = _trial_failure(
+                self._control, report, catalog=runtime._guard_failure_catalog,
+                time=time, attempts=report["attempts"],
+            )
+        elif stop == _TERMINAL_FAILURE:
+            guard = failure = _trial_failure(
+                self._control, report, catalog=runtime._guard_failure_catalog,
+                action="fail_run", time=time, attempts=report["attempts"],
+            )
         elif stop != _REACHED or time != until:
             raise RuntimeError("System::run_advance returned without reaching its frontier")
+        if guard is not None and guard.site is not None:
+            from pops.time._step.transaction import guard_observation_data
+
+            report.pop("typed_failure_schema")
+            report.pop("typed_failure_payload")
+            report["guard_failure"] = guard_observation_data(guard)
         result = RunResult(
             state=RunState(runtime, time, runtime.macro_step()), time=time,
             steps=report["steps"], rejections=report["rejections"],
             diagnostics={
                 "control": self._control.to_data(),
-                "run": _run_data(start, until, dt, rule, max_steps),
+                "run": _run_data(start, until, dt, rule, max_steps, cells),
                 "native": report,
                 "outputs": [len(rows) for rows in published.values()],
             },
             continuation=self._continuation, failure=failure,
             outputs={output: tuple(rows) for output, rows in published.items()})
+        if stopped is not None:
+            raise FaceFrequencyStop(result, stopped)
         if failure is not None:
             raise failure.variant(result)
         return result
 
 
-__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "Failure", "Publication",
+__all__ = ["BudgetExhausted", "Continuation", "DEFAULT_MAX_STEPS", "FaceFrequencyStop", "Failure",
+           "Publication",
            "NotAdmissible", "RunFailed", "RunResult", "RunState", "Simulation", "SolveFailed"]

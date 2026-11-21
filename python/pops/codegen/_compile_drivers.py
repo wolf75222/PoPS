@@ -687,6 +687,27 @@ def _compile_problem_impl(
     )
     program_hash = semantic.hexdigest
     cache_key = spec_identity.hexdigest
+    from pops.codegen._artifact_identity import program_toolchain_evidence
+
+    toolchain_evidence = program_toolchain_evidence(
+        target=target,
+        abi_key=abi_key,
+        compiler=cc,
+        standard=eff_std,
+        cflags=cflags,
+        lflags=lflags,
+        optflags=optflags,
+        libraries=library_manifests,
+        native_components=[
+            {
+                "manifest": component.manifest(),
+                "manifest_sha256": component.manifest_sha256,
+            }
+            for component in native_components
+        ],
+        native_dimension=native_dimension,
+        toolchain_capture=toolchain_capture,
+    )
 
     # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
     # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
@@ -713,6 +734,17 @@ def _compile_problem_impl(
     from pops.codegen.program_emit_params import program_param_entries
 
     program_param_routes = tuple(program_param_entries(time, compile_authority))
+    if refinement_criterion is not None and refinement_criterion.model_parameters:
+        # A region reads a model parameter from its block's RuntimeParams table, as the faces
+        # and stencils of the model do: it needs a slot there (N12 lot 3c-2a).
+        from pops.mesh._amr.refinement_criterion import criterion_parameter_routes
+        from pops.time.references import block_name
+
+        criterion_parameter_routes(
+            refinement_criterion,
+            tuple((index, block_name(reference))
+                  for reference, index in time._block_indices().items()),
+            program_param_routes)
 
     def _compiled_handle(binary, artifact, *, compile_command=None, generated_source=None):
         compiled = CompiledProblem(
@@ -740,6 +772,7 @@ def _compile_problem_impl(
         )
         compiled.semantic_identity = semantic
         compiled.artifact_spec_identity = spec_identity
+        compiled.toolchain_evidence = toolchain_evidence
         compiled.binary_identity = binary
         compiled.artifact_identity = artifact
         cenv.run_dumps(compiled)

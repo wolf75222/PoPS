@@ -22,7 +22,6 @@ from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.math import Const, ValueExpr, laplacian, unknown
 from pops.mesh import CartesianGrid
-from pops.mesh._amr import Above
 from pops.params import ConstParam, RuntimeParam
 from pops.physics import Model
 from pops.solvers.elliptic import FFT, GeometricMG
@@ -35,28 +34,6 @@ ROOT = Path(__file__).resolve().parents[4]
 N = 64
 KAPPA = 50.0
 DT = 1.0e-3
-
-
-class _ScalarFieldIndicator(ValueExpr):
-    """Test-owned symbolic indicator using the installed scalar-field tag leaf."""
-    def __init__(self, handle, layout_subject):
-        super().__init__(handle)
-        self.layout_subject = layout_subject
-
-    def __pops_ir_key__(self, recurse):
-        return ("mms_scalar_field_indicator", self.handle.qualified_id,
-                self.layout_subject.qualified_id)
-
-    def resolve_for_amr_tagging(self, context, *, action, comparison, threshold):
-        if action != "refine" or comparison != "gt":
-            raise ValueError("MMS field indicator requires strict refine-above semantics")
-        if self.handle.owner_path.nodes[0] != context.owner.nodes[0]:
-            raise ValueError("MMS field indicator belongs to another Case")
-        from pops.physics.board_handles import FieldHandle
-        if not isinstance(self.handle, FieldHandle) or self.handle.kind != "field":
-            raise ValueError("MMS field indicator requires an exact scalar model field")
-        context.layout_plan.layout_for(self.layout_subject)
-        return Above(self.handle, threshold)
 
 
 def _screened_registration(*, solver, boundary):
@@ -345,14 +322,15 @@ def _resolved_mms_case():
     transfer.state(state_instance, StateTransfer())
     transfer.field(pure_field, EllipticRecompute())
     transfer.field(screened_field, EllipticRecompute())
-    predicate = _ScalarFieldIndicator(block[pure_potential], pure_field) > model.value(kappa)
-    # AMR's provider contract owns an explicit possible transition. No tags and a
-    # frozen hierarchy keep this MMS on exactly one N x N level, checked at runtime.
+    # AMR's provider contract owns an explicit possible transition. A region that tags no cell
+    # (it reads a state, since the tagging plan binds its fields) and a frozen hierarchy keep
+    # this MMS on exactly one N x N level, checked at runtime.
+    forcing = ValueExpr(state_instance)["pure_forcing"]
     layout = AMR(
         grid=CartesianGrid(frame=frame, cells=(N, N), periodic=None),
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=AMRTagging(
-            rules=(Tag(predicate & ~predicate), Buffer(1)),
+            rules=(Tag(lambda cell: cell.value(forcing) * 0.0 > 1.0), Buffer(1)),
             hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
             conflict_policy=ConflictPolicy.REFINE_WINS,
         ),
@@ -378,53 +356,6 @@ def _resolved_mms_case():
         (2.0 * np.pi**2 + KAPPA) * exact,
     ))
     return resolved, bound_kappa, slots, initial, exact
-
-
-def test_mms_tagging_maps_the_qualified_unknown_to_its_scalar_output() -> None:
-    from types import SimpleNamespace
-
-    from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
-
-    resolved, parameter, _, _, _ = _resolved_mms_case()
-    pure_plan = resolved.field_plans["pure_poisson"]
-    assert pure_plan.operator.unknown.local_id == "pure_potential"
-    assert pure_plan.operator.outputs[0].name == "pure_phi"
-    calls = []
-
-    class Probe:
-        def _set_bootstrap_tagging(self, *args):
-            calls.append(args)
-
-    flow_bootstrap_tagging(
-        Probe(), resolved.bootstrap_plan, {parameter: KAPPA},
-        clock_identity="mms-tagging-clock", field_plans=resolved.field_plans,
-    )
-    (call,) = calls
-    assert call[1] == [pure_plan.operator.unknown.qualified_id] * 2
-    assert call[3] == ["pure_phi"] * 2
-    assert call[4] == [0, 0]
-
-    calls.clear()
-    with pytest.raises(ValueError, match="no authenticated field plan"):
-        flow_bootstrap_tagging(
-            Probe(), resolved.bootstrap_plan, {parameter: KAPPA},
-            clock_identity="mms-tagging-clock",
-            field_plans={"screened_poisson": resolved.field_plans["screened_poisson"]},
-        )
-    assert calls == []
-
-    data = resolved.bootstrap_plan.tagging.runtime_tagging_data({parameter: KAPPA})
-    data["refine"]["children"][0]["variable"] = "pure_potential"
-    explicit_unknown_name = SimpleNamespace(tagging=SimpleNamespace(
-        qualified_id=resolved.bootstrap_plan.tagging.qualified_id,
-        runtime_tagging_data=lambda params: data,
-    ))
-    with pytest.raises(ValueError, match="absent from its prepared output route"):
-        flow_bootstrap_tagging(
-            Probe(), explicit_unknown_name, {parameter: KAPPA},
-            clock_identity="mms-tagging-clock", field_plans=resolved.field_plans,
-        )
-    assert calls == []
 
 
 @pytest.mark.compiler

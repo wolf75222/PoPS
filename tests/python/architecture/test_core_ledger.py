@@ -38,7 +38,26 @@ def test_every_core_ledger_entry_names_its_issue_structures_measurement_and_path
         assert len({row["case"] for row in structures}) == len(structures) >= 2, name
         for row in structures:
             assert set(row) == {"case", "builder", "structure"}, (name, row)
-            assert re.search(r"^def %s\(" % re.escape(row["builder"]), builders, re.M), row
+            file, separator, builder = row["builder"].partition("::")
+            if separator:
+                # CF15 also admits an existing case built by a tracked integration probe.
+                relative = Path(file)
+                assert ".." not in relative.parts, row
+                if relative.suffix == ".cpp":
+                    assert relative.is_relative_to("tests/cpp/integration"), row
+                    suite, separator, test = builder.partition("/")
+                    assert separator and re.fullmatch(r"[A-Za-z_]\w*", suite), row
+                    assert re.fullmatch(r"[A-Za-z_]\w*", test), row
+                    source = (ROOT / relative).read_text(encoding="utf-8")
+                    assert re.search(r"^TEST\(\s*%s\s*,\s*%s\s*\)" % (suite, test), source, re.M), row
+                    continue
+                assert relative.is_relative_to("tests/python/integration"), row
+                assert relative.suffix == ".py", row
+                source = (ROOT / relative).read_text(encoding="utf-8")
+            else:
+                builder = file
+                source = builders
+            assert re.search(r"^def %s\(" % re.escape(builder), source, re.M), row
         paths = entry["paths"]
         assert paths and len(set(paths)) == len(paths), name
         assert all((ROOT / path).is_file() for path in paths), (name, paths)

@@ -21,7 +21,9 @@ from pops._ir.data_model import _layout, data_layout_and_distribution, ir_type, 
 from pops._ir.refusals import LayoutMismatch, RegionRefusal
 from pops.time._graph.value_traversal import walk_program_nodes
 
-from tests.python.support.unconstrained import without_storage_constraints
+from tests.python.support.unconstrained import (
+    HISTORICAL_ROUNDTRIP_PLACEMENT, without_storage_constraints,
+)
 
 REPLICATED = (
     ("examples.api_v02.finite_bdf2_v14", "build_finite_bdf2_v14", {}),
@@ -38,13 +40,19 @@ DISTRIBUTED = tuple(
 SAMPLE = REPLICATED + DISTRIBUTED
 
 
+def _placement(builder, kwargs):
+    if builder == "build_distributed_program":
+        return HISTORICAL_ROUNDTRIP_PLACEMENT[kwargs["ranks"]]
+    return None
+
+
 def _plan(module, builder, kwargs, *, constrained):
     def build():
         spec = getattr(importlib.import_module(module), builder)(**kwargs)
         return pops.resolve(pops.validate(spec.case), layout=spec.layout)
     if constrained:
         return build()
-    with without_storage_constraints():
+    with without_storage_constraints(placement=_placement(builder, kwargs)):
         return build()
 
 
@@ -77,12 +85,13 @@ def test_a_case_types_alike_with_and_without_its_storage_constraints(case):
 
 
 @pytest.mark.parametrize("case", SAMPLE, ids=_ident)
-def test_without_its_constraints_every_storage_choice_is_the_plans(case):
+def test_dm3_storage_choices_respect_only_declared_placement_constraints(case):
     before = data_layout_and_distribution(_plan(*case, constrained=True))
     after = data_layout_and_distribution(_plan(*case, constrained=False))
     assert before["schema_version"] == after["schema_version"] == 6
     assert before["constraints"] > 0
-    assert after["constraints"] == 0
+    placement = _placement(case[1], case[2])
+    assert after["constraints"] == (0 if placement is None else before["constraints"])
     data = [[row for row in report["values"] if row["spelling"] not in _OFFSET_SCALARS]
             for report in (before, after)]
     assert len(data[0]) == len(data[1])
@@ -92,13 +101,20 @@ def test_without_its_constraints_every_storage_choice_is_the_plans(case):
             {key: value for key, value in chosen.items()
              if key not in ("origin", "distribution", "node", "value")}
         if written["origin"] == "constraint":
-            assert chosen["origin"] == "plan", written
             assert written["layout"] in ("Replicated", "Contiguous", "members"), written
+            if placement is None:
+                assert chosen["origin"] == "plan", written
+            else:
+                assert (chosen["origin"], chosen["distribution"]) == (
+                    written["origin"], written["distribution"]), written
     finite = [row for row in after["values"] if row["layout"] in ("Replicated", "Contiguous")]
     assert finite
     for row in finite:
-        assert row["distribution"] == ("every rank" if row["layout"] == "Replicated"
-                                       else "balanced over the execution lane"), row
+        if row["layout"] == "Replicated":
+            assert row["distribution"] == "every rank", row
+        else:
+            assert row["distribution"] == ("balanced over the execution lane" if placement is None
+                                           else "partitioned by the offsets the case wrote"), row
 
 
 def test_written_offsets_and_ownership_are_constraints_with_their_distribution():
@@ -165,25 +181,28 @@ def _mixed():
     return p, d, replicated, values, distributed
 
 
-def _mismatch(call):
+def _mismatch(call, *, expected, found):
     with pytest.raises(LayoutMismatch) as caught:
         call()
     refusal = caught.value
     assert isinstance(refusal, TypeError) and isinstance(refusal, ValueError)
     assert isinstance(refusal, RegionRefusal) and refusal.rule == "DM3"
-    assert {refusal.expected, refusal.found} == {"Contiguous", "Replicated"}
+    assert (refusal.expected, refusal.found) == (expected, found)
     assert "Replicated" in str(refusal) and "Contiguous" in str(refusal)
 
 
 def test_the_distributed_gate_refuses_a_replicated_value_as_a_layout_mismatch():
     _, d, replicated, values, _ = _mixed()
-    _mismatch(lambda: d.size(replicated))
-    _mismatch(lambda: d.domain_of(values))
+    _mismatch(lambda: d.size(replicated), expected="Contiguous", found="Replicated")
+    _mismatch(lambda: d.domain_of(values), expected="Contiguous", found="Replicated")
 
 
 def test_same_domain_of_two_layouts_is_a_layout_mismatch():
     p, _, replicated, _, distributed = _mixed()
-    _mismatch(lambda: p.same_domain(replicated, distributed))
+    _mismatch(lambda: p.same_domain(replicated, distributed),
+              expected="Replicated", found="Contiguous")
+    _mismatch(lambda: p.same_domain(distributed, replicated),
+              expected="Contiguous", found="Replicated")
 
 
 def test_at_of_a_replicated_array_with_a_distributed_index_is_a_layout_mismatch():
@@ -191,15 +210,33 @@ def test_at_of_a_replicated_array_with_a_distributed_index_is_a_layout_mismatch(
 
     def body(b, index):
         return b.capture(lambda q: q.at(values, index))
-    _mismatch(lambda: d.local_map(distributed, body, byte_capacity=64))
+    _mismatch(lambda: d.local_map(distributed, body, byte_capacity=64),
+              expected="Replicated", found="Contiguous")
+
+
+def test_at_of_a_distributed_array_with_a_replicated_index_is_a_layout_mismatch():
+    p, d, replicated, _, distributed = _mixed()
+    values = p.require_success(d.local_map(
+        distributed, lambda b, i: b.success(b.float64(1.)), byte_capacity=64))
+    index = p.index(replicated, 0)
+    _mismatch(lambda: p.at(values, index), expected="Contiguous", found="Replicated")
 
 
 def test_gather_and_scatter_across_layouts_are_layout_mismatches():
     p, d, replicated, values, distributed = _mixed()
     requests = d.requests(distributed, distributed, lambda b, i: i)
-    _mismatch(lambda: p.gather(values, requests))
-    _mismatch(lambda: p.scatter_reduce(values, p.map(replicated, lambda b, i: i), distributed,
-                                       b_initial(p), lambda b, x, y: x, order="ascending"))
+    indices = p.map(replicated, lambda b, i: i)
+    _mismatch(lambda: p.gather(values, requests), expected="Replicated", found="Contiguous")
+    _mismatch(lambda: p.scatter_reduce(values, indices, distributed,
+                                       b_initial(p), lambda b, x, y: x, order="ascending"),
+              expected="Replicated", found="Contiguous")
+
+    local_values = p.require_success(d.local_map(
+        distributed, lambda b, i: b.success(b.float64(1.)), byte_capacity=64))
+    _mismatch(lambda: p.gather(local_values, indices), expected="Contiguous", found="Replicated")
+    _mismatch(lambda: p.scatter_reduce(local_values, requests, replicated,
+                                       b_initial(p), lambda b, x, y: x, order="ascending"),
+              expected="Contiguous", found="Replicated")
 
 
 def b_initial(p):

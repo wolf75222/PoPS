@@ -1,6 +1,6 @@
 """Immutable joint coordinates and their explicitly authored conservative inverse."""
 from dataclasses import dataclass, replace
-from pops._ir import Var, _wrap
+from pops._ir import Var, _wrap, is_boolean_expression
 from pops._ir.quantity import QuantityRef
 from pops._ir.visitors import _children
 from pops._ir.primitive_expansion import expand_primitive_recipes
@@ -117,7 +117,7 @@ def declare_joint_admissibility(model, constraints, states):
     result=[]
     for name,predicate in constraints.items():
         predicate=_wrap(predicate)
-        if not callable(getattr(predicate,'resolve_for_amr_predicate',None)):
+        if not is_boolean_expression(predicate):
             raise TypeError('joint admissibility requires a typed Boolean expression')
         for node in _walk((predicate,)):
             if isinstance(node,(Var,QuantityRef)) and not any(node is q for q in row.coordinates):

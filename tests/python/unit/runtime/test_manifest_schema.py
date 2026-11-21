@@ -64,3 +64,23 @@ def test_artifact_manifest_refuses_unknown_or_missing_semantic_fields():
     del missing["payload"]["precision"]
     with pytest.raises(ValueError, match="missing required field"):
         CompiledArtifactManifest.from_dict(missing)
+
+
+def test_global_guard_sites_are_an_exact_closed_manifest_table():
+    encoded = _manifest().to_dict()
+    site = {
+        "token": "a" * 64, "name": "step domain", "variants": ["NotAdmissible"],
+        "origin": "trial", "action": "reject_attempt", "retry_can_change": False,
+        "payload": {"predicate": "Index", "value": "Bool"}, "predicate": 17,
+    }
+    encoded["payload"]["failure_sites"] = [site]
+    assert CompiledArtifactManifest.from_dict(encoded).to_dict() == encoded
+
+    for malformed in (
+        [site, site], [dict(site, variants=["invented"])], [dict(site, python_origin="forged")],
+        [dict(site, predicate=True)], [dict(site, token="A" * 64)],
+    ):
+        bad = copy.deepcopy(encoded)
+        bad["payload"]["failure_sites"] = malformed
+        with pytest.raises(ValueError, match="failure_sites"):
+            CompiledArtifactManifest.from_dict(bad)

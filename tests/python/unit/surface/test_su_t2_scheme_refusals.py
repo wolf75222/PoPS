@@ -104,11 +104,20 @@ def test_a_scheme_of_a_later_entity_names_its_lot():
             return None
 
 
-def test_a_cell_scheme_without_axis_names_its_lot():
-    with pytest.raises(surface.NotYetElaborated, match="CellValue, CellRate or CellResidual"):
-        @surface.scheme
-        def pointwise(cell, term):
-            return None
+def test_a_cell_scheme_without_axis_returns_a_cell_rate():
+    """A scheme over cell without axis covers a source and returns CellRate (N15 FaceFlux/CellRate
+    lot FC-1); another builder is refused with the builder to write."""
+    @surface.scheme
+    def wrong(cell, term):
+        return FaceFlux(0)
+
+    domain = surface.Box(x=surface.Periodic(0, 1))
+    model = surface.Model("decay")
+    u = model.quantity("u", surface.Scalar(domain))
+    decay = model.source(of=u, value=-u)
+    model.balance(ddt(u) == decay)
+    with pytest.raises(surface.RealizationMismatch, match=r"Write CellRate\(value\)"):
+        surface.Numerics(represent={u: surface.CellAverage()}, schemes={decay: wrong()})
 
 
 def test_a_scheme_that_returns_the_wrong_builder_is_refused():
@@ -158,6 +167,20 @@ def test_term_expect_refuses_a_key_of_another_form():
 def test_term_expect_accepts_the_key_of_its_form():
     _, _, u, flux, _ = _model(lambda u: 3 * u)
     _numerics(u, flux, linear_upwind())
+
+
+@pytest.mark.parametrize("law", [lambda u: u**2 / 2, lambda u: u + 1],
+                         ids=["burgers", "affine"])
+def test_public_upwind_without_speed_requires_a_homogeneous_linear_flux(law):
+    _, _, u, flux, _ = _model(law)
+    with pytest.raises(surface.RealizationMismatch) as caught:
+        represent = {u: surface.CellAverage()}
+        surface.Numerics(represent=represent, schemes={flux: upwind()})  # <- upwind-numerics
+    message = str(caught.value)
+    assert "the scheme expects the key" in message
+    assert "rusanov()" in message and "hll()" in message
+    assert message.startswith(f"{HERE}:{_line('upwind-numerics')} (in ")
+    assert "pops/lib/numerics/fluxes.py:" in message
 
 
 # --- the scalars and the vectors of a face (2.6.3, review Q2) ---------------------------------------
@@ -343,9 +366,10 @@ def test_pops_discrete_exports_no_entity():
 
 def test_no_method_of_this_lot_derives_a_face():
     """A face that reads largest or smallest lowers them to b6 maximum and minimum (SU-T3), and no
-    method of level 1 in this lot derives a face. The solves of the lot « solves » read the linear
-    map that a scheme states (two_point() of a constant coefficient), never a derivative: a face
-    flux read at the unknown of a solve is refused with its lot. When a later lot derives one, such
+    method of level 1 in this lot derives a face. A relation solve reads the claims that a scheme
+    states of its rate (two_point() of a coefficient that reads no state, the N9 lot « La
+    référence sous les solves de relation »), never a derivative: a face flux read at the unknown
+    of a solve is refused with its lot. When a later lot derives one, such
     a face keeps b6's behaviour or names the lot 2 of N11."""
     from pops.lib.solve import cg
     from pops.lib.time.methods import imex_euler
@@ -358,7 +382,7 @@ def test_no_method_of_this_lot_derives_a_face():
         initial={u: u0}, solvers={imex: cg()})
     numerics = surface.Numerics(represent={u: surface.CellAverage()},
                                 schemes={flux: rusanov(), diffusion: two_point()})
-    with pytest.raises(surface.NotYetElaborated, match="states no linear map.*G10"):
+    with pytest.raises(surface.NotYetElaborated, match="is not stated linear and homogeneous in the state.*G10"):
         surface.Case(model=model, numerics=numerics, program=program,
                      layout={domain: surface.Uniform(cells=16)})
 

@@ -221,6 +221,12 @@ struct FluxProviderRequirementAlias<Hyperbolic,
                                                 decltype(Hyperbolic::flux_provider_requirements)>> {
   static constexpr int n_flux_providers = Hyperbolic::n_flux_providers;
   static constexpr auto flux_provider_requirements = Hyperbolic::flux_provider_requirements;
+  static constexpr auto flux_coordinate_slots = [] {
+    if constexpr (requires { Hyperbolic::flux_coordinate_slots; })
+      return Hyperbolic::flux_coordinate_slots;
+    else
+      return std::array<FluxCoordinateSlot, 0>{};
+  }();
 };
 
 }  // namespace composite_detail

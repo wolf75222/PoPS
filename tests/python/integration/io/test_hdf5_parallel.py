@@ -31,6 +31,7 @@ from pops.output import (
     ArrayPiece,
     FieldKey,
     FieldPayload,
+    HDF5,
     HDF5Writer,
     LevelGeometry,
     OutputClock,
@@ -40,6 +41,7 @@ from pops.output import (
     ParallelMode,
     read_hdf5,
 )
+from pops.output._writers.common import deterministic_target
 from tests.python.support.requirements import require_mpi_or_skip
 
 
@@ -179,7 +181,6 @@ def test_collective_hdf5_roundtrip_matches_serial(tmp_path, parallel_hdf5_lane):
     local_snapshot, serial_snapshot, key, expected = _snapshots(communicator)
     shared_root = broadcast_value(
         communicator, str(tmp_path) if rank == 0 else None, root=0)
-    collective_target = Path(shared_root) / "collective.h5"
     serial_target = Path(shared_root) / "serial.h5"
     collective_request = OutputRequest(
         "density-output", (key,), ParallelMode.COLLECTIVE,
@@ -187,14 +188,24 @@ def test_collective_hdf5_roundtrip_matches_serial(tmp_path, parallel_hdf5_lane):
     serial_request = OutputRequest(
         "density-output", (key,), ParallelMode.SERIAL)
 
-    prepared = HDF5Writer(ParallelMode.COLLECTIVE).prepare_session(
+    collective_format = HDF5(ParallelMode.COLLECTIVE, series=True)
+    collective_target = deterministic_target(
+        shared_root, "collective", collective_request, local_snapshot,
+        collective_format.extension, format_data=collective_format.consumer_data(),
+        format_name=collective_format.format_name,
+    )
+    catalog = collective_format.series_catalog()
+    prepared = collective_format.writer().prepare_session(
         local_snapshot,
         collective_request,
         collective_target,
         communicator=communicator,
     )
+    prepared._require_file_proof()
     prepared.stage()
     collective_receipt = prepared.publish()
+    proofs = allgather_value(communicator, collective_receipt._file_proof)
+    assert proofs[0] is not None and all(proof == proofs[0] for proof in proofs)
 
     failure = None
     if rank == 0:
@@ -203,7 +214,15 @@ def test_collective_hdf5_roundtrip_matches_serial(tmp_path, parallel_hdf5_lane):
                 serial_snapshot, serial_request, serial_target)
             serial_session.stage()
             serial_receipt = serial_session.publish()
-            collective = read_hdf5(collective_receipt.path).require_selection(collective_request)
+            publication = catalog.prepare(collective_target, local_snapshot, collective_request)
+            publication._publish({
+                "output_identity": collective_receipt.output_identity.token,
+                "selection_identity": collective_receipt.selection_identity.token,
+                "path": collective_receipt.path.as_posix(),
+                "format": collective_receipt.format,
+                "file_evidence": collective_receipt.file_evidence,
+            }, collective_receipt._file_proof)
+            collective = catalog.reopen(shared_root).latest.require_selection(collective_request)
             serial = read_hdf5(serial_receipt.path).require_selection(serial_request)
             collective_name = collective.manifest["datasets"]["fields"][key.identity.token]
             serial_name = serial.manifest["datasets"]["fields"][key.identity.token]
@@ -247,6 +266,7 @@ def test_collective_hdf5_roundtrip_matches_serial(tmp_path, parallel_hdf5_lane):
             failure = "%s: %s" % (type(exc).__name__, exc)
     failure = broadcast_value(communicator, failure, root=0)
     assert failure is None, failure
+    prepared.finalize()
 
 
 def test_collective_hdf5_refuses_rank_local_metadata_before_write(

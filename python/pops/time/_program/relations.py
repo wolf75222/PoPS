@@ -14,23 +14,30 @@ elaborates one unknown and one relation, affine in the unknown:
 
     a U + sum_k b_k L_k(U) + known = 0,
 
-``a`` and ``b_k`` exact polynomials of ``p.dt`` and ``L_k`` the linear map of a component that
-states it. A component states its linear map with ``linear_apply(P, value)``, which writes ``L(v)``
-on the matrix-free apply that it receives, and ``linear_properties``, the claims of that map with
-their proof (``LinearClaims``). The core never reads what the map is: it composes the operator
-``A = a I + sum_k b_k L_k`` and derives its properties from the claims (IR16): ``A`` is symmetric
-positive definite when ``a > 0`` is a number, every ``b_k`` is ``-c_k p.dt`` with ``c_k >= 0``, and
-every ``L_k`` is claimed symmetric negative semidefinite. Without these claims nothing is derived,
-and a solver that requires them refuses the solve with ``PropertyNotDerived`` (K4).
+``a`` and ``b_k`` exact polynomials of ``p.dt`` and ``L_k`` the rate of a component read at the
+unknown. The operator of the solve is ``A v = a v + sum_k b_k L_k(v)``, each ``L_k(v)`` the
+component's own rate evaluated at the State ``v`` (§3.4 of the N9 lot « La référence sous les
+solves de relation »): the same discrete operator as the explicit route, with what that rate reads
+(the runtime parameters of a StencilFlux body). It is recorded as a ``matrix_free_operator`` on a
+State operand of the unknown's block (``set_apply(..., operand=)``, IR26), which only a reference
+realization applies, inside its region. A component states the claims of its rate with
+``linear_claims`` (``LinearClaims``): symmetric, negative semidefinite, and linear and homogeneous
+in the state over every term, with their proof. The core never reads what the rate is: it derives
+the properties of ``A`` from the claims (IR16): ``A`` is symmetric positive definite when ``a > 0``
+is a number, every ``b_k`` is ``-c_k p.dt`` with ``c_k >= 0``, and every ``L_k`` is claimed
+symmetric negative semidefinite. Without these claims nothing is derived, and a solver that
+requires them refuses the solve with ``PropertyNotDerived`` (K4). A rate that is not stated linear
+and homogeneous, or that a region does not run (a rate of b6 such as ``rhs``), is refused by name.
 
-The solve lowers onto b6's matrix-free linear route: ``program.matrix_free_operator`` with that
-apply, ``LinearProblem(A, rhs = -known, initial_guess=B.state)`` (SV3: the guess is the value of the
-unknown at the start of the attempt) and the solver that the realization of the advance gives its
-path, consumed with ``RejectAttempt()`` by ``require_success``: a failed solve fails the attempt
-(T38), not the run. The path of a solve is the name of the method when the solve is unnamed and
-the only one of the method, and ``method/name`` otherwise (5.5, line 707). The solution is a state
-whose increment derives from the relation: ``U = -(known + sum_k b_k L_k(U)) / a``, each
-``L_k(U)`` an evaluation of its component at the stage of the solve (T34).
+The solve lowers onto b6's ``solve_linear`` node realized by the solver that the realization of
+the advance gives its path (a ``@pops.solver`` such as ``cg()``, SV9), with
+``LinearProblem(A, rhs = -known, initial_guess=B.state)`` (SV3: the guess is the value of the
+unknown at the start of the attempt), consumed with ``RejectAttempt()`` by ``require_success``: a
+failed solve fails the attempt (T38), not the run. The path of a solve is the name of the method
+when the solve is unnamed and the only one of the method, and ``method/name`` otherwise (5.5, line
+707). The solution is a state whose increment derives from the relation:
+``U = -(known + sum_k b_k L_k(U)) / a``, each ``L_k(U)`` an evaluation of its component at the
+stage of the solve (T34).
 """
 from __future__ import annotations
 
@@ -42,8 +49,8 @@ from typing import Any
 from pops._ir.symbolic import SymbolicTruthValueError
 from pops.time._program.traced_method import (
     ClosedBodyViolation, NotYetElaborated, TracedField, TracedScalar, _Atom, _Relational,
-    _Traced, _active_trace, _coefficient, _expansion_add, _expansion_scale, _fraction, _poly_add,
-    _poly_mul, _poly_of, _poly_text, _refuse_foreign,
+    _Traced, _active_trace, _coefficient, _expansion_add, _expansion_scale, _fraction,
+    _issued_since, _poly_add, _poly_mul, _poly_of, _poly_text, _refuse_foreign,
 )
 from pops.time.values import _Coeff
 
@@ -92,32 +99,38 @@ class AmbiguousSolvePath(ValueError):
 
 
 class LinearClaims:
-    """The claims of a linear map ``L`` that a component states, with their proof (IR16).
+    """The claims of the rate L of a component read at the unknown of a solve, with their proof
+    (IR16).
 
-    ``symmetric`` and ``negative_semidefinite`` are the claims that the core reads; ``proof`` is
-    the sentence that ``pops.inspect`` reports for them, and ``description`` names the map. A
-    component outside the core states them as a mapping with these four keys.
+    ``symmetric`` and ``negative_semidefinite`` are the properties of L that the core reads;
+    ``homogeneous`` states that the rate is linear and homogeneous in the state,
+    L(a u + b v) = a L(u) + b L(v), over every term of the component (§3.4 of the N9 lot « La
+    référence sous les solves de relation »): the operator of a solve evaluates the component's
+    own rate at its operand, so a source or a forcing term would make it affine. ``proof`` is the
+    sentence that ``pops.inspect`` reports for them, and ``description`` names the rate. A
+    component outside the core states them as a mapping with these five keys.
     """
 
     @classmethod
     def of(cls, value: Any) -> LinearClaims | None:
-        """``value`` as claims: claims, or a value of the library that states the four of them as
+        """``value`` as claims: claims, or a value of the library that states the five of them as
         attributes, so that ``pops.lib`` imports no private module (CF0b); ``None`` otherwise."""
         if isinstance(value, cls):
             return value
         if value is None or not all(hasattr(value, name) for name in cls.__slots__):
             return None
         if not all(isinstance(getattr(value, name), bool)
-                   for name in ("symmetric", "negative_semidefinite")):
+                   for name in ("symmetric", "negative_semidefinite", "homogeneous")):
             return None
         return cls(**{name: getattr(value, name) for name in cls.__slots__})
 
-    __slots__ = ("symmetric", "negative_semidefinite", "proof", "description")
+    __slots__ = ("symmetric", "negative_semidefinite", "homogeneous", "proof", "description")
 
-    def __init__(self, *, symmetric: bool, negative_semidefinite: bool, proof: str,
-                 description: str) -> None:
+    def __init__(self, *, symmetric: bool, negative_semidefinite: bool, homogeneous: bool,
+                 proof: str, description: str) -> None:
         self.symmetric = bool(symmetric)
         self.negative_semidefinite = bool(negative_semidefinite)
+        self.homogeneous = bool(homogeneous)
         self.proof = proof
         self.description = description
 
@@ -502,6 +515,32 @@ def _spd(a: tuple, images: tuple) -> bool:
     return True
 
 
+# The rates of b6 that no reference region runs: they have no checked lane-uniform failure
+# contract (codegen, _check_region_effects). A relation solve refuses them by name at elaboration,
+# before the region is lowered (§3.4 of the N9 lot « La référence sous les solves de relation »).
+_REGION_REFUSED_RATES = {
+    "rhs": "the finite-volume rate of b6",
+    "diffusive_rhs": "the diffusion of b6",
+    "source": "a source of b6",
+    "implicit_source": "an implicit source of b6",
+    "linear_source": "a linear source of b6",
+    "principal_rate": "a principal rate of b6",
+    "coupled_rate": "a coupled rate of b6",
+}
+
+
+def _require_region_safe(program: Any, first: int, component: Any, path: str) -> None:
+    """Refuse, naming it, a rate of ``component`` that a reference region does not run: the
+    operator of the solve evaluates that rate at its operand inside the solve's region."""
+    for value in _issued_since(program, first):
+        if value.op in _REGION_REFUSED_RATES:
+            raise NotYetElaborated(
+                "%s(U, t) at the unknown of the solve %s evaluates %r, %s, which a reference "
+                "region does not run (it has no lane-uniform failure contract); the rate of a "
+                "relation solve is written with a StencilFlux, such as two_point() (N3 lot 1)"
+                % (component._name, path, value.op, _REGION_REFUSED_RATES[value.op]))
+
+
 def solve(problem: Any, *, request: Any = None, name: str | None = None) -> TracedSolve:
     """``solve(Problem(...), request=p.request, name=None)``: solve a relation of the attempt.
 
@@ -592,12 +631,20 @@ def solve(problem: Any, *, request: Any = None, name: str | None = None) -> Trac
     terms = tuple((component, coeff) for component, _, (coeff, _) in residual._images)
 
     def apply(P: Any, _out: Any, value: Any) -> Any:
+        # A v = a v + sum_k b_k L_k(v), each L_k the component's own rate at the State v (§3.4 of
+        # the N9 lot « La référence sous les solves de relation »): the operator is the discrete
+        # operator that the explicit route evaluates, and it reads what the rate reads (the
+        # runtime parameters of a StencilFlux body). The declaration and the reference region
+        # both run this body.
         result = identity * value
         for component, coeff in terms:
-            result = result + coeff * component._linear_apply(P, value)
+            first = P._next_id
+            rate = component._rate_at(value)
+            _require_region_safe(P, first, component, path)
+            result = result + coeff * rate
         return result
 
-    program.set_apply(operator, apply)
+    operator = program.set_apply(operator, apply, operand=rhs)
     from pops.linalg import LinearOperatorProperties, LinearProblem
 
     properties = (LinearOperatorProperties.symmetric_positive_definite() if site.spd
@@ -613,6 +660,15 @@ def solve(problem: Any, *, request: Any = None, name: str | None = None) -> Trac
             "b_k a nonpositive multiple of p.dt and every L_k claimed symmetric negative "
             "semidefinite; the claims stated are %s" % (solver, path, stated or "none"),
             region=path, property="symmetric_positive_definite")
+    if site.fixed:
+        # §3.7: a fixed site (its relation reads no p.dt) is reused across the attempts of a step
+        # (T7), which needs a solution buffer owned by the reference realization; cg() never
+        # reaches one (it needs every b_k a multiple of p.dt), another solver could.
+        raise NotYetElaborated(
+            "the solve %s is a fixed failure site (its relation reads no p.dt), whose solution "
+            "the attempts of a step reuse (T7); under the reference realization %r that reuse "
+            "needs a solution buffer owned by the reference, which comes with a follow-up of N8 "
+            "and N9 (the reuse of a reference solve across attempts)" % (path, solver))
     descriptor = solver.linear_solver(request=request)
     site.problem = LinearProblem(operator, rhs, initial_guess=trace.temporal.n, at=point,
                                  properties=properties, nullspace=None)

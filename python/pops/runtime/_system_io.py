@@ -30,6 +30,7 @@ class _PreparedUniformRestart:
     program_diagnostic_checkpoint: bytes
     state_carriers: bytes | None
     finite_continuation: bytes | None
+    advance_segment: tuple[float, float, int, float, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,17 +353,21 @@ class _SystemIO(_System):
             out["field_potential_%d" % index] = np.asarray(
                 self._s.field_potential_global(slot), dtype=np.float64
             )
-        state_carriers = self._s.checkpoint_state_carriers()
-        if type(state_carriers) is not bytes or not state_carriers.startswith(b"POPSCAR1"):
-            raise ValueError("Uniform checkpoint requires complete POPSCAR1 immutable bytes")
+        positional_authority = getattr(self._s, "_checkpoint_has_positional_state_authority", None)
+        positional = callable(positional_authority) and positional_authority()
+        if positional:
+            state_carriers = self._s.checkpoint_state_carriers(positional=True)
+            auxiliary_checkpoint = self._s._capture_positional_auxiliary_checkpoint()
+        else:
+            state_carriers = self._s.checkpoint_state_carriers()
+            auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
+        carrier_magic = b"POPSCAR2" if positional else b"POPSCAR1"
+        if type(state_carriers) is not bytes or not state_carriers.startswith(carrier_magic):
+            raise ValueError("Uniform checkpoint requires complete immutable carrier bytes")
         out["state_carriers_checkpoint"] = np.frombuffer(state_carriers, dtype=np.uint8).copy()
-        auxiliary_checkpoint = self._s.capture_auxiliary_checkpoint_accepted_state()
-        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(
-            (b"POPSAUX2", b"POPSAUX3")
-        ):
-            raise RuntimeError(
-                "native Uniform exact auxiliary checkpoint is not a POPSAUX2/3 bytes image"
-            )
+        auxiliary_magic = (b"POPSAUX4", b"POPSAUX5") if positional else (b"POPSAUX2", b"POPSAUX3")
+        if type(auxiliary_checkpoint) is not bytes or not auxiliary_checkpoint.startswith(auxiliary_magic):
+            raise RuntimeError("native Uniform exact auxiliary checkpoint has an unexpected format")
         out["auxiliary_checkpoint"] = np.frombuffer(auxiliary_checkpoint, dtype=np.uint8).copy()
         capture_histories(self._s, prepared.history_plan, out)
         for node in prepared.cache_nodes:
@@ -518,9 +523,16 @@ class _SystemIO(_System):
             raise ValueError(
                 "restart: exact auxiliary checkpoint must be a one-dimensional uint8 array"
             )
-        if auxiliary_checkpoint.size < 8 or auxiliary_checkpoint[:8].tobytes() not in (b"POPSAUX2", b"POPSAUX3"):
-            raise ValueError("restart: exact auxiliary checkpoint is not POPSAUX2/3")
+        auxiliary_magic = auxiliary_checkpoint[:8].tobytes()
+        positional = auxiliary_magic in (b"POPSAUX4", b"POPSAUX5")
+        if not positional and auxiliary_magic not in (b"POPSAUX2", b"POPSAUX3"):
+            raise ValueError("restart: unsupported exact Uniform auxiliary checkpoint format")
+        positional_carriers = carrier_bytes is not None and carrier_bytes.startswith(b"POPSCAR2")
+        if positional != positional_carriers:
+            raise ValueError("restart: Uniform carrier and auxiliary checkpoint authority differ")
         auxiliary_checkpoint_bytes = auxiliary_checkpoint.tobytes()
+        if positional:
+            self._s._validate_positional_auxiliary_checkpoint(auxiliary_checkpoint_bytes)
         cadence = prepare_program_cadence(
             self._s,
             d,
@@ -536,6 +548,17 @@ class _SystemIO(_System):
             macro_step=d["macro_step"],
             program_schedule=installed_schedule,
         )
+        advance_segment = None
+        grid = temporal.controller_state.get("fixed_dt_grid")
+        if grid is not None and self._s._advance_max_attempts() > 0:
+            from pops.time._step.strategy import FixedDt
+            installed = self._step_strategy
+            if type(installed) is not FixedDt or installed.dt != temporal.fixed_dt():
+                raise ValueError("restart: compiled FixedDt grid differs from the installed strategy")
+            advance_segment = (
+                installed.dt, float.fromhex(grid["origin"]), grid["steps"],
+                float.fromhex(grid["time"]), grid["macro_step"],
+            )
         cells = spatial.cells_at_level(0)
         blocks = [str(block) for block in d["blocks"]]
         current_blocks = list(self._s.block_names())
@@ -704,7 +727,10 @@ class _SystemIO(_System):
         diagnostics = prepare_checkpoint_program_diagnostics(self, d)
         from pops.runtime._checkpoint_finite_continuation import prepare_finite_continuation
         finite = prepare_finite_continuation(self, d)
-        return _PreparedUniformRestart(d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges, diagnostics, carrier_bytes, finite)
+        return _PreparedUniformRestart(
+            d, identity, temporal, cadence, auxiliary_checkpoint_bytes, exchanges,
+            diagnostics, carrier_bytes, finite, advance_segment,
+        )
 
     def _begin_checkpoint_restart(self) -> None:
         if "_checkpoint_restart_python_snapshot" in self.__dict__:
@@ -756,6 +782,8 @@ class _SystemIO(_System):
         # accepted cursor first so time-, schedule- and cursor-dependent nodes see the exact
         # checkpoint context, matching the AMR restart route.
         self._s.set_clock(float(d["t"]), macro_step)
+        if prepared.advance_segment is not None:
+            self._s._restore_advance_segment(*prepared.advance_segment)
         histories = [str(name) for name in d["history_names"]]
         self._last_restart_report = restore_histories(self._s, d) if histories else None
         cache_names = [str(name) for name in d["cache_names"]]

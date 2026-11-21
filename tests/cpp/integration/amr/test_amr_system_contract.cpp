@@ -4,8 +4,12 @@
 #include <gtest/gtest.h>
 
 #include "amr_tagging_test_authority.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 #include "component_abi_test_helpers.hpp"
 #include "explicit_amr_program.hpp"
+#if POPS_NATIVE_DIM <= 2
+#include "euler_amr_fixture_criteria.hpp"
+#endif
 
 #include <pops/core/foundation/native_dimension.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -431,11 +435,11 @@ pops::AmrSystemConfig<Dim> magnetic_config() {
   return config;
 }
 
+#if POPS_NATIVE_DIM <= 2
 template <int Dim>
-void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
-                                    const pops::AmrSystemConfig<Dim>& config,
-                                    const std::vector<double>& state) {
-  constexpr const char* state_route = "tests.amr.system-contract/magnetic/state";
+void prepare_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
+                                const pops::AmrSystemConfig<Dim>& config, const char* state_route,
+                                const std::vector<double>& state) {
   system.bind_bootstrap_subject(state_route, "fluid", "bound_level_zero");
   system.stage_bootstrap_array(state_route, "fluid", "cell", "cell", Dim + 2, config.shape, state);
   pops::Extent<Dim> transfer_ghosts{};
@@ -446,6 +450,10 @@ void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
       "tests.amr.system-contract/magnetic/bootstrap/conservative-linear@1", "cell", "cell",
       "conservative", "dense", "prolongation", "conservative_linear", 2, transfer_ghosts,
       config.transition_ratios.front());
+}
+
+template <int Dim>
+void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system, const char* state_route) {
   system.begin_bootstrap_plan();
   (void)system.materialize_bootstrap_action(state_route, "initialize_level_zero",
                                             "bound_level_zero", 0);
@@ -457,6 +465,7 @@ void materialize_magnetic_bootstrap(pops::AmrSystem<Dim>& system,
                                             "conservative_linear", 1);
   system.commit_bootstrap_level();
 }
+#endif
 
 template <int Dim>
 void verify_exact_rebuild_distribution_modes() {
@@ -641,7 +650,10 @@ void verify_restart_auxiliary_layout_replacement() {
 
 template <int Dim>
 void verify_bootstrap_covered_cell_synchronization() {
-  constexpr const char* state_route = "tests.amr.system-contract/bootstrap-sync/state";
+  const pops::test::StandaloneFixtureCriterion criterion{
+      pops::test::standalone_bootstrap_sync, POPS_TEST_standalone_bootstrap_sync_DSO,
+      POPS_TEST_standalone_bootstrap_sync_RECEIPT};
+  const char* state_route = criterion.criterion.state;
   pops::AmrSystemConfig<Dim> config = magnetic_config<Dim>();
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 16;
@@ -650,10 +662,7 @@ void verify_bootstrap_covered_cell_synchronization() {
                                             "test.amr-system-contract.bootstrap-sync-runtime");
   system.install_block_state_route("tracer", state_route);
   install_direct_tracer(system, "tracer", "tests.amr.system-contract/bootstrap-sync/flux");
-  pops::test::install_prepared_threshold_union(
-      system,
-      {{"tracer", "scalar", 1.5, pops::test::PreparedThresholdRelation::Above, state_route}},
-      "tests.amr.system-contract/bootstrap-sync/tagging@1");
+  criterion.install(system);
 
   const std::size_t cells = cell_count(config.shape);
   std::vector<double> initial(cells, 1.0);
@@ -729,6 +738,7 @@ void verify_bootstrap_covered_cell_synchronization() {
   system.commit_bootstrap_level();
 }
 
+#if POPS_NATIVE_DIM <= 2
 template <int Dim>
 std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   static_assert(Dim == 1 || Dim == 2);
@@ -739,7 +749,8 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   pops::test::install_amr_runtime_authority(system, "test.amr-system-contract.magnetic-runtime");
   system.set_temporal_relations({2}, {1}, {"integral_only"});
   const auto keys = install_magnetic_provider(system, {consumer_qid});
-  system.install_block_state_route("fluid", "tests.amr.system-contract/magnetic/state");
+  const char* state_route = pops::test::magnetic.state_for("fluid");
+  system.install_block_state_route("fluid", state_route);
   MagneticModel<Dim> model{{},
                            {},
                            pops::EulerND<Dim>{pops::Real(1.4)},
@@ -758,20 +769,25 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
     state[cells + cell] = density;
     state[static_cast<std::size_t>(Dim + 1) * cells + cell] = 3.0 * density;
   }
-  pops::test::install_prepared_threshold_union(
-      system,
-      {{"fluid", "rho", 1.5, pops::test::PreparedThresholdRelation::Above,
-        "tests.amr.system-contract/magnetic/state"}},
-      "tests.amr.system-contract/magnetic/tagging@1");
+  pops::test::magnetic.install<Dim>(system, "test::prepared-tagging-clock");
   const std::vector<double> zero(cells, 0.0);
   system.stage_auxiliary_input(keys[0], zero);
   system.stage_auxiliary_input(keys[1], zero);
   system.stage_auxiliary_input(keys[2], std::vector<double>(cells, static_cast<double>(bz)));
-  materialize_magnetic_bootstrap(system, config, state);
+  prepare_magnetic_bootstrap(system, config, state_route, state);
+  EXPECT_FALSE(system.uses_runtime_engine());
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  system.install_program(POPS_TEST_MAGNETIC_PROGRAM_SO);
+  EXPECT_EQ(system.installed_program_hash(),
+            std::string("test-forward-euler-amr/") + pops::test::magnetic.identity);
+  EXPECT_EQ(system.n_levels(), 1);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
+  materialize_magnetic_bootstrap(system, state_route);
   EXPECT_EQ(system.n_levels(), 2);
   system.refresh_auxiliary({"tests.amr.system-contract/magnetic-clock", 0, 0, 0, 0, 0, 0,
                             AuxiliaryEvaluationEvent::initialization});
-  pops::test::install_forward_euler_program(system, false);
+  system.mark_bound();
   system.advance(0.01, 1);
 
   const auto bz_values = system.auxiliary_component(keys[2]);
@@ -791,6 +807,7 @@ std::vector<std::vector<double>> run_magnetic_source(pops::Real bz) {
   }
   return result;
 }
+#endif
 
 struct MultiblockRegridObservation {
   std::array<double, 2> mass_before{};
@@ -926,13 +943,13 @@ void expect_output_pieces_equal(const std::vector<pops::OutputPiece<Dim>>& actua
   }
 }
 
+#if POPS_NATIVE_DIM == 2
 template <int Dim>
 MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   static_assert(Dim == 2);
   constexpr std::array<const char*, 2> names{"ions", "electrons"};
-  constexpr std::array<const char*, 2> state_routes{
-      "tests.amr.system-contract/two-block/ions-state",
-      "tests.amr.system-contract/two-block/electrons-state"};
+  const std::array<const char*, 2> state_routes{pops::test::magnetic_union.state_for(names[0]),
+                                                pops::test::magnetic_union.state_for(names[1])};
   constexpr std::array<const char*, 2> consumer_qids{
       "tests.amr.system-contract/two-block/ions-source",
       "tests.amr.system-contract/two-block/electrons-source"};
@@ -974,18 +991,22 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
     }
     system.set_conservative_state(names[block], state);
   }
-  pops::test::install_prepared_threshold_union(
-      system,
-      {{names[0], "rho", 1.5, pops::test::PreparedThresholdRelation::Above, state_routes[0]},
-       {names[1], "rho", 1.5, pops::test::PreparedThresholdRelation::Above, state_routes[1]}},
-      "tests.amr.system-contract/two-block/tagging@1");
+  pops::test::magnetic_union.install<Dim>(system, "test::prepared-tagging-clock");
 
   const std::vector<double> zero(cells, 0.0);
   system.stage_auxiliary_input(keys[0], zero);
   system.stage_auxiliary_input(keys[1], zero);
   system.stage_auxiliary_input(keys[2], std::vector<double>(cells, static_cast<double>(bz)));
+  EXPECT_FALSE(system.uses_runtime_engine());
+  EXPECT_TRUE(system.installed_program_hash().empty());
+  system.install_program(POPS_TEST_MAGNETIC_UNION_PROGRAM_SO);
+  EXPECT_EQ(system.installed_program_hash(),
+            std::string("test-forward-euler-amr/") + pops::test::magnetic_union.identity);
+  EXPECT_EQ(system.macro_step(), 0);
+  EXPECT_DOUBLE_EQ(system.time(), 0.0);
   system.refresh_auxiliary({"tests.amr.system-contract/two-block/magnetic-clock", 0, 0, 0, 0, 0, 0,
                             pops::runtime::system::AuxiliaryEvaluationEvent::initialization});
+  system.mark_bound();
 
   if (system.n_blocks() != 2)
     throw std::runtime_error("two-block facade did not materialize both compiled blocks");
@@ -1044,7 +1065,6 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   EXPECT_EQ(system.block_level_state_global(names[0], 0), block_oracles[0][0]);
   EXPECT_EQ(system.block_level_state_global(names[1], 0), block_oracles[1][0]);
 
-  pops::test::install_forward_euler_program(system, false);
   system.step(1.0e-4);
 
   result.topology_after = system.engine()->topology_epoch();
@@ -1061,6 +1081,7 @@ MultiblockRegridObservation run_two_block_regrid_with_bz(pops::Real bz) {
   }
   return result;
 }
+#endif
 
 template <int Dim>
 void verify_stride_window_contract() {

@@ -46,6 +46,9 @@ _MODEL_OPS = (
     "solve_local_linear",
     "solve_local_nonlinear",
     "solve_spatial_nonlinear",
+    # G03 lot M1b: the face of a total on a moving configuration reads the FiniteVolume rate of
+    # the model of its block (program_emit_moving_total).
+    "moving_total_rate",
 )
 
 _ALLOWED_OPS = frozenset(
@@ -298,9 +301,17 @@ class ProgramProviderPlans:
                         rendered_key, rendered_contract, shape, slot,
                     )
                 )
+            from ._checkpoint_provenance import consumer_role
+
+            # Program owner paths use canonical quoted segments. /program/ is the
+            # delimiter emitted by program_provider_consumer_qid, before its SSA role.
+            owner, separator, node = qid.partition("/program/")
+            role = (consumer_role(owner, separator + node)
+                    if target == "system" and separator else "")
+            role_cpp = (", " + cpp_string_expression(role)) if role else ""
             lines.extend((
                 "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, " % cpp_string_expression(qid),
-                "      std::vector<ConsumerValue>{%s}});" % ", ".join(values),
+                "      std::vector<ConsumerValue>{%s}%s});" % (", ".join(values), role_cpp),
             ))
         return "\n".join(lines)
 
@@ -397,6 +408,12 @@ def _prepared_native_components(program: Any, *, target: str = "system") -> tupl
             continue
         if value.op != "solve_linear":
             continue
+        from pops.time.solve_outcome import native_realization, solve_realization_kind
+
+        if solve_realization_kind(value) == "reference":
+            # A reference solve (SV12) is its region: it needs no native solver component.
+            continue
+        native_realization(value)
         providers: list[PreparedNullspaceProvider | PreparedKrylovMethodProvider
                         | PreparedPreconditionerProvider | PreparedHierarchySolverProvider] = [
             prepared_nullspace_provider_from_attrs(value.attrs)
@@ -926,9 +943,9 @@ _PROGRAM_CPP_TEMPLATE = """\
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>
 #include <array>                               // exact-ranked axis packs
+#include <charconv>                            // locale-independent face step refusal payload
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
-#include <cstdio>                              // std::snprintf (face step refusal payload, ROM-108)
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <functional>                          // per-level AMR persistent Program closures
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)

@@ -34,6 +34,7 @@ struct StateCarrierArchive {
   std::int64_t shard = -1;
   std::vector<std::string> blocks;
   std::vector<StateCarrierPatch<Dim>> patches;
+  bool positional = false;
 };
 
 /// Configured storage envelope for the existing POPSCAR1 wire, capacity contract@1.
@@ -107,8 +108,9 @@ void validate(const StateCarrierArchive<Dim>& a) {
       (a.shard >= 0 && std::uint64_t(a.shard) >= a.ranks))
     throw std::invalid_argument("state carrier archive has invalid authority");
   for (std::size_t i = 0; i < a.blocks.size(); ++i)
-    if (a.blocks[i].empty() ||
-        std::find(a.blocks.begin(), a.blocks.begin() + i, a.blocks[i]) != a.blocks.begin() + i)
+    if (a.positional ? !a.blocks[i].empty()
+                     : a.blocks[i].empty() || std::find(a.blocks.begin(), a.blocks.begin() + i,
+                                                        a.blocks[i]) != a.blocks.begin() + i)
       throw std::invalid_argument("state carrier block identities are empty or duplicated");
   for (std::size_t i = 0; i < a.patches.size(); ++i) {
     const auto& p = a.patches[i];
@@ -140,6 +142,8 @@ std::vector<std::uint8_t> encode_state_carriers(const StateCarrierArchive<Dim>& 
   static_assert(Dim >= 1 && Dim <= 3);
   state_carrier_detail::validate(a);
   std::vector<std::uint8_t> out{'P', 'O', 'P', 'S', 'C', 'A', 'R', '1'};
+  if (a.positional)
+    out.back() = '2';
   auto word = [&](std::uint64_t v) {
     for (int b = 0; b < 8; ++b)
       out.push_back(std::uint8_t(v >> (8 * b)));
@@ -150,9 +154,14 @@ std::vector<std::uint8_t> encode_state_carriers(const StateCarrierArchive<Dim>& 
   word(std::bit_cast<std::uint64_t>(a.shard));
   word(a.levels);
   word(a.blocks.size());
-  for (const auto& name : a.blocks) {
-    word(name.size());
-    out.insert(out.end(), name.begin(), name.end());
+  for (std::size_t block = 0; block < a.blocks.size(); ++block) {
+    if (a.positional) {
+      word(block);
+    } else {
+      const auto& name = a.blocks[block];
+      word(name.size());
+      out.insert(out.end(), name.begin(), name.end());
+    }
   }
   word(a.patches.size());
   for (const auto& p : a.patches) {
@@ -175,10 +184,14 @@ std::vector<std::uint8_t> encode_state_carriers(const StateCarrierArchive<Dim>& 
 }
 
 template <int Dim>
-StateCarrierArchive<Dim> decode_state_carriers(std::span<const std::uint8_t> bytes) {
-  constexpr std::array<std::uint8_t, 8> magic{'P', 'O', 'P', 'S', 'C', 'A', 'R', '1'};
-  if (bytes.size() < 64 || !std::equal(magic.begin(), magic.end(), bytes.begin()))
-    throw std::invalid_argument("state carrier archive has invalid POPSCAR1 header");
+StateCarrierArchive<Dim> decode_state_carriers(std::span<const std::uint8_t> bytes,
+                                               bool allow_positional = false) {
+  constexpr std::array<std::uint8_t, 7> magic{'P', 'O', 'P', 'S', 'C', 'A', 'R'};
+  if (bytes.size() < 64 || !std::equal(magic.begin(), magic.end(), bytes.begin()) ||
+      (bytes[7] != '1' && !(allow_positional && bytes[7] == '2')))
+    throw std::invalid_argument(allow_positional
+                                    ? "state carrier archive has invalid POPSCAR1/2 header"
+                                    : "state carrier archive has invalid POPSCAR1 header");
   std::size_t at = 8;
   auto word = [&]() {
     if (bytes.size() - at < 8)
@@ -191,15 +204,22 @@ StateCarrierArchive<Dim> decode_state_carriers(std::span<const std::uint8_t> byt
   if (word() != Dim)
     throw std::invalid_argument("state carrier dimension changed");
   StateCarrierArchive<Dim> a;
+  a.positional = bytes[7] == '2';
   a.real_bits = word();
   a.ranks = word();
   a.shard = std::bit_cast<std::int64_t>(word());
   a.levels = word();
   auto n = word();
   if (n > (bytes.size() - at) / 8)
-    throw std::invalid_argument("state carrier names exceed bytes");
+    throw std::invalid_argument("state carrier block table exceeds bytes");
   for (std::uint64_t i = 0; i < n; ++i) {
     auto length = word();
+    if (a.positional) {
+      if (length != i)
+        throw std::invalid_argument("state carrier block positions differ from their wire order");
+      a.blocks.emplace_back();
+      continue;
+    }
     if (length > bytes.size() - at)
       throw std::invalid_argument("state carrier name exceeds bytes");
     a.blocks.emplace_back(reinterpret_cast<const char*>(bytes.data() + at), std::size_t(length));
@@ -236,15 +256,16 @@ StateCarrierArchive<Dim> decode_state_carriers(std::span<const std::uint8_t> byt
 }
 
 template <int Dim>
-StateCarrierArchive<Dim> merge_state_carrier_shards(const std::vector<std::string>& shards) {
+StateCarrierArchive<Dim> merge_state_carrier_shards(const std::vector<std::string>& shards,
+                                                    bool allow_positional = false) {
   if (shards.empty())
     throw std::invalid_argument("state carrier archive has no source shards");
   StateCarrierArchive<Dim> result;
   std::map<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>, std::size_t> replicas;
   for (std::size_t rank = 0; rank < shards.size(); ++rank) {
     const auto& s = shards[rank];
-    auto a =
-        decode_state_carriers<Dim>({reinterpret_cast<const std::uint8_t*>(s.data()), s.size()});
+    auto a = decode_state_carriers<Dim>({reinterpret_cast<const std::uint8_t*>(s.data()), s.size()},
+                                        allow_positional);
     if (a.shard != std::int64_t(rank) || a.ranks != shards.size())
       throw std::invalid_argument("state carrier source shard authority changed");
     for (const auto& row : a.patches)
@@ -254,7 +275,8 @@ StateCarrierArchive<Dim> merge_state_carrier_shards(const std::vector<std::strin
       result = a;
       result.shard = -1;
     } else {
-      if (a.blocks != result.blocks || a.levels != result.levels || a.real_bits != result.real_bits)
+      if (a.positional != result.positional || a.blocks != result.blocks ||
+          a.levels != result.levels || a.real_bits != result.real_bits)
         throw std::invalid_argument("state carrier source envelopes differ");
       result.patches.insert(result.patches.end(), std::make_move_iterator(a.patches.begin()),
                             std::make_move_iterator(a.patches.end()));

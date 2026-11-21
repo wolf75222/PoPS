@@ -247,6 +247,7 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
         layout_program = SimpleNamespace(
             layout_id=layout_id,
             identity=make_identity("layout-program", {"layout": layout_id}),
+            block_names=(block,),
         )
         report = ProgramRuntimeReport(
             installed=True,
@@ -265,18 +266,22 @@ def test_multi_layout_report_preserves_the_common_temporal_partition():
             temporal_partition=partition,
             temporal=states[layout_id].to_data(),
         )
-        return layout_program, (block,), report
+        return layout_program, SimpleNamespace(
+            block_names=lambda: (block,), program_report=lambda: report,
+        )
 
     executor = object.__new__(_MultiLayoutUniformExecutor)
-    executor._ordered_program_reports = lambda: (
-        child("layout-a", "fluid"),
-        child("layout-b", "field"),
-    )
+    layouts = (child("layout-a", "fluid"), child("layout-b", "field"))
+    executor._plan = SimpleNamespace(artifact=SimpleNamespace(
+        layout_programs=tuple(layout for layout, _ in layouts),
+    ))
+    executor._engines = {layout.layout_id: engine for layout, engine in layouts}
     executor.block_names = lambda: ("fluid", "field")
     executor._temporal_restart_state = _CompositeTemporalRestartState(states)
 
     report = executor.program_report()
 
+    assert report.step_transaction == {"strategy": {"kind": "fixed"}}
     assert report.temporal_partition == partition
     assert tuple(report.temporal["layouts"]) == ("layout-a", "layout-b")
     assert report.temporal["layouts"] == {key: state.to_data() for key, state in states.items()}

@@ -907,19 +907,30 @@ class _Component:
         return unknown._image_by(self, time.c)
 
     def _linear_claims(self) -> Any:
-        """The claims of the linear map that the evaluation of this component states (IR16)."""
+        """The claims of the rate of this component read at the unknown of a solve (IR16): the
+        operator of the solve evaluates that rate at its operand (§3.4 of the N9 lot « La
+        référence sous les solves de relation »), so the rate states that it is linear and
+        homogeneous in the state, over every term of the component."""
         claims = _Relational._claims_of(getattr(self._evaluate, "linear_claims", None))
-        if not callable(getattr(self._evaluate, "linear_apply", None)) or claims is None:
+        if claims is None:
             raise NotYetElaborated(
-                "%s(U, t) at an unknown U: the rate of %r states no linear map (linear_apply and "
-                "linear_claims); a rate that its scheme does not realize as a linear map, solved "
-                "by Newton, comes with a later lot of N8 with N9, and the operator generated from "
-                "a term with G10" % (self._name, self._name))
+                "%s(U, t) at an unknown U: the rate of %r states no linear claims (linear_claims: "
+                "symmetric, negative_semidefinite, homogeneous, proof, description; IR16); a rate "
+                "that its scheme does not state linear, solved by Newton, comes with a later lot "
+                "of N8 with N9, and the operator generated from a term with G10"
+                % (self._name, self._name))
+        if not claims.homogeneous:
+            raise NotYetElaborated(
+                "%s(U, t) at an unknown U: the rate of %r is not stated linear and homogeneous in "
+                "the state (%s), so the operator of the solve, which evaluates that rate at its "
+                "operand, would be affine; a relation with an affine rate at its unknown comes "
+                "with a later lot of N8 with N9" % (self._name, self._name, claims.proof))
         return claims
 
-    def _linear_apply(self, P: Any, value: Any) -> Any:
-        """``L(value)`` on the matrix-free apply ``P``, written by the component's rate."""
-        return self._evaluate.linear_apply(P, value)
+    def _rate_at(self, value: Any) -> Any:
+        """The rate of this component at the State ``value``: the operand of a solve's operator,
+        which evaluates the component's own rate there (§3.4)."""
+        return self._evaluate(value)
 
     def _value_at(self, state: TracedField, point: StagePoint, ordinal: int, c: Any) -> tuple:
         """The builder value that the rate reads at ``point``, materialized there if needed."""

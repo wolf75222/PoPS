@@ -36,6 +36,7 @@ SYSTEM_CONFIG_FIELDS = {
     "shape": "tuple[int, ...]", "lower": "tuple[float, ...]",
     "upper": "tuple[float, ...]",
     "periodicity": "tuple[bool, ...]",
+    "identifications": "tuple[tuple[int, ...], ...]",
     "boxes": "tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]",
     "coordinate_system": "str",
     "runtime_parameter_byte_capacity": "int | None",
@@ -107,7 +108,7 @@ def test_public_native_stub_surface_is_closed_and_backed_by_cpp():
     native_functions = set(re.findall(r'm\.def\(\s*"([^"]+)"', native_source))
     native_metadata = set(re.findall(r'm\.attr\("([^"]+)"\)', native_metadata_source))
 
-    assert public == {"StepAttemptRejected", *PUBLIC_METADATA, *PUBLIC_CALLABLES}
+    assert public == {"StepAttemptRejected", "StepTerminalFailure", *PUBLIC_METADATA, *PUBLIC_CALLABLES}
     assert PUBLIC_CALLABLES == native_functions
     assert PUBLIC_METADATA == native_metadata
     assert not public & INTERNAL_BOOTSTRAP_TYPES
@@ -145,12 +146,23 @@ def test_step_attempt_rejection_is_a_structured_runtime_error_contract():
         "disposition": "Literal['retry', 'reject']",
         "reason_code": "int",
         "failed_rank": "int",
+        "typed_failure_schema": "str",
+        "typed_failure_payload": "bytes",
+    }
+    terminal = _classes(_tree())["StepTerminalFailure"]
+    assert [ast.unparse(base) for base in terminal.bases] == ["RuntimeError"]
+    assert _annotated_fields(terminal) == {
+        "typed_failure_schema": "str",
+        "typed_failure_payload": "bytes",
     }
 
     source = BINDINGS.read_text(encoding="utf-8")
-    assert "register_step_attempt_rejected(m)" in source
-    assert "register_local_exception_translator(&translate_step_attempt_rejected)" in source
-    for field in ("status", "phase", "detail", "disposition", "reason_code"):
+    assert "register_step_failures(m)" in source
+    assert "register_local_exception_translator(&translate_step_failure)" in source
+    assert 'py::exception<NativeStepTerminalFailure>(module, "StepTerminalFailure",' in source
+    assert "catch (const NativeStepTerminalFailure& failure)" in source
+    for field in ("status", "phase", "detail", "disposition", "reason_code",
+                  "typed_failure_schema", "typed_failure_payload"):
         assert 'instance.attr("%s")' % field in source
     assert "py::register_exception<" not in source
 

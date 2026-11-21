@@ -603,6 +603,20 @@ inline std::uint64_t all_reduce_max(std::uint64_t value, const CommunicatorView&
 #endif
 }
 
+inline void all_reduce_max_inplace(std::uint64_t* buffer, int count,
+                                   const CommunicatorView& communicator) {
+#ifdef POPS_HAS_MPI
+  if (communicator.active() && count > 0)
+    detail::require_mpi_success(MPI_Allreduce(MPI_IN_PLACE, buffer, count, MPI_UINT64_T, MPI_MAX,
+                                              communicator.native_handle()),
+                                "MPI_Allreduce(uint64 inplace max, execution communicator)");
+#else
+  (void)buffer;
+  (void)count;
+  (void)communicator;
+#endif
+}
+
 inline Real all_reduce_min(Real value, const CommunicatorView& communicator) {
 #ifdef POPS_HAS_MPI
   if (!communicator.active())

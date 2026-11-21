@@ -212,7 +212,8 @@ static int pops_run_test_external_riemann_dispatch() {
     std::ofstream f(src);
     f << brick_source();
   }
-  const auto package = pops::test::native_dso::compile_shared(src, so);
+  const auto package =
+      pops::test::native_dso::compile_shared(src, so, POPS_TEST_RIEMANN_DISPATCH_OPTIONS);
   if (!package.ok) {
     pops::test::native_dso::report_compile_failure("test_external_riemann_dispatch", package);
     return 1;

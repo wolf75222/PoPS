@@ -18,6 +18,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- ROM-90 (N9, « La référence sous les solves de relation »): the relation solve of a traced
+  method runs the reference conjugate gradient of `pops.lib.solve` (lot 4) instead of b6's native
+  CG. A reference solve is one `solve_linear` node realized by its solver's region (SV12, IR 34),
+  with the native's outcome, consumption and evidence; its candidate passes the SV8 gate, measured
+  in the region through the same apply and decided by the native's
+  `apply_measured_original_residual_gate`. One table of solve failures gives both realizations
+  their actions, and a trial site reports the variant of its status (T39): an iteration limit is
+  `BudgetExhausted` (`max_iterations`), any other rejected status `SolveFailed`, in the rows of
+  `pops.advance-control@5` (IR 35). A `matrix_free_operator` of domain and range `state` records
+  its apply on a State operand (`set_apply(operator, body, operand=)`, IR26), so the operator of a
+  relation is the component's own rate at the State, such as the two-point StencilFlux with the
+  runtime parameters it reads; core ledger entry `state-operand-of-a-matrix-free-operator`. The
+  claims of the rates stay (IR16): `LinearClaims.homogeneous`, and a rate not stated linear and
+  homogeneous is refused by name. A coefficient that is a `model.parameter` is claimed from its
+  admissible set: L1-d with `nu = model.parameter("nu", admissible=pops.Positive())` compiles once
+  and runs with each bound value, equal to the case with `nu` a constant within the request of the
+  solve. A reference solve is a barrier of the field caches of #781. The Trace witness of the
+  relation route (L1-d against the same IMEX step written on b6 with the native CG) is in
+  `test_relation_solve_reference_n9_native.py`.
+- ROM-22 (G04-a, « Générer les fantômes depuis la politique de bord »): the ghost cells of a
+  boundary relation of the surface are generated from the body of its policy (`ghosts()` or a
+  policy written in the case). The elaborator runs the policy at the depths 1..D of the halo of
+  the block (D from the methods of the plan) and gives each piece the b6 `SourceGhost` of
+  `pops.boundary.transport` (not exported); the model package compiles it into
+  `pops_generated::UserGhostPolicy`, which the prepared boundary calls on the device after the
+  native laws (`HyperbolicBoundaryLaw::SourceGhost`, token `source_ghost`), authenticated face by
+  face. A policy outside the two laws of master is now generated (a constant ghost, the linear
+  extrapolation under `muscl`); a ghost that reads `face.normal`, a coordinate or an inner cell
+  deeper than D is refused by its name. A source ghost face needs the generated face of its
+  package (`riemann.User`), and every fill without the policy (AMR, policy-less fills) refuses it.
+  The MG9 bridge `realize` (`pops.lib.numerics.ghost_laws`) is removed. Integer depths are a
+  transitional route (`plan/routes_transitoires.md`), removed by G04 in phase 2.
 - OD31 (vertical slice of the exit of phase 1): master's tutorial 02 written in the surface,
   `examples/surface/tutorials/scalar_advection/02_openmp_explicit_ssprk2.py`, with its upwind
   flux (in master's arithmetic) and its SSPRK2 written in the case file. The pieces that PoPS does
@@ -32,7 +64,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   differs from master only in the rounding of exp in the initial data, in the 12 recorded cells,
   each by 2 ulp at most, and by at most 1e-12 relative at t = 0.2 (cause C44, removed with G07);
   with master's initial array bound as data, it is bit for bit at t = 0 and t = 0.2. The bound only
-  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice.
+  shrinks (MG6). `benchmarks/slice/t02_pf10.py` measures PF10 (1) and (3) for the slice, one
+  route per process when a pair does not fit in memory (`measure --route`, `merge`).
+  `pops.inspect(case)` reports where each scheme written with `@pops.scheme` and the method
+  are written, « the case file, <file>:<line> » or « pops.lib, <file>:<line> » (S1-b), and the
+  slice's native test counts no Python call inside the native run (S2, CF9).
+- The model source map (S2 of the vertical slice, driver 13:35): `compiled.source_maps` adds,
+  under `block:<name>`, the map `pops.model-source-map@1` of each block whose model C++ holds a
+  policy generated from a Python body, the face of `riemann.User` (`UserFacePolicy`) and the
+  trace of `reconstruction.User` (`UserReconstructionPolicy`): its lines in the retained C++, its
+  source identity and the origin of its body, the case file or `pops.lib` with its file, line and
+  function (`pops._source_origin`). The surface gives each brick the origin of the
+  `@pops.scheme` body it realizes; `riemann.User(origin=)` and `reconstruction.User(origin=)`
+  take it, and default to their own body's. The origin is local provenance, off the identity of
+  the descriptor and of the artifact: the generated C++ and its cache key do not change.
+  `compiled.inspect()` reports the bodies under `model_source_maps`. On the slice, the face is
+  « the case file, …/02_openmp_explicit_ssprk2.py:34 » and the reconstruction « pops.lib,
+  pops/lib/numerics/limiters.py:45 ».
+- CF17 for L1 (exit of phase 1, OD31): `examples/surface/litmus/l1/` writes L1 of 17.1 in the
+  surface (L1-a: `upwind()`, `two_point()`, SSPRK2) and its three swaps, `rusanov()` (L1-b), the
+  upwind face written in the case with `@pops.scheme` (L1-c) and IMEX Euler with `cg()` (L1-d).
+  `tests/python/integration/surface/test_cf17_l1_swaps.py` checks that each swap changes only the
+  lines of the swapped function, lints the four files, and runs them natively in Dim1 at the level
+  of L1-a: L1-b and L1-c give L1-a bit for bit, the integral of u is kept, u stays in [0, 1], no
+  swap is farther from the exact cell averages than L1-a, and no Python runs inside the native run
+  (CF9). The four files are the CF1 case `L1-swaps` (frozen engine unchanged). Until N8 elaborates
+  `dt=` as a function of cell the step is a number, and `nu` is a constant while `cg()` is a
+  bridge. `pops.lib.time` re-exports `ssprk2` and `imex_euler` of `pops.lib.time.methods` (the
+  same objects), so the files import them as 17.1 writes it, `from pops.lib.time import ssprk2`.
 - ROM-89 (N8, « Règle de pas compilée »): an Advance can choose its steps by a CFL rule. Elaborated
   from `StepRule(fraction, max_dt=None, strategy=...)` (internal; the slice's `cfl_limit` in
   `pops.lib.time` elaborates onto it and gives the strategy, so the core names neither, CF2), the
@@ -43,6 +102,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `cfl_limit`), which caps its last step at `t_end - t`: the two can differ by one
   sliver step at a frontier, when a CFL step ends within four ulp short of it or when
   `t + (t_end - t)` is not `t_end`. A run with a rule refuses `add_dt_bound` bounds.
+- ROM-89 (N8, « dt= as a function of cell »): `pops.Advance(method, dt=f)`, with `f` a function
+  of `cell` (spec 0.3, 2.6.2, 2.6.4, 2.6.9, PF8), elaborates. Each step is the smallest value,
+  over the valid cells of the evolving block at the accepted state, of the bound E that `f`
+  returns, reduced over the ranks; the Program generates it (`pops_program_advance_step_bound`)
+  in the order E writes it, in double, without rewriting a quotient into a product by a
+  reciprocal. The step runs under the Courant budget φ that the rule declares
+  (`step_fraction`): `cfl_limit` declares its `cfl`, a function written by hand takes 1, the
+  budget of a fixed step. `pops.inspect` shows E, φ and its origin. Its control is
+  `pops.advance-control@6` (IR version 36), `{"rule": "cells", "fraction", "bound"}`; every
+  Program without a cells rule keeps its record and identity. `pops.run` on the artifact takes
+  the `CellStepBound` strategy. E NaN, -infinity or with a non-finite operation fails the run
+  with `step_bound_nonfinite`, E zero or negative with `step_bound_nonpositive`, both naming the
+  first cell; E +infinity on every cell steps to the frontier.
+  - `cfl_limit(flux, cfl=, max_dt=None)` is now a plain function of `cell`: `(cfl * w) / s`,
+    or `smallest([where(s > 0, (cfl * w) / s, max_dt), max_dt])` with a cap. It has no speed
+    floor, unlike b6's `max(s, 1e-30)`: a state at rest everywhere without `max_dt` takes one
+    step to the frontier where b6 proposes `cfl * h / 1e-30`. A cell at rest bounds nothing
+    (+infinity, 2.6.9): without `max_dt` it is the IEEE quotient `w / +0` (w > 0 by the
+    geometry), not the `where(s > 0, ..., +infinity)` of the design note, because a constant of
+    an expression is finite; the division raises the `FE_DIVBYZERO` flag, which no build traps.
+    A divisor of -0 gives -infinity, a typed failure. `cfl_limit(..., cfl=1.5)` is refused by
+    name: the Courant number of a step rule is in (0, 1]; #788's bridge accepted any positive
+    finite `cfl`, as master's `AdaptiveCFL`.
+    #788's refusals (a transport flux left out, a diffusive flux, waves not derived) stay in
+    `cfl_limit`'s body. `pops.StepRuleValue` and the MG9 entry of `cfl_limit` are removed.
+  - A face guard that refuses an attempt with the faces' frequency (`pops.face-step-frequency@1`,
+    ROM-108) stops the compiled run by name (`kFaceFrequency`), with the frequency reduced over
+    the ranks (`FaceFrequencyStop`): the compiled retry is a later lot of N8. `pops.run` retries
+    once at φ / F, as `AdaptiveCFL` at cfl / F.
+  - Refused with their lot: a function of cell beside `tolerance=`; under an adaptive layout or
+    on a Program of several blocks; a runtime parameter that E reads and no kernel of the method
+    reads (its value is installed with the parameters of a kernel; a later lot of N8 « dt= as a
+    function of cell » installs it for the bound); and, by the run, the plans on which b6's
+    selection does more than read speeds: a default Poisson solve (`set_poisson`, or the Poisson
+    source of an evolving block, decided on the provider identity of its elliptic brick:
+    `NoElliptic` and the zero brick that codegen gives a model without `elliptic_rhs` are none;
+    the run names them « the default field solve » and « the elliptic source of an evolving
+    block »),
+    an auxiliary refreshed before the selection, source and parabolic frequencies,
+    `stability_dt`, substeps or a stride, coupled frequencies, other than one evolving block,
+    `add_dt_bound` and `set_dt_bound`.
 - ROM-89 (N8, « Ancrage des calendriers au départ du run », spec §5.2): a schedule counts from
   the start of each run. `every(time=h)` publishes at `t0 + k h`, computed exactly from the run's
   start `t0` and rounded once, and `every(steps=k)` counts the accepted steps of the run, for an
@@ -82,6 +182,100 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   uniform periodic layout with a constant coefficient; a `model.parameter` coefficient is refused
   until the reference CG of N9 replaces the bridge. SU-T3 compares L1-d of section 17.1 with the
   case written by hand for b6 and N8 (program IR, artifact, identity, C++).
+- ROM-110 (N17, L2b-1): the two-point face on a chart (DN35 and DN36 of the design note). At a
+  physical end the static arrays of a chart now state the mirrored distance 2 |m_f - c_K|, as
+  node positions do, under the same certificate (the centroid of an end cell on the inner side of
+  its end face), where they stated NaN since L1a. The arrays measure their K-orthogonality and do
+  not require it: they publish the largest sine between the normal of a face and the line of the
+  two centroids that it separates (at a wall, of the cell centroid and the face centroid), 0 to
+  rounding on node positions. A `StencilFlux` (`two_point()`) on a chart is served when its rows
+  are one law on every logical axis (the row of an axis, its two cells and its spacing renamed,
+  is the row of every other), as for `-k grad(u)` with a scalar k: such a row reads the normal of
+  a face through n.n = 1 alone, so the row of the axis normal is the flux density along the
+  physical normal, across the distance of the centroids. The prepared diffusion of a Program is
+  served on a chart with one coefficient on every logical axis. Rows that differ by axis, and a
+  coefficient diag(k_x, k_y) on a chart, whose normal flux is (k_x n_x^2 + k_y n_y^2) du/dn, are
+  refused at resolution (`static_geometry_stencil_unavailable`,
+  `static_geometry_diffusion_unavailable`). `pops.inspect` of a charted case with a diffusive flux
+  states that its faces take the line of the centroids for their normal and that the arrays bound
+  at `pops.bind` report the largest sine. The cases are the annulus with its walls held at given
+  values (`build_annulus_diffusion`) and the doubly periodic unit square turned by pi / 6 and
+  sheared (`build_chart_diffusion`).
+- ROM-110 (N17, L2b-2): the centred slope of the static arrays (DN38 to DN40 of the design note).
+  The Program operation of centred differences (`gradient` of `pops.Program`) is served on every
+  static layout, node positions of ranks one to three and a chart of rank two, with the two
+  operations through which a Program consumes it: the allocation of its scratch and the cellwise
+  algebra of Program values, which reads values, scalars and literals and never a coordinate. The
+  slope g_K of a cell solves delta X g = delta e, row a of delta X the difference of the centroids
+  of the two neighbours of K along a: the stored centroids inside the domain, the centroid at the
+  other end translated by the seam across a periodic axis, and at a physical end the centroid of K
+  reflected through the centroid of its end face, 2 m_f - c_K. The values are those of the
+  boundary session of the Program. The geometric part is one header function of the view of the
+  arrays, `pops::centroid_slope` with `pops::neighbour_centroid`
+  (`include/pops/mesh/geometry/centroid_slope.hpp`), callable from a generated kernel: the
+  generated cell read of `centred_gradient()` (N15) will call it. The elimination with partial
+  pivoting returns on node positions the quotient of the differences by the diagonal, bitwise. The
+  arrays keep the periodicity of each axis and the translation of its seam, which their view
+  carries and their snapshot publishes with the face centroids. The generated step guards the
+  operation with the guard of the arrays; the Laplacian and the divergence of a Program stay
+  refused on them (`static_geometry_consumer_unavailable`). The surface word `centred_gradient()`
+  stays refused until N15. The case is the slope of a graded rod and of a graded ring
+  (`build_graded_slope`); in ranks two and three no Program consumes a slope of one component per
+  axis, and a runtime-private seam of the System evaluates the function for the tests.
+- ROM-110 (N17, L2a): the charted support at the surface (D0b; DN25 to DN34 of the design note).
+  `σ.chart(x=e_x, y=e_y)` states the chart of a support of rank two, one expression of the
+  coordinates of σ per axis of the Cartesian frame. The keywords name the frame axes, which key the
+  components of a flux and of a vector (`σ.axes`, `σ.x`); the coordinates of σ stay the logical
+  axes (`σ.r`), which name the mesh axes, `cells=` in their order, the boundary pieces and the node
+  functions of `pops.Graded` (S6). `chart` and `weighted` are readings that no axis may take (SU8).
+  The layout states the quadrature rule of the measures, `pops.Uniform(cells=..., geometry=rule)`:
+  required on a charted support (`AmbiguousElaboration`), refused on a box and on node positions,
+  whose geometry is exact (`SupportMismatch`). A charted case elaborates to the chart of C1 that
+  the static geometry arrays serve since L1a, and a graded chart composes its node functions with
+  the chart, X(f(s), theta). Refused when the chart is written: a chart of rank one, or one whose
+  components each read one coordinate, a different one, naming `pops.Graded` (it only moves the
+  nodes); a keyword that names an axis of σ, a count other than the rank, a component that reads
+  no coordinate or a coordinate that no component reads (`SupportMismatch`); a frame not named x
+  and y (`NotYetElaborated`, the supports of G03); rank three (planned, not covered); a word that
+  the analytic programs of bind lack (N11); a second chart, and `identify` after `chart`. A piece
+  on which the chart does not depend on the other coordinate is degenerate: it leaves `σ.boundary`,
+  and a case on that support waits for lot L2c with `identify` of G09. A coordinate read on a
+  charted support, in a value of the model or an initial value, and `pops.project` there wait for
+  lot L2b, which reads them at the points of the chart, and so do a value relation (its ghost is
+  the reflection of a cell across a face of the chart) and a reconstruction above the cell values,
+  refused where the case is built (`NotYetElaborated`); `σ.weighted` waits for lot L3. On the
+  physical normal of a chart the face input s of a face authored in source, which `rusanov()`
+  reads as its spectral radius, is b6's bound sum_k |n_k| rho(A_k), not the exact radius of
+  `spectral_radius`: equal on an axis normal, larger off it and without bound near a face tangent
+  to the flow. It is a transitional route until lot L2d of N17, which generates the exact radius;
+  `pops.inspect` names it on the row of the scheme. An array that a run published on another
+  support, the box of the chart or the same box under another chart, is refused as a datum of the
+  chart (`SupportMismatch`). The case is `examples/api_v02/models_charted_supports.py`, a scalar
+  advected by `rusanov()` on the annulus.
+- ROM-110 (N17, L1b): graded spacing at the surface, and the static geometry arrays of a graded
+  box of rank three. `pops.Graded(base=pops.Uniform(cells=c), nodes={box.x: f})` places node k of
+  an axis at f(s), s = k / c correctly rounded, f a plain function that PoPS calls once with the
+  logical coordinate s (D0b; DN3 of the design note). It elaborates to the static case of the
+  geometry-evolution contract, which the static arrays serve as node positions at ranks one to
+  three: the widths are the node differences, and the face and cell measures their products,
+  bitwise. f(0) and f(1) lie within 4 ulp of the bounds of the axis and are set to them, and f
+  increases strictly at the nodes, or the case is refused with `SupportMismatch`; a node function
+  reads s, numbers, `pi` and the constants of the model with `exp`, `log`, `sqrt`, `sin`, `cos`
+  and `abs`, and `tanh`, `expm1`, `erf` or a power whose exponent is not a number wait for N11.
+  The logical nodes are lower + (upper - lower) (k / c), so graded nodes nest bitwise across
+  resolutions, and the two copies of a seam face share their distance. The two-point diffusion of
+  the arrays serves node positions of every rank; a chart stays of rank two. The words of
+  `pops.lib.numerics` (N3 lot 1) are served on the arrays: a face authored in source
+  (`riemann.User`, `rusanov()`, `upwind()`) reads the cell values as traces and the physical unit
+  normal as `n`, on node positions and on a chart, and its step guard (503) weighs each face bound
+  by the measure of the face over the measure of the cell; a `StencilFlux` (`two_point()`) on
+  node positions reads the distance across each face as its spacing, the face and cell measures
+  of the arrays, and the conductance f d |S| / |K| as its frequency. A stencil that reads a
+  farther cell, another spacing or a field, or a stencil on a chart, is refused at resolution
+  (`static_geometry_stencil_unavailable`). The cases are
+  `examples/api_v02/models_graded_spacing.py`: a graded ring, a plane, a box of rank three and
+  the wall layout of probe 3, refused when it is built until G04 elaborates the relations of its
+  walls under a diffusion.
 - ROM-110 (N17, L1a): static geometry arrays of a structured configuration (C1). A layout whose
   coordinate map reads neither the clock nor a discrete input (`MovingControlVolumes` over a
   logical `Uniform` grid with a clock-free `GeometryEvolution`) is read at resolution as static
@@ -273,6 +467,52 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `regrid_topology`, `scalar_field(topology=, initial=)`, the `field_topology` value type and the
   native bundle and allocation fragments. The three regrid cases ran bit for bit equal to the
   bridge on every cell, halo included, before the deletion.
+- ROM-90 (N9, « Le coût de la région d'un solveur »): a solver's region records no face
+  expression. The value of a reference solve's region leaves it by a raw copy into the prelude
+  buffer that the native CG also writes, so the face-record expressions that b6 keeps for the
+  publication of an accepted state were computed in the region and dropped at its boundary.
+  Inside the region the lowering now emits the pure field algebra (`PureFieldAlgebra::axpy` and
+  `lincomb`, the kernels of `ctx.axpy` and `ctx.lincomb`), captures no StencilFlux face, brackets
+  no write and attaches no affine expression; outside it the generated C++ is unchanged. The
+  relation solves of `cg()` give the same states bit for bit and, on L1-d, run at 1.4 times the
+  native witness at 64² and 2.6 times at 256² (18 ms and 270 ms per step, against 2.47 s and
+  259 s before). `benchmarks/n9_relation_cost` measures the ratio in A B B A blocks against the
+  bound of 10 that the driver set on 13/11.
+- ROM-90 (N9, « La référence sous les solves de relation »): `cg()` of `pops.lib.solve` is no
+  longer a bridge of MG9 on b6's native CG. `cg().linear_solver(request=)` returns the reference
+  with the request's tolerances, `SolverDefinition.declare_relation(requires=, description=)`
+  replaces `bind_relation_native`, and the linear maps of N15 (`linear_apply`, the apply of
+  `two_point()`) are removed: the operator is the discrete operator that the explicit route
+  evaluates. `pops.lib.solve` is a package (`claims`, `refused`). A fixed failure site under a
+  reference realization is refused at elaboration (§3.7), and a b6 rate op that a region does not
+  run is refused by name. `tests/gates/mg9_bridges.toml` loses its `cg` entry. Cost (reported,
+  not gated, driver's ruling of 13/11): the relation solves under `cg()` are about 470 times
+  slower than before this lot at 64² and about 2600 times at 256². On L1-d a step takes 2.47 s
+  at 64² and 259 s at 256² (11 GB resident), against 5.3 ms and 99 ms for the same step on b6's
+  native CG. The region recorded the face expressions of every iterate; the follow-up « Le coût
+  de la région d'un solveur » removes them.
+- ROM-93 with ROM-25 (N11 lot 2b-ii, G07): checkpoints are authenticated by `program_id` (spec 0.3
+  CN9, G07 criterion (iv)). The checkpoint manifest records the compiled `program_id` next to the
+  semantic, artifact and bind identities. After verifying the envelope and the member digests,
+  restart checks the program identity before restoring any state. A change of program, target,
+  toolchain, optimization flags or emitter produces a program identity mismatch. When the program
+  identities agree and an expected Uniform state member is missing, the diagnostic names that
+  member. Restart across renamed owners requires name-free native images in N11 lot 2c-ii. The manifest keeps its
+  schema version: a manifest without `program_id` (written before this lot) is refused by its
+  exact key set. The Uniform v2 migration seals with the `program_id` of its authority checkpoint.
+- ROM-93 with ROM-25 (N11 lot 2b-i, G07): owner names leave the identities (spec 0.3 CC2, gap
+  C47). The case, block, model definition and layout names are presentation names: a case renamed
+  in every owner keeps its semantic identity, `snapshot.artifact_hash` and `plan_identity`, while
+  the full snapshot keeps the names. `pops.identity.presentation` projects the canonical preimages
+  (`$case`, `$block<k>` in registration order, `$model<k>` and `$layout<k>` in first use); the names
+  of quantities, terms, the Program, frames and realizations (`reconstruction.User`, `riemann.User`,
+  `@pops.scheme`) stay in the identities while gap C52 is open. A compiled artifact carries
+  `program_id` (domain `program`: the plan identity, the compile choices of each layout Program and
+  `codegen_source_authority()`), shown by `inspect()`, the runtime inspection and the run report.
+  A module outside PoPS read by a callback is identified in the artifact projection by the values
+  it supplies, not by its source digest. A checkpoint of the same program under other owner names
+  is refused by name (N11 lot 2b-ii, 2c). `ARTIFACT_SCHEMA_VERSION` is 8; semantic identities of
+  every case change once.
 - ROM-85 (N10, phase 1, lot 3a): strict mode on `Patches` (spec 0.3 DM5). The layout record
   (`data_layout_and_distribution`, schema 4) lists every general access of the plan
   (`general_accesses`: node, op, array, layout and IR8 provenance of the index) for `at` and the
@@ -313,6 +553,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   files at any depth are planned as metadata, like the root ones. Started from a subdirectory, the
   check works from the repository root; outside a git repository it stops with status 2; against a
   base that is not an ancestor of the checkout it starts from their merge base.
+- ROM-95 (N12, lot 4): remove the external Clustering interface from the native substitution
+  catalogue (FC6b, C38). `AMR(clustering=BergerRigoutsos(...))` still configures the core
+  clustering algorithm. Rebuild native component packages against the new catalogue. Exact
+  checkpoints retain their identity checks, including across this catalogue change.
+- ROM-95 (N12, lot 3c-2b): AMR tagging is written only as regions of `cell`. The ValueExpr tag
+  graph leaves `pops`: `Tag` and `Coarsen` refuse an expression of the state and show the region
+  form, `Tag(lambda cell: cell.value(q) > case.value(t))`; `mesh/_amr/tagging_graph.py` and
+  `tagging_resolution.py`, the `resolve_for_amr_*` hooks of the IR (a Boolean node now declares
+  `__pops_ir_boolean__`, read by `pops._ir.is_boolean_expression`), the bytecode lowering of
+  `flow_bootstrap_tagging`, `pops.amr.TaggerProvider`, `pops.lib.amr.SymbolicTagger` and the
+  `tagger=` slot of `pops.layouts.AMR` are removed. `Hysteresis`, `EqualityPolicy` and
+  `ConflictPolicy` keep their names in `pops.amr` (module `mesh/_amr/tagging_policy.py`). The
+  parity tests compare with the boxes and marks that the graph gave, recorded before it went
+  (`tests/python/data/amr_graph_oracles.json`, with a margin to each threshold). Tagging on the
+  output of a field solve, which only the graph read, is gone with it. The native bytecode VM is
+  retained as a seam for 24 C++ and five Python low-level tests until lot 3c-2c. Two further
+  C++ tests cover the native Tagger ABI and loader during that transition.
+- ROM-95 (N12, lot 3c-2a): a refinement region reads a runtime parameter of its model.
+  `Tag(lambda cell: cell.value(q) > model.value(nu))` reads `nu` from the RuntimeParams table of
+  the block whose state it reads, the table its faces and stencils read, when the tagging plan is
+  prepared; the value is bind data and enters neither the criterion identity nor the C++. A
+  parameter of another model, a non-runtime one, or one that no formula of the model reads (no
+  slot in the table, refused at compile) is refused by its name, and a threshold that no relation
+  reads stays a `case.param` (Q4). A Regrid `when` body and its indicators refuse a model parameter
+  by its name. Core ledger: `refinement-region-reads-a-runtime-parameter-of-its-model`.
 - ROM-95 (N12, lot 3c, part 1): the tests and test fixtures that wrote AMR tagging as a ValueExpr
   graph without testing the graph itself write regions of `cell` (66 files); a partial
   per-layout case on the physical maps shows each of three layouts refining its own part of the
@@ -787,6 +1052,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- ROM-87 (N3 lot 3-eps): a uniform native run now reads the regulariser of
+  `reconstruction.WENO5(epsilon=)`. Before the fix the uniform route silently ignored it and ran the
+  default 1e-40 (only an external Riemann brick and the AMR route received it). The host hands it to
+  the package through the block installer capability, as the reconstruction's smoothness epsilon;
+  the capability's layout changes, so the native System package ABI goes from 8 to 9 and every
+  compiled artifact is rebuilt once.
 - ROM-17 (B02): `scripts/setup_env.sh` works again on a fresh macOS env. Its Darwin SDK capture loads
   `_native_toolchain.py` with `PYTHONPATH` unset, and that module imports `pops` since 6603aec4, so a
   first setup stopped on `ModuleNotFoundError` reported as an invalid SDKROOT. The capture now puts the

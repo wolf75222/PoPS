@@ -38,6 +38,7 @@ from pops.solvers._prepared_preconditioner_registry import (
 )
 from pops.codegen.krylov_contract import validated_krylov_footprint
 from pops._ir.data_model import field_role
+from pops.time.solve_outcome import native_realization, solve_realization_kind
 
 # Scratch-allocating op families. A scratch buffer is owned by one flat node; we bucket each by the
 # vtype of the buffer it stages so a caller sees the state / rhs / scalar-field split the spec asks
@@ -514,8 +515,20 @@ def _persistent_solver_buffers(program: Any) -> list:
                 "exact": True,
                 "note": "four live condensed tensor-coefficient fields (exact)",
             })
+        elif v.op in _KRYLOV_OPS and solve_realization_kind(v) == "reference":
+            # SV12: a reference solve owns its solution; the fields of its region are scratch of
+            # its own step body, allocated per evaluation like any other region's.
+            persistent.append({
+                "kind": "reference_solve",
+                "name": v.name,
+                "buffers": 1,
+                "buffers_max": 1,
+                "per_materialized_level": False,
+                "exact": True,
+                "note": "the solution of a reference solve (its region's fields are step scratch)",
+            })
         elif v.op in _KRYLOV_OPS:
-            footprint = validated_krylov_footprint(v.attrs, operator=v.inputs[0])
+            footprint = validated_krylov_footprint(native_realization(v), operator=v.inputs[0])
             operator_bundle = operator_bundles.get(v.inputs[0].id)
             if operator_bundle is None:
                 raise ValueError(

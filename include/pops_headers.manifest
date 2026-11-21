@@ -52,9 +52,11 @@ api pops/coupling/source/coupling_operator.hpp
 api pops/coupling/system/amr_system_coupler.hpp
 api pops/diagnostics/fallback_diagnostics.hpp
 api pops/diagnostics/runtime_diagnostics.hpp
+api pops/mesh/boundary/affine_index_transform.hpp
 api pops/mesh/boundary/fill_boundary.hpp
 api pops/mesh/boundary/halo_exchange.hpp
 api pops/mesh/boundary/halo_schedule.hpp
+api pops/mesh/boundary/identified_halo_images.hpp
 api pops/mesh/boundary/nd_boundary_schedule.hpp
 api pops/mesh/boundary/periodicity.hpp
 api pops/mesh/boundary/physical_bc.hpp
@@ -66,6 +68,7 @@ api pops/mesh/geometry/geometry.hpp
 api pops/mesh/geometry/swept_interval.hpp
 api pops/mesh/geometry/prepared_metric_provider.hpp
 api pops/mesh/geometry/static_geometry.hpp
+api pops/mesh/geometry/centroid_slope.hpp
 test-only pops/mesh/nd_proof/local_neighbors.hpp
 test-only pops/mesh/nd_proof/periodicity.hpp
 test-only pops/mesh/nd_proof/translation_schedule.hpp
@@ -175,6 +178,7 @@ api pops/numerics/spatial/nd/finite_volume.hpp
 api pops/numerics/spatial/nd/reconstruction.hpp
 api pops/numerics/spatial/nd/state_conversion.hpp
 api pops/numerics/spatial/nd/state_schema.hpp
+api pops/numerics/spatial/nd/static_geometry_face_frequency.hpp
 api pops/numerics/spatial/operators/cartesian_operator.hpp
 sdk-support pops/numerics/spatial/operators/masked_operator.hpp
 sdk-support pops/numerics/spatial/operators/polar_operator.hpp
@@ -382,11 +386,13 @@ sdk-support pops/runtime/program/module_metadata.hpp
 sdk-support pops/runtime/program/profiler.hpp
 sdk-root pops/runtime/program/program_context.hpp
 sdk-support pops/runtime/program/field_exchange_expression.hpp
+sdk-support pops/runtime/program/cell_total_scale.hpp
 sdk-support pops/runtime/program/program_context_field_exchanges.inc
 sdk-support pops/runtime/program/program_value_authority.hpp
 sdk-support pops/runtime/program/program_context_value_authority.inc
 sdk-support pops/runtime/program/program_context_value_authority_private.inc
 sdk-support pops/runtime/program/program_context_moving_interval.inc
+sdk-support pops/runtime/program/program_context_owned_guard_fold.inc
 sdk-support pops/runtime/program/program_context_moving_projection.inc
 sdk-support pops/runtime/program/moving_interval_geometry.hpp
 sdk-support pops/runtime/program/moving_interval_checkpoint.hpp
@@ -405,6 +411,7 @@ sdk-support pops/runtime/program/program_owner_field_identity.hpp
 sdk-support pops/runtime/program/prepared_tensor_boundary_session.hpp
 sdk-support pops/runtime/program/same_level_cell_temporal_provider.hpp
 sdk-support pops/runtime/program/advance_run.hpp
+abi pops/runtime/program/generated_step_bound.hpp
 sdk-support pops/runtime/program/program_runtime_state.hpp
 sdk-support pops/runtime/program/residual_operator.hpp
 sdk-support pops/runtime/program/source_mask.hpp

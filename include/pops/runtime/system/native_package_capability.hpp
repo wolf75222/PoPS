@@ -25,7 +25,9 @@
 
 namespace pops::runtime::system {
 
-inline constexpr int kNativeSystemPackageAbiVersion = 8;
+// 9 (N3 lot 3-eps): the capability state carries the smoothness epsilon of the reconstruction route
+// to the package's block installer.
+inline constexpr int kNativeSystemPackageAbiVersion = 9;
 inline constexpr const char* kNativeSystemPackageAbiVersionSymbol =
     "pops_native_system_package_abi_version";
 
@@ -224,8 +226,12 @@ struct NativePackageCapabilityState final {
   std::optional<Geometry<Dim>> geometry;
   std::optional<std::uint64_t> runtime_parameter_byte_capacity;
   std::array<bool, Dim> periodicity{};
+  BoundaryTopology<Dim> topology{};
   // The static geometry arrays of a mapped layout (N17, C1); null on the uniform logical box.
   std::shared_ptr<const StaticGeometry<Dim>> static_geometry;
+  // The smoothness epsilon of the reconstruction route, set by the host from the descriptor; none
+  // keeps the policy's default (N3 lot 3-eps). A route value: a retry keeps it.
+  std::optional<double> smoothness_epsilon;
   std::shared_ptr<const AuxiliaryStorageGroups<Dim>> provider_storage_owner;
   std::shared_ptr<ExactAuxiliaryRegistry<Dim>> detached_registry;
   // Registry plans live in a value-swapped registry candidate. Keep the one selected plan in
@@ -323,11 +329,21 @@ class PreparedNativeBlockInstaller final {
                     "PreparedNativeBlockInstaller::periodicity");
     return state_->periodicity;
   }
+  [[nodiscard]] BoundaryTopology<Dim> topology() const {
+    state_->require(NativeCapabilityPhase::install_open, "PreparedNativeBlockInstaller::topology");
+    return state_->topology;
+  }
   /// The static geometry arrays of the mapped layout, or null on the uniform logical box.
   [[nodiscard]] std::shared_ptr<const StaticGeometry<Dim>> static_geometry() const {
     state_->require(NativeCapabilityPhase::install_open,
                     "PreparedNativeBlockInstaller::static_geometry");
     return state_->static_geometry;
+  }
+  /// The smoothness epsilon of the reconstruction route, or none for the policy's default.
+  [[nodiscard]] std::optional<double> smoothness_epsilon() const {
+    state_->require(NativeCapabilityPhase::install_open,
+                    "PreparedNativeBlockInstaller::smoothness_epsilon");
+    return state_->smoothness_epsilon;
   }
   [[nodiscard]] std::shared_ptr<const AuxiliaryStorageGroups<Dim>> provider_storage() const {
     state_->require(NativeCapabilityPhase::install_open,

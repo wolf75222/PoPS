@@ -19,7 +19,7 @@ _BACKEND_CAPS = {
 
 # Must match pops::runtime::system::kNativeSystemPackageAbiVersion.  Host
 # add_native_block looks up NATIVE_SYSTEM_PACKAGE_ABI_EXPORT on every package.
-NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 8
+NATIVE_SYSTEM_PACKAGE_ABI_VERSION = 9
 NATIVE_SYSTEM_PACKAGE_ABI_EXPORT = "pops_native_system_package_abi_version"
 
 
@@ -224,6 +224,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     face_identity = user_face_source_identity(m)
     if face_identity is not None:
         parts.append("user_face=" + face_identity)
+    from pops.codegen.user_ghost_lowering import user_ghost_source_identity
+
+    ghost_identity = user_ghost_source_identity(m)
+    if ghost_identity is not None:
+        parts.append("user_ghost=" + ghost_identity)
     from pops.codegen.native_build import model_native_roots
     from pops._ir.native_call import native_functions
     native_roots = model_native_roots(m)
@@ -515,6 +520,24 @@ def selects_catalogue_routes(model: Any) -> bool:
                 or getattr(impl, "_user_face", None) is not None)
 
 
+def reads_static_geometry_by_source_face(model: Any) -> bool:
+    """Whether the package of *model* reads static geometry arrays through its face authored in
+    source (N17, C1; the words of ``pops.lib.numerics`` since N3 lot 1).
+
+    Such a package installs no catalogue route: its block materializes the source face on the
+    physical normals and measures of the arrays, on the cell values as traces. A trace authored in
+    source is a stencil of the logical box, which resolution refuses on a mapped layout.
+    """
+    impl = getattr(model, "_m", model)
+    return (not getattr(impl, "_program_only_storage_axes", ())
+            and getattr(impl, "_user_reconstruction", None) is None
+            and getattr(impl, "_user_face", None) is not None)
+
+
+# The geometry of a package whose face is authored in source and reads the static arrays.
+_STATIC_GEOMETRY_FACE_CPP = "pops::GeneratedStaticGeometryFace"
+
+
 def normalize_native_geometry(geometry: Any) -> str | None:
     """Return the geometry contract a package reads beside its route, or ``None`` for the box.
 
@@ -611,6 +634,7 @@ def _emit_auxiliary_route_registration(
     if routes is None:
         raise ValueError("native auxiliary route emission requires resolved typed producer routes")
     from .provider_instances import emitter_contract, runtime_key
+    from ._checkpoint_provenance import consumer_role, owner_role, provider_role
     from pops.model.provider_pack import ComponentKey
     instance = emitter_contract(model, owner_qid=consumer_owner_qid)
     if instance is not None and consumer_owner_qid is None:
@@ -939,22 +963,42 @@ def _emit_auxiliary_route_registration(
                 % (key(row), contract(row), shape, boundary_for(route)),
             )
         )
+        native_owner = native_key(row["key"])["owner_qid"]
+        role = owner_role(native_owner) if target == "system" else None
+        durable = ("" if role is None else provider_role(
+            producer, role, row["key"]["space_name"], row["key"]["component"]))
         if kind == "AuxiliaryProviderKind::derived":
             if route is None:
                 raise ValueError(
                     "derived auxiliary provider %r has no exact typed lowering route"
                     % row["key"]["component"]
                 )
-            lines.append(derived_launcher(identity, route) + "});")
+            from pops.fields.aux import AnalyticAux
+
+            if durable and isinstance(route["producer"], AnalyticAux):
+                from pops.codegen._analytic_aux import _analytic_aux_launcher
+
+                launcher, parameters = _analytic_aux_launcher(
+                    identity, route["producer"], checkpoint_role=durable)
+                lines.append(
+                    launcher + ", Provider::CheckpointRole{%s, {%s}, %s}});"
+                    % (literal(durable), literal(role), literal(parameters)))
+            else:
+                lines.append(derived_launcher(identity, route) + "});")
+        elif durable:
+            lines.append(
+                "      std::vector<Dependency>{}, std::nullopt, AuxiliaryPointReads{}, "
+                "Provider::CheckpointRole{%s, {%s}, {}}});"
+                % (literal(durable), literal(role)))
         else:
             lines.append("      std::vector<Dependency>{}});")
 
     owner_qid = _consumer_owner_qid(model, consumer_owner_qid)
 
-    def emit_plan(identity: str, plan: Any) -> None:
+    def emit_plan(suffix: str, plan: Any) -> None:
         lines.append(
             "  sys->install_auxiliary_consumer_plan(ConsumerPlan{%s, std::vector<ConsumerValue>{"
-            % literal(identity)
+            % literal(owner_qid + suffix)
         )
         for value in plan:
             lines.append(
@@ -966,13 +1010,14 @@ def _emit_auxiliary_route_registration(
                     value["consumer_slot"],
                 )
             )
-        lines.append("  }});")
+        role = consumer_role(owner_qid, suffix) if target == "system" else ""
+        lines.append("  }, %s});" % literal(role) if role else "  }});")
 
-    emit_plan(owner_qid + "/physical_flux", flux_plan)
+    emit_plan("/physical_flux", flux_plan)
     from pops.codegen._native_model_provider_plan import native_model_provider_plan
-    emit_plan(owner_qid + "/native_model", native_model_provider_plan(model))
+    emit_plan("/native_model", native_model_provider_plan(model))
     for operator, plan in plans.items():
-        emit_plan(owner_qid + "/operator/" + operator, plan)
+        emit_plan("/operator/" + operator, plan)
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -1058,12 +1103,30 @@ def emit_cpp_native_loader(
         getattr(getattr(m, "_m", m), "_user_face", None))
     user_face_captures = bool(user_face_descriptor is not None and
                               user_face_descriptor.options["runtime_captures"])
+    from pops.codegen.user_ghost_lowering import (
+        emit_user_ghost_policy, user_ghost_captures, user_ghost_source_identity)
+
+    user_ghost_identity = None if storage_only else user_ghost_source_identity(m)
+    if user_ghost_identity is not None and target != "system":
+        raise ValueError(
+            "emit_cpp_native_loader: a source ghost face is filled by the generated System block "
+            "only; the %s target has no ghost policy route (AMR is a later lot of G04)" % target)
+    user_ghost_source = "" if storage_only else emit_user_ghost_policy(m)
+    user_ghost_with_captures = user_ghost_identity is not None and user_ghost_captures(m)
+    # A face authored in source reads the static arrays through its own package (N3 lot 1): the
+    # package names that geometry instead of a catalogue route.
+    source_face_geometry = (normalize_native_geometry(native_geometry) is not None
+                            and native_route is None and reads_static_geometry_by_source_face(m))
+    if source_face_geometry and target != "system":
+        raise ValueError("emit_cpp_native_loader: static geometry arrays are read on a System")
     route_cpp = _native_route_cpp(
-        native_route, None if storage_only else native_geometry)
+        native_route, None if storage_only or source_face_geometry else native_geometry)
     if route_cpp and not selects_catalogue_routes(m):
         raise ValueError(
             "emit_cpp_native_loader: a catalogue native route cannot specialize a state-storage "
             "or source-authored numerical package")
+    if source_face_geometry:
+        route_cpp = _STATIC_GEOMETRY_FACE_CPP
     model_identity = str(model_identity if model_identity is not None else model_hash(m))
     if len(model_identity) != 64 or any(ch not in "0123456789abcdef" for ch in model_identity):
         raise ValueError("emit_cpp_native_loader requires one lowercase 64-hex model identity")
@@ -1466,10 +1529,16 @@ def emit_cpp_native_loader(
                if user_face_captures else
                "  auto user_face = UserFacePolicy{};\n"
                if user_face_identity is not None else "")
+            + ("  auto user_ghost = UserGhostPolicy{\n"
+               "      pops::compiled_model::declaration_runtime_params(request.model)};\n"
+               if user_ghost_with_captures else
+               "  auto user_ghost = UserGhostPolicy{};\n"
+               if user_ghost_identity is not None else "")
             + "  return pops::prepare_generated_system_block%s(std::move(request)%s);\n"
             % (("<%s>" % route_cpp) if route_cpp else "",
                (", user_reconstruction" if user_reconstruction_identity is not None else "") +
-               (", user_face" if user_face_identity is not None else ""))
+               (", user_face" if user_face_identity is not None else "") +
+               (", user_ghost" if user_ghost_identity is not None else ""))
             + "}\n"
             "}  // namespace pops_generated\n"
         )
@@ -1484,6 +1553,7 @@ def emit_cpp_native_loader(
         + bricks
         + user_reconstruction_source
         + user_face_source
+        + user_ghost_source
         + "\nnamespace pops_generated { using ProdModel = %s; }\n" % composite
         + package_preparer
         + key

@@ -31,6 +31,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPTS = REPO_ROOT / "scripts"
+M1_SMOKE_FILE = "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py"
 
 
 def _load(name):
@@ -184,11 +185,12 @@ def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
     assert 0 < count < total, "leaf change must be a strict subset"
     assert "import-closure" in outputs["python_why"]
     assert "tests/python/unit/runtime/test_diagnostics_typed.py" in selected
-    for smoke in (
-        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
-        "tests/python/unit/runtime/test_capabilities.py",
-    ):
-        assert smoke in selected
+    assert "tests/python/unit/runtime/test_capabilities.py" in selected
+    assert {unit for unit in selected if unit.partition("::")[0] == M1_SMOKE_FILE} == {
+        f"{M1_SMOKE_FILE}::test_scalar_advection_completes_typed_phase_pipeline",
+        f"{M1_SMOKE_FILE}::test_scalar_advection_final_example_runs_outputs_and_bit_identical_restart",
+        f"{M1_SMOKE_FILE}::test_scalar_advection_final_preset_matches_explicit_continuation",
+    }
 
 
 def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
@@ -253,7 +255,7 @@ def test_plan_python_direct_test_avoids_unrelated_native_smoke(tmp_path):
     assert outputs["python_mode"] == "subset"
     assert edited in selected
     assert "tests/python/unit/codegen/test_dsl_compose.py" in selected
-    assert "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py" not in selected
+    assert all(unit.partition("::")[0] != M1_SMOKE_FILE for unit in selected)
     assert "tests/python/unit/runtime/test_capabilities.py" not in selected
 
 
@@ -1420,6 +1422,18 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
         },
         {
             "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py",
+            "nproc": 2,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py",
+            "nproc": 3,
+            "native_dimension": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
             "path": "tests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
             "nproc": 2,
         },
@@ -1885,6 +1899,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         "2\ttests/python/integration/mpi/test_async_balance_cadence_mpi.py",
         "2\ttests/python/integration/mpi/test_diffusion_device_publication_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_distributed_balanced_domain_native_mpi2.py",
+        "2\ttests/python/integration/mpi/test_distributed_ragged_dm3_mpi2.py",
+        "3\ttests/python/integration/mpi/test_distributed_ragged_dm3_mpi3.py",
         "2\ttests/python/integration/mpi/test_external_amr_field_solver_mpi.py",
         "2\ttests/python/integration/mpi/test_finite_structural_depth_native_mpi2.py",
         "2\ttests/python/integration/mpi/test_scientific_output_mpi.py",
@@ -1930,8 +1946,8 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "134"
-    assert outputs["python_mpi_entrypoint_count"] == "103"
+    assert outputs["python_mpi_count"] == "136"
+    assert outputs["python_mpi_entrypoint_count"] == "105"
     assert outputs["python_mpi_orchestrator_count"] == "31"
 
 
@@ -2511,7 +2527,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "            shard_total: 1\n"
         "            ccache_maxsize: 2G"
     ) in openmp_block
-    assert openmp_block.count("if: matrix.kind == 'cpp'") == 6
+    assert openmp_block.count("if: matrix.kind == 'cpp'") == 7
     assert openmp_block.count("if: matrix.kind == 'python'") == 14
     assert "Install MPI SDK for required Python syntax witnesses" in openmp_block
     assert "CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}" in openmp_block
@@ -2774,7 +2790,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert 'PYTHONUNBUFFERED: "1"' in python_shards_block
     assert 'cp "$timings/selected.txt" "$timings/timings.tsv"' not in python_shards_block
     assert "shard: ${{ fromJSON(needs.set-mode.outputs.python_matrix) }}" in python_shards_block
-    assert 'SHARD_TOTAL: "166"' in python_shards_block
+    assert 'SHARD_TOTAL: "177"' in python_shards_block
     assert "strategy.job-total" not in python_shards_block
     for family, block in (("cpp", cpp_shards_block), ("python", python_shards_block)):
         assert "name: ci-plan" in block

@@ -2,18 +2,29 @@
 
 #include "amr_tagging_test_authority.hpp"
 #include "explicit_amr_program.hpp"
+#include "standalone_amr_fixture_criterion.hpp"
 
 #include <pops/numerics/spatial/nd/conservation_laws.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/amr_patch.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
 
 #include <algorithm>
+#include <array>
 #include <climits>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace {
+
+constexpr pops::test::StandaloneFixtureCriterion energy_criterion{
+    pops::test::standalone_energy, POPS_TEST_standalone_energy_DSO,
+    POPS_TEST_standalone_energy_RECEIPT};
+constexpr pops::test::StandaloneFixtureCriterion density_criterion{
+    pops::test::standalone_density, POPS_TEST_standalone_density_DSO,
+    POPS_TEST_standalone_density_RECEIPT};
 
 template <int Dim>
 struct EulerModel {
@@ -89,8 +100,29 @@ std::vector<double> energy_bump(const pops::Extent<Dim>& shape) {
 }
 
 template <int Dim>
+std::unique_ptr<pops::AmrSystem<Dim>> make_gas(const pops::AmrSystemConfig<Dim>& config,
+                                               const char* state_route) {
+  auto system = std::make_unique<pops::AmrSystem<Dim>>(config);
+  pops::test::install_amr_runtime_authority(*system, "test.amr-regrid-variable/runtime@1");
+  system->install_block_state_route("gas", state_route);
+  pops::add_compiled_model<Dim>(
+      *system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
+      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
+      static_cast<double>(pops::kWenoEpsilon), false, "test.amr-regrid-variable/physical-flux");
+  system->set_conservative_state("gas", energy_bump(config.shape));
+  return system;
+}
+
+template <int Dim>
 std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable, int tag_buffer = 0,
-                                                    std::uint32_t tag_selection = 1) {
+                                                    std::uint32_t tag_selection = 1,
+                                                    bool historical = false,
+                                                    bool check_rejections = false) {
+  const auto* criterion = variable == "E"     ? &energy_criterion
+                          : variable == "rho" ? &density_criterion
+                                              : nullptr;
+  if (historical)
+    criterion = nullptr;
   pops::AmrSystemConfig<Dim> config;
   for (int axis = 0; axis < Dim; ++axis)
     config.shape[axis] = 32;
@@ -98,16 +130,66 @@ std::unique_ptr<pops::AmrSystem<Dim>> make_selector(const std::string& variable,
     config.tag_selection_buffer[axis] = tag_buffer;
   config.tag_selection_contract_version = tag_selection;
   config.regrid_every = 1;
-  auto system = std::make_unique<pops::AmrSystem<Dim>>(config);
-  pops::test::install_amr_runtime_authority(*system, "test.amr-regrid-variable/runtime@1");
-  system->install_block_state_route("gas", "state/gas");
-  pops::add_compiled_model<Dim>(
-      *system, "gas", EulerModel<Dim>{}, "minmod", "rusanov", "conservative", "explicit",
-      static_cast<double>(pops::kPhysicalDefaultGamma), 1, 1, {}, {}, 0.0,
-      static_cast<double>(pops::kWenoEpsilon), false, "test.amr-regrid-variable/physical-flux");
-  system->set_conservative_state("gas", energy_bump(config.shape));
-  pops::test::install_prepared_threshold_union(*system, {{"gas", variable, 4.0}});
+  auto system = make_gas(config, criterion ? criterion->criterion.state : "state/gas");
+  if (check_rejections) {
+    auto expected = energy_criterion.binding();
+    try {
+      system->install_standalone_refinement_criterion(
+          density_criterion.path, density_criterion.binary_identity(), expected);
+      ADD_FAILURE() << "a density criterion was admitted as energy";
+    } catch (const std::exception& error) {
+      EXPECT_NE(std::string(error.what()).find("field table differs"), std::string::npos);
+    }
+    expected.fields[0].components[0] = 0;
+    EXPECT_THROW(system->install_standalone_refinement_criterion(
+                     energy_criterion.path, energy_criterion.binary_identity(), expected),
+                 std::exception);
+    EXPECT_TRUE(system->installed_program_hash().empty());
+    EXPECT_DOUBLE_EQ(system->time(), 0.0);
+    EXPECT_EQ(system->macro_step(), 0);
+  }
+  if (criterion)
+    criterion->install(*system);
+  else
+    pops::test::install_prepared_threshold_union(*system, {{"gas", variable, 4.0}});
   return system;
+}
+
+template <int Dim>
+void verify_distributed_criterion_agreement() {
+  if (pops::n_ranks() != 2)
+    return;
+  pops::AmrSystemConfig<Dim> config;
+  config.distribute_coarse = true;
+  config.regrid_every = 1;
+  for (int axis = 0; axis < Dim; ++axis) {
+    config.shape[axis] = 32;
+    config.coarse_max_grid[axis] = 32;
+  }
+  ASSERT_STREQ(energy_criterion.criterion.state, density_criterion.criterion.state);
+  auto system = make_gas(config, energy_criterion.criterion.state);
+  const int rank = pops::my_rank();
+  const auto& different = rank == 0 ? energy_criterion : density_criterion;
+  try {
+    different.install(*system);
+    ADD_FAILURE() << "different locally valid criterion contracts were accepted";
+  } catch (const std::exception& error) {
+    EXPECT_STREQ(error.what(), "AMR standalone refinement contracts differ between MPI ranks");
+  }
+  EXPECT_DOUBLE_EQ(system->time(), 0.0);
+  EXPECT_EQ(system->macro_step(), 0);
+  EXPECT_TRUE(system->installed_program_hash().empty());
+  energy_criterion.install(*system);
+  const auto requests = system->tagging_requests(0);
+  const int local_boxes = system->coarse_local_boxes();
+  EXPECT_EQ(system->coarse_total_boxes(), 1);
+  EXPECT_EQ(local_boxes, rank == 0 ? 1 : 0);
+  EXPECT_EQ(system->coarse_local_box_bounds().size(), static_cast<std::size_t>(local_boxes));
+  EXPECT_EQ(requests, make_selector<Dim>("E", 0, 1, true)->tagging_requests(0));
+  EXPECT_NE(std::find(requests.begin(), requests.end(), std::uint8_t{1}), requests.end());
+  EXPECT_EQ(system->block_level_state_global("gas", 0), energy_bump(config.shape));
+  std::printf("C36 standalone rank=%d ranks=%d level=0 local_boxes=%d total_boxes=%d\n", rank,
+              pops::n_ranks(), local_boxes, system->coarse_total_boxes());
 }
 
 template <int Dim>
@@ -149,6 +231,35 @@ TEST(test_amr_regrid_variable, AuthoredVariableSelectsTheExactConservativeCompon
   ASSERT_FALSE(energy.empty()) << "the E bump must activate exact ranked refinement";
   EXPECT_LT(minimum_fine_corner(energy), 16)
       << "the prepared E selector must refine the lower-corner bump";
+
+  pops::Extent<Dim> shape{};
+  for (int axis = 0; axis < Dim; ++axis)
+    shape[axis] = 32;
+  const auto samples = pops::test::standalone_threshold_samples(pops::Real(4));
+  for (const auto* criterion : {&energy_criterion, &density_criterion}) {
+    const auto& declared = criterion->criterion;
+    auto generated = make_selector<Dim>(declared.variable);
+    auto legacy = make_selector<Dim>(declared.variable, 0, 1, true);
+    auto seeded = energy_bump(shape);
+    const auto offset = cell_count(shape) * static_cast<std::size_t>(declared.component);
+    std::copy(samples.begin(), samples.end(), seeded.begin() + offset);
+    generated->set_conservative_state("gas", seeded);
+    legacy->set_conservative_state("gas", seeded);
+    const auto normalized = generated->tagging_requests(0);
+    EXPECT_EQ(normalized, legacy->tagging_requests(0));
+    EXPECT_EQ(generated->patch_boxes(), legacy->patch_boxes());
+    const auto state = generated->block_level_state_global("gas", 0);
+    EXPECT_EQ(state, legacy->block_level_state_global("gas", 0));
+    ASSERT_GE(normalized.size(), 3u);
+    EXPECT_EQ(normalized[0], 0);
+    EXPECT_EQ(normalized[1], 0);
+    EXPECT_EQ(normalized[2], 1);
+    const std::array<pops::Real, 3> observed{
+        pops::Real(state[offset]), pops::Real(state[offset + 1]), pops::Real(state[offset + 2])};
+    EXPECT_EQ(observed, samples);
+    EXPECT_EQ(criterion->marks<Dim>(observed),
+              (std::array<std::uint8_t, 3>{0, 0, pops::runtime::amr::kGeneratedCriterionRefine}));
+  }
 }
 
 TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
@@ -163,13 +274,25 @@ TEST(test_amr_regrid_variable, UnknownVariableFailsBeforeHierarchyPublication) {
 
 TEST(test_amr_regrid_variable, FixedRefineRequestsDoNotRedilateExistingBuffer) {
   constexpr int Dim = pops::kNativeDimension;
-  auto system = make_selector<Dim>("E", 1);
+  auto system = make_selector<Dim>("E", 1, 1, false, true);
+  auto legacy = make_selector<Dim>("E", 1, 1, true);
   const auto initial = system->patch_boxes();
   ASSERT_FALSE(initial.empty());
+  EXPECT_EQ(initial, legacy->patch_boxes());
+  const auto state = system->block_level_state_global("gas", 0);
   for (int cycle = 0; cycle < 4; ++cycle) {
     system->regrid_from_prepared_tagging(0);
+    legacy->regrid_from_prepared_tagging(0);
     EXPECT_EQ(system->patch_boxes(), initial) << "buffer accumulated at tagging cycle " << cycle;
+    EXPECT_EQ(system->patch_boxes(), legacy->patch_boxes());
+    EXPECT_EQ(system->tagging_requests(0), legacy->tagging_requests(0));
   }
+  EXPECT_EQ(system->block_level_state_global("gas", 0), state);
+  EXPECT_EQ(system->block_level_state_global("gas", 0), legacy->block_level_state_global("gas", 0));
+  EXPECT_DOUBLE_EQ(system->time(), 0.0);
+  EXPECT_EQ(system->macro_step(), 0);
+  EXPECT_TRUE(system->installed_program_hash().empty());
+  verify_distributed_criterion_agreement<Dim>();
 }
 
 TEST(test_amr_regrid_variable, KeepRetainsPreviousBufferWithoutRedilatingIt) {

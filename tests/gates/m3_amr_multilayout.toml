@@ -56,27 +56,27 @@ test_regex = "^test_mpi_system_layout_transfer_np2$"
 
 [[check]]
 issue = "ADC-674"
-requirement = "tagging_graph"
+requirement = "refinement_criterion"
 polarity = "positive"
 kind = "pytest"
-target = "tagging_graph"
-nodeid = "tests/python/unit/amr/test_tagging_graph_identity_lowering.py::test_every_tagging_field_survives_resolution_and_native_lowering"
+target = "refinement_criterion"
+nodeid = "tests/python/unit/amr/test_public_amr_resolution.py::test_runtime_tagging_installs_the_tables_of_the_generated_criterion"
 
 [[check]]
 issue = "ADC-674"
-requirement = "tagging_graph"
+requirement = "refinement_criterion"
 polarity = "refusal"
 kind = "pytest"
-target = "tagging_graph"
-nodeid = "tests/python/unit/mesh/test_amr_tagging_graph.py::test_extension_registry_is_open_but_resolve_rejects_callbacks_and_unknown_nodes"
+target = "refinement_criterion"
+nodeid = "tests/python/unit/amr/test_refinement_criterion_regions.py::test_a_rule_refuses_an_expression_of_the_state"
 
 [[check]]
 issue = "ADC-674"
-requirement = "tagging_graph"
+requirement = "refinement_criterion"
 polarity = "positive"
 kind = "pytest"
-target = "tagging_graph"
-nodeid = "tests/python/integration/amr/test_amr_magnitude_tagging_native.py::test_magnitude_above_lowers_and_executes_on_the_native_amr_tagger"
+target = "refinement_criterion"
+nodeid = "tests/python/integration/amr/test_refinement_criterion_model_parameters_native.py::test_one_artifact_refines_where_the_bound_value_says"
 
 [[check]]
 issue = "ADC-675"
@@ -212,7 +212,7 @@ requirement = "accepted_state"
 polarity = "refusal"
 kind = "pytest"
 target = "accepted_state"
-nodeid = "tests/python/unit/amr/test_external_amr_providers.py::test_external_tagger_requires_exact_candidate_program_capability"
+nodeid = "tests/python/unit/amr/test_refinement_criterion_regions.py::test_regions_decide_refine_before_coarsen_and_never_meet_an_equality"
 
 [[check]]
 issue = "ADC-678"

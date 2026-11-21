@@ -8,6 +8,7 @@ providers can enforce their already-installed allocation authority without impor
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import sys
 from typing import Any
@@ -15,6 +16,24 @@ from typing import Any
 
 MANIFEST_KEY = "pops_checkpoint_manifest"
 IDENTITY_KEY = "pops_restart_identity"
+
+# The exact key set of a canonical checkpoint manifest. A bound initial checkpoint adds "origin".
+# The offline integrity check, the collective envelope check and the manifest character budget
+# all read this set.
+CHECKPOINT_MANIFEST_KEYS = frozenset({
+    "schema_version", "runtime_kind", "semantic_identity", "artifact_identity",
+    "bind_identity", "program_id", "run_identity", "clock", "arrays", "restart_identity",
+})
+
+
+def is_historical_amr_run_manifest(manifest: Mapping[str, Any]) -> bool:
+    """Recognize the exact pre-program-id AMR envelope for a restart refusal."""
+    return (
+        type(manifest.get("schema_version")) is int
+        and manifest["schema_version"] == 1
+        and manifest.get("runtime_kind") == "amr"
+        and set(manifest) == CHECKPOINT_MANIFEST_KEYS - {"program_id"}
+    )
 
 
 def _capacity(value: Any, *, where: str, positive: bool = False) -> int:

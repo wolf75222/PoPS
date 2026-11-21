@@ -38,6 +38,26 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
                                const BoundaryTopology<Dim>& topology) {
   const std::size_t boxes = field.layout().size();
   const std::size_t pairs = checked_product(boxes, boxes, "Program scalar halo pair overflow");
+  const std::size_t peers =
+      checked_product(boxes, std::size_t{2}, "Program scalar halo peer overflow");
+  if (topology.has_identifications()) {
+    // Qualified corner paths have a geometric depth bound. Count storage by the actual
+    // destination halo: every published job covers a nonempty disjoint part of it.
+    constexpr std::size_t representable = std::numeric_limits<std::size_t>::max();
+    std::size_t ghosts = 0;
+    for (const auto& box : field.layout().boxes()) {
+      const auto grown = halo_schedule_detail::grow(box, field.ghosts());
+      const std::int64_t slots = grown.numPts() - box.numPts();
+      if (slots < 0 || static_cast<std::uint64_t>(slots) > representable)
+        throw std::length_error("Program identified halo slot count exceeds size_t");
+      halo_schedule_detail::checked_add(ghosts, static_cast<std::size_t>(slots), representable,
+                                        "Program identified halo slot sum exceeds size_t");
+    }
+    const std::size_t elements = checked_product(ghosts, static_cast<std::size_t>(field.ncomp()),
+                                                 "Program identified halo element overflow");
+    return {{boxes, pairs}, representable, ghosts,   representable,
+            peers,          elements,      elements, elements};
+  }
   std::size_t images = 1;
   for (int axis = 0; axis < Dim; ++axis) {
     std::size_t count = 1;
@@ -61,14 +81,7 @@ HaloScheduleBudget halo_budget(const MultiFab<Dim>& field, const Geometry<Dim>& 
       checked_product(jobs, static_cast<std::size_t>(signed_cells),
                       "Program scalar halo element overflow"),
       static_cast<std::size_t>(field.ncomp()), "Program scalar halo component overflow");
-  return {{boxes, pairs},
-          work,
-          jobs,
-          images,
-          checked_product(boxes, std::size_t{2}, "Program scalar halo peer overflow"),
-          elements,
-          elements,
-          elements};
+  return {{boxes, pairs}, work, jobs, images, peers, elements, elements, elements};
 }
 
 template <int Dim>
@@ -207,16 +220,17 @@ class PreparedScalarBoundarySession {
   /// Prepare the additional transaction/evaluator scratch required by one installed block.
   static std::shared_ptr<PreparedScalarBoundarySession> prepare_block(
       const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
-      const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation) {
+      const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation,
+      const VariableSet* roles = nullptr) {
     return prepare_impl_(geometry, topology, prototype, lane, generation, true,
-                         HaloLayoutCoverage::full_domain);
+                         HaloLayoutCoverage::full_domain, roles);
   }
 
  private:
   static std::shared_ptr<PreparedScalarBoundarySession> prepare_impl_(
       const Geometry<Dim>& geometry, const BoundaryTopology<Dim>& topology,
       const field_type& prototype, const ExecutionLane& lane, std::uint64_t generation,
-      bool prepare_block_scratch, HaloLayoutCoverage coverage) {
+      bool prepare_block_scratch, HaloLayoutCoverage coverage, const VariableSet* roles = nullptr) {
     std::shared_ptr<PreparedScalarBoundarySession> session;
     std::exception_ptr local_error;
     try {
@@ -230,7 +244,7 @@ class PreparedScalarBoundarySession {
         std::rethrow_exception(local_error);
       throw std::runtime_error("Program scalar boundary allocation failed collectively");
     }
-    session->initialize_(prototype, prepare_block_scratch, coverage);
+    session->initialize_(prototype, prepare_block_scratch, coverage, roles);
     return session;
   }
 
@@ -253,7 +267,8 @@ class PreparedScalarBoundarySession {
 
   void fill(field_type& field) const {
     fill_halo(field);
-    fill_physical_boundary(field, *physical_);
+    if (physical_)
+      fill_physical_boundary(field, *physical_);
   }
 
   /// Execute one allocation-free characteristic fill against the candidate prepared from this
@@ -292,7 +307,7 @@ class PreparedScalarBoundarySession {
         generation_(generation) {}
 
   void initialize_(const field_type& prototype, bool prepare_block_scratch,
-                   HaloLayoutCoverage coverage) {
+                   HaloLayoutCoverage coverage, const VariableSet* roles = nullptr) {
     std::exception_ptr local_error;
     try {
       if (generation_ == 0)
@@ -304,9 +319,10 @@ class PreparedScalarBoundarySession {
             "Program scalar boundary lane differs from the prototype rank space");
       schedule_.emplace(prepare_halo_schedule(
           prototype, geometry_.domain(), topology_, coverage,
-          scalar_boundary_detail::halo_budget(prototype, geometry_, topology_)));
-      physical_.emplace(
-          scalar_boundary_detail::physical_boundary(geometry_, prototype.ghosts(), topology_));
+          scalar_boundary_detail::halo_budget(prototype, geometry_, topology_), roles));
+      if (!topology_.has_identifications())
+        physical_.emplace(
+            scalar_boundary_detail::physical_boundary(geometry_, prototype.ghosts(), topology_));
       if (prepare_block_scratch)
         boundary_scratch_.emplace(prototype);
     } catch (...) {

@@ -25,7 +25,7 @@ def _t10_with_patch_layout(spec, patch_layout):
         grid=authored.grid, hierarchy=authored.hierarchy, tagging=authored.tagging,
         regrid=authored.regrid, transfer=authored.transfer, execution=authored.execution,
         patch_layout=patch_layout, load_balance=authored.load_balance,
-        tagger=authored.tagger, clustering=authored.clustering, reflux=authored.reflux)
+        clustering=authored.clustering, reflux=authored.reflux)
 
 
 def test_plan_partitions_the_coarse_level_of_a_cross_block_interface():

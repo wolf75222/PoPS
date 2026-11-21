@@ -182,9 +182,14 @@ def test_adaptive_guard_refusal_carries_the_frequency_of_its_step():
             assert lines[index - 1] == "try {"
             assert lines[index + 1].startswith(
                 "} catch (const pops::runtime::program::StepAttemptRejected& ")
-            assert "static_cast<double>(%s / " % frequency in lines[index + 3]
-            assert lines[index + 4].endswith(
-                '"%s", std::string(pops_face_step_text));' % FACE_STEP_FREQUENCY_SCHEMA)
+            assert lines[index + 2] == "char pops_face_step_text[64] = {'0', 'x'};"
+            assert "std::to_chars(" in lines[index + 3]
+            assert "static_cast<double>(%s / " % frequency in lines[index + 4]
+            assert lines[index + 4].endswith("std::chars_format::hex);")
+            assert lines[index + 5] == "if (pops_face_step_encoding.ec != std::errc{})"
+            assert lines[index + 7].endswith(
+                '"%s", std::string(pops_face_step_text, pops_face_step_encoding.ptr));'
+                % FACE_STEP_FREQUENCY_SCHEMA)
 
     fixed, layout, _, _, _, _ = _case(face=True, width=1)
     resolved = pops.resolve(pops.validate(fixed), layout=layout)

@@ -76,6 +76,8 @@
 
 namespace pops::runtime::program {
 
+struct StepBoundReduction;
+
 /// Frozen codegen capability: a width-one, two-slot scalar ring with no Program reader.
 inline constexpr std::string_view kScalarOutputHistorySpace = "scalar-output-field-v1";
 /// Artifact-issued store-only rings, including global observations and arbitrary typed depths.
@@ -642,6 +644,11 @@ struct ProgramRuntimeState {
   /// the Program declares no Output. Read only by System::run_advance, between steps.
   std::vector<int> advance_output_scalar_counts_;
   std::function<void(int, Real*)> advance_output_scalars_;
+  /// The step bound of a cells rule (generated_step_bound.hpp): the generated entry that reduces
+  /// the bound and invalid cell ordinals on this rank, and the identity of that bound; empty when
+  /// the Program has no cells rule. Read only by System::run_advance and System::step_bound.
+  std::function<int(StepBoundReduction*)> advance_step_bound_;
+  std::string advance_step_bound_identity_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n partitions one representable accepted window;
   /// stride M runs the program once per M macro-steps (hold-then-catch-up). The accepted dt arguments
   /// are retained as reproducible left-folded provenance, while one prepared facade endpoint owns the
@@ -821,6 +828,8 @@ struct ProgramRuntimeState {
     AdvanceSegment advance_segment{};
     std::vector<int> advance_output_scalar_counts;
     std::function<void(int, Real*)> advance_output_scalars;
+    std::function<int(StepBoundReduction*)> advance_step_bound;
+    std::string advance_step_bound_identity;
     std::uint64_t generation = 0;
     std::string installed_hash;
     std::vector<std::array<std::uint64_t, 4>> operator_authorities;
@@ -953,6 +962,11 @@ struct ProgramRuntimeState {
     balance_replay_active_ = prepared.balance_replay_active_;
     balance_step_completed_ = prepared.balance_step_completed_;
     balance_program_was_due_ = prepared.balance_program_was_due_;
+    // Invariant (N12 lot 3c-2a): a generated AMR refinement criterion caches the values it read
+    // from these tables when its tagging program was prepared, and only AmrSystem's
+    // set_program_params drops that cache. This swap may only reinstall the tables the cache read:
+    // set_program_params is refused during an accepted point, and the auxiliary path requires the
+    // same bytes. A path that changes a table's values here must also drop the AMR tagging cache.
     block_params_.swap(prepared.block_params_);
     std::swap(cache_, prepared.cache_);
     std::swap(hist_, prepared.hist_);
@@ -1015,6 +1029,8 @@ struct ProgramRuntimeState {
     advance_segment_ = {};
     advance_output_scalar_counts_.clear();
     advance_output_scalars_ = nullptr;
+    advance_step_bound_ = nullptr;
+    advance_step_bound_identity_.clear();
     installed_hash_.clear();
     operator_authorities_.clear();
     history_replay_authorities_.clear();
@@ -1050,6 +1066,8 @@ struct ProgramRuntimeState {
                                        advance_segment_,
                                        advance_output_scalar_counts_,
                                        advance_output_scalars_,
+                                       advance_step_bound_,
+                                       advance_step_bound_identity_,
                                        step_install_generation_,
                                        installed_hash_,
                                        operator_authorities_,
@@ -1106,12 +1124,17 @@ struct ProgramRuntimeState {
     advance_segment_ = snapshot.advance_segment;
     advance_output_scalar_counts_ = std::move(snapshot.advance_output_scalar_counts);
     advance_output_scalars_ = std::move(snapshot.advance_output_scalars);
+    advance_step_bound_ = std::move(snapshot.advance_step_bound);
+    advance_step_bound_identity_ = std::move(snapshot.advance_step_bound_identity);
     step_install_generation_ = snapshot.generation;
     installed_hash_ = std::move(snapshot.installed_hash);
     operator_authorities_ = std::move(snapshot.operator_authorities);
     history_replay_authorities_ = std::move(snapshot.history_replay_authorities);
     checkpoint_metadata_ = std::move(snapshot.checkpoint_metadata);
     block_map_ = std::move(snapshot.block_map);
+    // Same invariant as the accepted-candidate swap above: a restored snapshot reinstalls the tables
+    // that the AMR tagging cache read; a restore that could change their values must also drop that
+    // cache (N12 lot 3c-2a).
     block_params_ = std::move(snapshot.block_params);
     diagnostics_ = std::move(snapshot.diagnostics);
     accepted_exchanges_.swap(snapshot.accepted_exchanges);

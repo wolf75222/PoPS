@@ -34,18 +34,19 @@ _LAYOUT_OF = {"replicated": "Replicated", "contiguous_distributed": "Contiguous"
 def require_one_layout(program, op, *values):
     """DM3 (N10 lot 4, addendum §4): finite values of two storage layouts never meet in one op.
 
-    ``values`` are finite signatures. The refusal is a layout fact; it is a ``TypeError`` and a
-    ``ValueError``, as the family refusals it precedes.
+    ``values`` are finite signatures in operand order. The first sets the expected layout.
+    The refusal is a ``TypeError`` and a ``ValueError``, as the family refusals it precedes.
     """
-    found = sorted({_LAYOUT_OF.get(value.get("ownership"), str(value.get("ownership")))
-                    for value in values})
-    if len(found) > 1:
+    layouts = list(dict.fromkeys(
+        _LAYOUT_OF.get(value.get("ownership"), str(value.get("ownership"))) for value in values
+    ))
+    if len(layouts) > 1:
         from pops._ir.refusals import LayoutMismatch
 
         raise LayoutMismatch(
             "%s mixes finite values stored %s; one operation reads one storage layout"
-            % (op, " and ".join(found)),
-            region=program._current_region(), op=op, expected=found[0], found=found[1])
+            % (op, " and ".join(layouts)),
+            region=program._current_region(), op=op, expected=layouts[0], found=layouts[1])
 
 
 def strict_access(program, array, op):

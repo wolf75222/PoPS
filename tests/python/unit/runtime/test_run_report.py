@@ -21,8 +21,19 @@ def _pure_python_rejection_type(monkeypatch):
     class StepAttemptRejected(RuntimeError):
         pass
 
+    class StepTerminalFailure(RuntimeError):
+        pass
+
     bootstrap = ModuleType("pops._bootstrap")
+    # Only the two step-control exception types are replaced. Every other name keeps the loaded
+    # native binding, so a module imported lazily during the run (for example the AMR system
+    # check of pops.run) resolves as it would without this fixture.
+    native = sys.modules.get("pops._bootstrap")
+    if native is not None:
+        bootstrap.__dict__.update(
+            (name, value) for name, value in vars(native).items() if not name.startswith("__"))
     bootstrap.StepAttemptRejected = StepAttemptRejected
+    bootstrap.StepTerminalFailure = StepTerminalFailure
     sys.modules.pop("pops.runtime._step_strategy", None)
     monkeypatch.setitem(sys.modules, "pops._bootstrap", bootstrap)
     yield
@@ -50,6 +61,9 @@ def test_public_run_returns_exact_immutable_report():
     assert report.bind_identity == plan.bind_identity
     assert report.execution_identity == plan.execution_context.identity
     assert report.artifact_identity == plan.artifact.artifact_identity
+    # N11 lot 2b-i (CC2, CN9): the report names the compiled Program by its program_id.
+    assert report.program_id == plan.artifact.program_id
+    assert report.program_id.domain == "program"
     assert report.to_data() == {
         "accepted_steps": 2,
         "rejected_steps": 0,
@@ -60,6 +74,7 @@ def test_public_run_returns_exact_immutable_report():
         "bind_identity": report.bind_identity.to_data(),
         "execution_identity": report.execution_identity.to_data(),
         "artifact_identity": report.artifact_identity.to_data(),
+        "program_id": report.program_id.to_data(),
         "field_providers": [],
     }
     with pytest.raises(FrozenInstanceError):
