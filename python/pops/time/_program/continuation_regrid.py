@@ -77,6 +77,13 @@ def read(program, field):
     level (the identity when they are equal): the phase 1 form of ``region.gather(field,
     Parent(ratio=r))`` over the target cells (N10 lot 3, DM13). The runtime allocates the target
     storage with the source Field's components and ghosts; nothing is interpolated.
+
+    The halo is read too. On a periodic axis a halo cell reads the wrapped parent. On a
+    non-periodic axis a halo cell whose parent lies outside the domain is left at 0 until the next
+    boundary fill; no phase 1 case reads it before. At run time the read refuses a source level
+    finer than the target (restriction is G11's) and a valid target cell with no valid parent on
+    the source level; on more than one rank both refusals surface as the collective failure of
+    the regrid phase.
     """
     context = _context(program)
     if context["scope"] != "child":
@@ -289,7 +296,11 @@ class _ProgramRegrid(_ProgramBase):
         return source(self, level)
 
     def regrid_read(self, field):
-        """Read a source Field at the child's target cells along the map the regrid issues."""
+        """Read a source Field at the child's target cells along the map the regrid issues.
+
+        The halo of a non-periodic axis whose parent lies outside the domain stays 0 until the
+        next boundary fill (see ``continuation_regrid.read``).
+        """
         return read(self, field)
 
     def regrid_integral(self, field):

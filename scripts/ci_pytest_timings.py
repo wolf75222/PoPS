@@ -35,7 +35,8 @@ ORDINARY_MARGIN_SECONDS = ORDINARY_BUDGET_SECONDS * 9 // 10
 # Budgeting the cold WENO5 parity runs needs 174 bins, with a maximum of 1882 s.
 # The 1800 s native file of N10 lot 4 (test_unconstrained_storage_n10_native.py) is packed
 # within the same 176 bins.
-SHARD_TOTAL = 176
+# The lot 3b regrid receipt needs 177 bins to keep the maximum at 1885 s.
+SHARD_TOTAL = 177
 
 
 def selected_budget(paths: list[str], durations: dict[str, float]) -> int:
